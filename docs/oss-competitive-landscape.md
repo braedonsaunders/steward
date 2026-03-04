@@ -218,41 +218,92 @@ The emerging AI-native ops layer. Most target enterprise scale and cloud environ
 
 The newest category — closest to Steward's vision, but almost all target cloud/K8s, not physical LANs.
 
+### Stakpak Agent ⚠️ (Watch closely)
+
+| | |
+|---|---|
+| GitHub | [stakpak/agent](https://github.com/stakpak/agent) |
+| Stars | Growing (launched Jul 2025, Product Hunt featured) |
+| License | Apache 2.0 |
+| Funding | $500K seed (P1 Ventures + 500 Global) |
+| Target | DevOps teams, server/application ops |
+
+- **Strengths:** Open-source DevOps agent in Rust. Runs as persistent system service (Autopilot mode). Handles health check failures, TLS cert renewal, secret rotation, K8s debugging, infra code generation. **Key innovation:** 210+ secret types detected and redacted before any LLM sees them (restored only at execution). Cedar policy guardrails block destructive actions. Full audit log + rollback. MCP server support. Supports Claude, GPT-4, self-hosted models.
+- **Weaknesses vs Steward:** Server/application-oriented only. No LAN device discovery, no network gear/printer/IoT awareness, no incident management system. Doesn't discover unknown devices on a subnet.
+- **AI integration:** Yes — full LLM-powered autonomous execution with guardrails.
+- **Auto-remediation:** Yes — e.g., health check failure → finds idle DB connections → restarts app → Slack summary, all autonomously.
+
+**Stakpak is the closest competitor on the "autonomous LLM agent that fixes things while you sleep" axis.** The key difference: Stakpak operates at the server/application layer; Steward operates at the network/device layer. If Stakpak adds LAN discovery, or Steward doesn't ship fast enough, there could be direct collision.
+
+### HolmesGPT (CNCF Sandbox) ⚠️
+
+| | |
+|---|---|
+| GitHub | [robusta-dev/holmesgpt](https://github.com/robusta-dev/holmesgpt) |
+| Stars | ~1,900 |
+| License | Apache 2.0 |
+| Target | K8s operators, on-call engineers |
+
+- **Strengths:** CNCF Sandbox project (accepted Oct 2025). Agentic troubleshooter that actively decides what data to fetch (Prometheus, Grafana, Datadog, K8s logs, REST APIs), runs targeted queries, iteratively refines hypotheses, reports in plain English with suggested fixes. Co-maintained by Robusta.dev and Microsoft. Supports OpenAI, Anthropic, Azure, Gemini.
+- **Weaknesses vs Steward:** Read-only by design (suggestions handed to humans). Cloud/K8s-native only. No LAN discovery, no physical device awareness.
+- **AI integration:** Yes — deep LLM-powered investigation with iterative hypothesis refinement.
+- **Auto-remediation:** Suggestions only (remediation via Robusta rules).
+
+### NetAlertX (formerly Pi.Alert) ⚠️
+
+| | |
+|---|---|
+| GitHub | [netalertx/NetAlertX](https://github.com/netalertx/NetAlertX) |
+| Stars | ~5.6k |
+| License | GPL v3 |
+| Target | Homelab, small network operators |
+
+- **Strengths:** Core purpose is exactly LAN device discovery — ARP, DHCP, ping/ICMP, Nmap scanning. Maintains live inventory (MAC, hostname, vendor, open ports). 80+ notification services. Home Assistant + MQTT integration. Plugin system for custom scanners. Docker-first.
+- **Weaknesses vs Steward:** Discovery and alerting only — no LLM intelligence, no incident management, no auto-remediation, no conversational interface, no protocol negotiation.
+- **AI integration:** None.
+- **Auto-remediation:** None.
+
+**NetAlertX is the most direct competitor for Steward's discovery engine.** It does ARP/Nmap discovery very well for 5.6k stars. Steward's value-add is everything that happens *after* discovery: LLM analysis, incident creation, and autonomous remediation.
+
+### OneUptime
+
+| | |
+|---|---|
+| GitHub | [OneUptime/oneuptime](https://github.com/OneUptime/oneuptime) |
+| Stars | ~6k |
+| License | Apache 2.0 |
+| Target | Teams replacing Datadog + PagerDuty + Statuspage |
+
+- **Strengths:** All-in-one: uptime monitoring, APM, logs, traces, on-call scheduling, escalation policies, incident management, status pages. AI agent detects anomalies, does root cause analysis, and opens ready-to-merge PRs with code fixes. Supports OpenAI, Anthropic, Ollama, self-hosted LLMs. Privacy-first.
+- **Weaknesses vs Steward:** No agentless LAN discovery (ARP/SNMP). Requires you to configure what to monitor. Application/web-service focused, not network-device focused.
+- **AI integration:** Yes — anomaly detection, RCA, automated PR creation.
+- **Auto-remediation:** AI creates PRs; human reviews before deploy.
+
+### Coroot
+
+| | |
+|---|---|
+| GitHub | [coroot/coroot](https://github.com/coroot/coroot) |
+| Stars | ~7.1k |
+| License | Apache 2.0 |
+| Target | DevOps, SREs |
+
+- **Strengths:** Zero-instrumentation observability via eBPF. Combines metrics, logs, traces, continuous profiling, SLO-based alerting. AI-powered root cause analysis. Cloud cost monitoring.
+- **Weaknesses vs Steward:** Application/service layer only. No LAN/network device awareness. AI is RCA, not autonomous action.
+- **AI integration:** AI-powered root cause analysis.
+- **Auto-remediation:** None.
+
 ### fuzzylabs/sre-agent
 
 | | |
 |---|---|
 | GitHub | [fuzzylabs/sre-agent](https://github.com/fuzzylabs/sre-agent) |
-| Stars | Small (early-stage) |
+| Stars | ~57 (early-stage) |
 | License | Open source |
 | Target | K8s operators, DevOps |
 
-- **Strengths:** CLI-based AI agent for Kubernetes health, log analysis, issue diagnosis.
-- **Weaknesses vs Steward:** K8s-only, no LAN/device discovery, no physical network awareness, CLI-only (no web UI).
-
-### Autonomous-AI-powered-SRE-Agent
-
-| | |
-|---|---|
-| GitHub | [Mrgig7/Autonomous-Al-powered-SRE-Agent](https://github.com/Mrgig7/Autonomous-Al-powered-SRE-Agent) |
-| Stars | Small (early-stage) |
-| License | Open source |
-| Target | CI/CD pipeline self-healing |
-
-- **Strengths:** Auto failure detection, AI root cause analysis, patch generation, sandbox validation, multi-CI integration (GitHub Actions, GitLab, Jenkins).
-- **Weaknesses vs Steward:** CI/CD-focused, not infrastructure-focused. No device/network awareness.
-
-### SmythOS SRE
-
-| | |
-|---|---|
-| GitHub | [SmythOS/sre](https://github.com/SmythOS/sre) |
-| Stars | Small |
-| License | Open source |
-| Target | Developers building custom AI agents |
-
-- **Strengths:** Cloud-native runtime for agentic AI, unified API across LLM providers, modular architecture.
-- **Weaknesses vs Steward:** Framework/runtime, not a product. You build agents on it; it doesn't monitor your network out of the box.
+- **Strengths:** CLI-based AI agent using Anthropic MCP for Kubernetes health, log analysis, issue diagnosis. Architectural reference for MCP-based agents.
+- **Weaknesses vs Steward:** K8s-only, no LAN/device discovery, no physical network awareness, CLI-only (no web UI). Demo/research project.
 
 ### CrewAI
 
@@ -277,22 +328,23 @@ The newest category — closest to Steward's vision, but almost all target cloud
               Keep       |  *** STEWARD ***
             (alerts)     |  (full-stack autonomous IT)
                          |
-         OpenObserve     |  fuzzylabs/sre-agent
-            (data)       |  (K8s self-healing)
+       Stakpak (server)  |  OneUptime (app + incident)
                          |
-   Netdata (ML anomaly)  |
+   HolmesGPT (K8s RCA)  |  Coroot (eBPF RCA)
+                         |
+   Netdata (ML anomaly)  |  OpenObserve (data + AI)
                          |
   ───────────────────────┼──────────────────────── Scope
   Narrow / single-purpose|  Broad / full-stack
                          |
-         Uptime Kuma     |  Zabbix
-          (uptime)       |  (enterprise monitoring)
+     NetAlertX           |  Zabbix
+     (LAN discovery)     |  (enterprise monitoring)
                          |
-         Prometheus      |  TacticalRMM
-          (metrics)      |  (endpoint management)
+     Uptime Kuma         |  TacticalRMM
+     (uptime)            |  (endpoint management)
                          |
-                         |  LibreNMS / Checkmk
-                         |  (network monitoring)
+     Prometheus          |  LibreNMS / Checkmk
+     (metrics)           |  (network monitoring)
                          |
                     Manual / Alert-only
 ```
@@ -313,9 +365,31 @@ The newest category — closest to Steward's vision, but almost all target cloud
 
 1. **Community & mindshare** — Netdata has 78k stars, Uptime Kuma 65k. Steward is starting from zero. Discovery and trust are hard.
 2. **Breadth of integrations** — Zabbix/Nagios have thousands of plugins. Steward's protocol coverage is nascent.
-3. **Remediation safety** — Autonomous action on production infrastructure is high-stakes. One bad LLM decision could cause real damage. The tiered autonomy model needs to be bulletproof.
-4. **Keep is moving fast** — 11k stars, YC-backed, adding AI features aggressively. If they move down-market and add discovery, they could encroach on Steward's space.
+3. **Remediation safety** — Autonomous action on production infrastructure is high-stakes. One bad LLM decision could cause real damage. The tiered autonomy model needs to be bulletproof. (Note: Stakpak's approach — secret redaction + Cedar policy guardrails — is worth studying.)
+4. **Keep is moving fast** — 11k stars, YC-backed (acquired by Elastic May 2025), adding AI features aggressively. If they move down-market and add discovery, they could encroach on Steward's space.
 5. **Netdata's MCP support** — Since v2.6, Netdata functions as an MCP server for AI assistants. If they add remediation actions, the combination of 78k-star observability + AI could be formidable.
+6. **Stakpak is the closest archetype** — Same vision (autonomous LLM agent that fixes things while you sleep), different layer (server/app vs. LAN/device). $500K funded, Apache 2.0, Rust-based. If they add network discovery, direct collision.
+7. **NetAlertX already does discovery well** — 5.6k stars, Docker-first, ARP/Nmap/DHCP scanning. A user could combine NetAlertX + Keep + Stakpak to approximate Steward's value prop with existing tools. Steward's advantage is the integrated experience.
+8. **CNCF legitimacy** — HolmesGPT is now a CNCF Sandbox project (co-maintained with Microsoft). CNCF endorsement creates enterprise trust that's hard to replicate as an indie project.
+
+---
+
+## Full Comparison Table
+
+| Tool | LAN Discovery | LLM Intelligence | Auto-Remediate | Incident Mgmt | Stars | Category |
+|---|---|---|---|---|---|---|
+| **Stakpak** | No | Yes (full) | Yes (guardrailed) | No | Growing | DevOps Agent |
+| **HolmesGPT** | No | Yes (deep K8s) | Suggestions only | Via integrations | ~1.9k | SRE AI Agent |
+| **Keep** | No | Alert correlation | Workflow-based | Yes | ~11.2k | AIOps (YC/Elastic) |
+| **OneUptime** | Partial | Yes (code fixes) | PR creation | Yes (full) | ~6k | Obs + Incident |
+| **Coroot** | No | AI RCA | No | No | ~7.1k | APM/Obs |
+| **NetAlertX** | Yes (ARP/Nmap) | No | No | No | ~5.6k | LAN Discovery |
+| **Netdata** | No (per-node) | ML anomaly det. | No | No | ~78k | Monitoring |
+| **Zabbix** | Yes (SNMP) | No | Script-based | No | ~4k | NMS |
+| **LibreNMS** | Yes (SNMP) | No | No | No | ~4k | NMS |
+| **TacticalRMM** | No (agent-dep.) | No | Script-based | No | ~4.1k | RMM |
+| **Uptime Kuma** | No | No | No | No | ~65k | Uptime |
+| **Prometheus** | No | No | No | No | ~57k | Metrics |
 
 ---
 
@@ -334,3 +408,11 @@ The newest category — closest to Steward's vision, but almost all target cloud
 - [NinjaOne: Open Source RMM Pros & Cons](https://www.ninjaone.com/blog/open-source-rmm-software-for-msps-pros-cons/)
 - [Comparitech: Open Source Network Monitoring](https://www.comparitech.com/net-admin/open-source-network-monitoring-tools/)
 - [OpenAlternative: Checkmk vs Icinga](https://openalternative.co/compare/checkmk/vs/icinga)
+- [Stakpak Agent GitHub](https://github.com/stakpak/agent)
+- [HolmesGPT GitHub](https://github.com/robusta-dev/holmesgpt)
+- [CNCF: HolmesGPT Sandbox](https://www.cncf.io/blog/2026/01/07/holmesgpt-agentic-troubleshooting-built-for-the-cloud-native-era/)
+- [NetAlertX GitHub](https://github.com/netalertx/NetAlertX)
+- [OneUptime GitHub](https://github.com/OneUptime/oneuptime)
+- [Coroot GitHub](https://github.com/coroot/coroot)
+- [Microsoft AIOpsLab](https://github.com/microsoft/AIOpsLab)
+- [SigNoz GitHub](https://github.com/SigNoz/signoz)
