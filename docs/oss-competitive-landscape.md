@@ -103,7 +103,7 @@ Popular with the self-hosting community. Simple, beautiful, but narrow in scope.
 | | |
 |---|---|
 | GitHub | [louislam/uptime-kuma](https://github.com/louislam/uptime-kuma) |
-| Stars | ~65k+ |
+| Stars | ~84k |
 | License | MIT |
 | Target | Self-hosters, homelab enthusiasts |
 
@@ -128,12 +128,26 @@ Popular with the self-hosting community. Simple, beautiful, but narrow in scope.
 
 **Netdata is the closest Tier 2 competitor** — its ML and MCP support put it on the AI spectrum, but it stops at "detect and visualize" while Steward aims to "detect, diagnose, and fix."
 
+### Beszel
+
+| | |
+|---|---|
+| GitHub | [henrygd/beszel](https://github.com/henrygd/beszel) |
+| Stars | ~16.5k |
+| License | MIT |
+| Target | Homelabs, lightweight server monitoring |
+
+- **Strengths:** Explosively popular (16.5k stars since 2024 launch). Ultra-lightweight hub-and-agent model (6MB RAM/agent, 23MB hub). CPU/RAM/disk/network/Docker stats, S.M.A.R.T. disk health, MFA. Multi-OS.
+- **Weaknesses vs Steward:** Monitors known servers only — no network discovery, no AI, no remediation, no diagnosis. Very young project.
+- **AI integration:** None.
+- **Auto-remediation:** None.
+
 ### Prometheus + Grafana
 
 | | |
 |---|---|
 | GitHub | [prometheus/prometheus](https://github.com/prometheus/prometheus) / [grafana/grafana](https://github.com/grafana/grafana) |
-| Stars | ~57k / ~67k |
+| Stars | ~63k / ~73k |
 | License | Apache 2.0 / AGPL v3 |
 | Target | Cloud-native, Kubernetes, DevOps |
 
@@ -211,6 +225,40 @@ The emerging AI-native ops layer. Most target enterprise scale and cloud environ
 - **Weaknesses vs Steward:** Data platform, not an operations agent. No device discovery, no incident management, no remediation. Requires instrumentation.
 - **AI integration:** O2 AI Agent for analysis.
 - **Auto-remediation:** None.
+
+## Tier 4b — Event-Driven Automation & Security
+
+Tools that execute remediation but require separate monitoring inputs. Worth knowing because they represent the "automation engine" pattern.
+
+### StackStorm
+
+| | |
+|---|---|
+| GitHub | [StackStorm/st2](https://github.com/StackStorm/st2) |
+| Stars | ~6.4k |
+| License | Apache 2.0 |
+| Target | DevOps/SRE teams; "IFTTT for Ops" |
+
+- **Strengths:** Event-driven automation with 160 packs and 6,000+ actions. Sensors → Rules → Workflows → Actions. ChatOps native. Used by NASA, Netflix, Cisco. Linux Foundation project.
+- **Weaknesses vs Steward:** Requires separate monitoring tools to generate events. All automation is rule-based, not LLM-reasoned. Complex to configure. Significant infrastructure overhead. Not viable for non-technical operators.
+- **AI integration:** None native (community LLM integrations emerging).
+- **Auto-remediation:** Yes — powerful, but scripted/rule-based only.
+
+### Wazuh
+
+| | |
+|---|---|
+| GitHub | [wazuh/wazuh](https://github.com/wazuh/wazuh) |
+| Stars | ~12.7k |
+| License | GPL v2 |
+| Target | Security teams, SOC, compliance |
+
+- **Strengths:** Unified XDR + SIEM. File integrity monitoring, vulnerability detection, intrusion detection, compliance (PCI-DSS, GDPR, HIPAA, NIST). Active response agents can block IPs, kill processes. AI agent integration added in 2025 for interactive incident queries.
+- **Weaknesses vs Steward:** Security-focused — doesn't monitor performance/availability/topology. Active response is rule-based, not LLM-reasoned. Heavy system. Not designed for switches/routers/IoT.
+- **AI integration:** Yes — interactive incident queries (2025).
+- **Auto-remediation:** Yes — active response scripts on security events.
+
+**Wazuh is interesting as a complementary tool** rather than a direct competitor. Steward handles IT ops; Wazuh handles security. A combined deployment could be powerful.
 
 ---
 
@@ -371,6 +419,8 @@ The newest category — closest to Steward's vision, but almost all target cloud
 6. **Stakpak is the closest archetype** — Same vision (autonomous LLM agent that fixes things while you sleep), different layer (server/app vs. LAN/device). $500K funded, Apache 2.0, Rust-based. If they add network discovery, direct collision.
 7. **NetAlertX already does discovery well** — 5.6k stars, Docker-first, ARP/Nmap/DHCP scanning. A user could combine NetAlertX + Keep + Stakpak to approximate Steward's value prop with existing tools. Steward's advantage is the integrated experience.
 8. **CNCF legitimacy** — HolmesGPT is now a CNCF Sandbox project (co-maintained with Microsoft). CNCF endorsement creates enterprise trust that's hard to replicate as an indie project.
+9. **StackStorm + LLM** is an obvious combination someone will build. StackStorm's 6,000+ actions + an LLM front-end would cover much of Steward's remediation surface for teams with DevOps expertise.
+10. **Beszel's growth trajectory** — 16.5k stars in ~1 year shows the homelab community's appetite for simple monitoring. If Beszel adds AI features, it could capture Steward's target audience before Steward gets there.
 
 ---
 
@@ -378,18 +428,21 @@ The newest category — closest to Steward's vision, but almost all target cloud
 
 | Tool | LAN Discovery | LLM Intelligence | Auto-Remediate | Incident Mgmt | Stars | Category |
 |---|---|---|---|---|---|---|
-| **Stakpak** | No | Yes (full) | Yes (guardrailed) | No | Growing | DevOps Agent |
+| **Stakpak** | No | Yes (full) | Yes (guardrailed) | No | ~1.1k | DevOps Agent |
 | **HolmesGPT** | No | Yes (deep K8s) | Suggestions only | Via integrations | ~1.9k | SRE AI Agent |
 | **Keep** | No | Alert correlation | Workflow-based | Yes | ~11.2k | AIOps (YC/Elastic) |
 | **OneUptime** | Partial | Yes (code fixes) | PR creation | Yes (full) | ~6k | Obs + Incident |
+| **Wazuh** | No | Yes (queries) | Yes (active resp.) | Security events | ~12.7k | XDR/SIEM |
 | **Coroot** | No | AI RCA | No | No | ~7.1k | APM/Obs |
-| **NetAlertX** | Yes (ARP/Nmap) | No | No | No | ~5.6k | LAN Discovery |
-| **Netdata** | No (per-node) | ML anomaly det. | No | No | ~78k | Monitoring |
-| **Zabbix** | Yes (SNMP) | No | Script-based | No | ~4k | NMS |
-| **LibreNMS** | Yes (SNMP) | No | No | No | ~4k | NMS |
+| **NetAlertX** | Yes (ARP/Nmap) | MCP (early) | No | No | ~5.9k | LAN Discovery |
+| **Netdata** | No (per-node) | ML + AI Co-Eng. | Suggests only | No | ~78k | Monitoring |
+| **Zabbix** | Yes (SNMP) | ML (emerging) | Script-based | No | ~5.7k | NMS |
+| **LibreNMS** | Yes (SNMP) | No | No | No | ~4.6k | NMS |
+| **StackStorm** | No | No | Yes (event-driven) | No | ~6.4k | Automation |
 | **TacticalRMM** | No (agent-dep.) | No | Script-based | No | ~4.1k | RMM |
-| **Uptime Kuma** | No | No | No | No | ~65k | Uptime |
-| **Prometheus** | No | No | No | No | ~57k | Metrics |
+| **Beszel** | No | No | No | No | ~16.5k | Homelab |
+| **Uptime Kuma** | No | No | No | No | ~84k | Uptime |
+| **Prometheus** | No | No | No | No | ~63k | Metrics |
 
 ---
 
@@ -416,3 +469,8 @@ The newest category — closest to Steward's vision, but almost all target cloud
 - [Coroot GitHub](https://github.com/coroot/coroot)
 - [Microsoft AIOpsLab](https://github.com/microsoft/AIOpsLab)
 - [SigNoz GitHub](https://github.com/SigNoz/signoz)
+- [StackStorm GitHub](https://github.com/StackStorm/st2)
+- [Wazuh GitHub](https://github.com/wazuh/wazuh)
+- [Beszel GitHub](https://github.com/henrygd/beszel)
+- [n8n GitHub](https://github.com/n8n-io/n8n)
+- [Ennetix: Autonomous IT Operations 2026](https://ennetix.com/the-rise-of-autonomous-it-operations-what-aiops-platforms-must-enable-by-2026/)
