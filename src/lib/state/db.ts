@@ -9,6 +9,23 @@ const CORRUPT_ARCHIVE_DIR = path.join(DATA_DIR, "corrupt-db");
 let db: Database.Database | null = null;
 let recovering = false;
 
+function hasColumn(database: Database.Database, table: string, column: string): boolean {
+  const rows = database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  return rows.some((row) => row.name === column);
+}
+
+function ensureColumn(
+  database: Database.Database,
+  table: string,
+  column: string,
+  definition: string,
+): void {
+  if (hasColumn(database, table, column)) {
+    return;
+  }
+  database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
 function createSchema(database: Database.Database): void {
   database.exec(`
     CREATE TABLE IF NOT EXISTS metadata (
@@ -133,7 +150,105 @@ function createSchema(database: Database.Database): void {
       summary     TEXT NOT NULL,
       details     TEXT NOT NULL DEFAULT '{}'
     );
+
+    CREATE TABLE IF NOT EXISTS policy_rules (
+      id                TEXT PRIMARY KEY,
+      name              TEXT NOT NULL,
+      description       TEXT NOT NULL DEFAULT '',
+      actionClasses     TEXT NOT NULL DEFAULT '[]',
+      autonomyTiers     TEXT NOT NULL DEFAULT '[]',
+      environmentLabels TEXT NOT NULL DEFAULT '[]',
+      deviceTypes       TEXT NOT NULL DEFAULT '[]',
+      decision          TEXT NOT NULL,
+      priority          INTEGER NOT NULL DEFAULT 100,
+      enabled           INTEGER NOT NULL DEFAULT 1,
+      createdAt         TEXT NOT NULL,
+      updatedAt         TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS maintenance_windows (
+      id              TEXT PRIMARY KEY,
+      name            TEXT NOT NULL,
+      deviceIds       TEXT NOT NULL DEFAULT '[]',
+      cronStart       TEXT NOT NULL,
+      durationMinutes INTEGER NOT NULL,
+      enabled         INTEGER NOT NULL DEFAULT 1,
+      createdAt       TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS playbook_runs (
+      id                 TEXT PRIMARY KEY,
+      playbookId         TEXT NOT NULL,
+      family             TEXT NOT NULL,
+      name               TEXT NOT NULL,
+      deviceId           TEXT NOT NULL,
+      incidentId         TEXT,
+      actionClass        TEXT NOT NULL,
+      status             TEXT NOT NULL,
+      policyEvaluation   TEXT NOT NULL DEFAULT '{}',
+      steps              TEXT NOT NULL DEFAULT '[]',
+      verificationSteps  TEXT NOT NULL DEFAULT '[]',
+      rollbackSteps      TEXT NOT NULL DEFAULT '[]',
+      evidence           TEXT NOT NULL DEFAULT '{}',
+      createdAt          TEXT NOT NULL,
+      startedAt          TEXT,
+      completedAt        TEXT,
+      approvedBy         TEXT,
+      approvedAt         TEXT,
+      deniedBy           TEXT,
+      deniedAt           TEXT,
+      denialReason       TEXT,
+      expiresAt          TEXT,
+      failureCount       INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS daily_digests (
+      id           TEXT PRIMARY KEY,
+      generatedAt  TEXT NOT NULL,
+      periodStart  TEXT NOT NULL,
+      periodEnd    TEXT NOT NULL,
+      content      TEXT NOT NULL DEFAULT '{}'
+    );
+
+    CREATE TABLE IF NOT EXISTS plugins (
+      id          TEXT PRIMARY KEY,
+      dirName     TEXT NOT NULL,
+      name        TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      version     TEXT NOT NULL DEFAULT '0.0.0',
+      author      TEXT NOT NULL DEFAULT '',
+      provides    TEXT NOT NULL DEFAULT '[]',
+      enabled     INTEGER NOT NULL DEFAULT 1,
+      status      TEXT NOT NULL DEFAULT 'disabled',
+      error       TEXT,
+      installedAt TEXT NOT NULL,
+      updatedAt   TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS chat_sessions (
+      id        TEXT PRIMARY KEY,
+      title     TEXT NOT NULL,
+      deviceId  TEXT REFERENCES devices(id) ON DELETE SET NULL,
+      provider  TEXT,
+      model     TEXT,
+      createdAt TEXT NOT NULL,
+      updatedAt TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id        TEXT PRIMARY KEY,
+      sessionId TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+      role      TEXT NOT NULL,
+      content   TEXT NOT NULL,
+      provider  TEXT,
+      error     INTEGER NOT NULL DEFAULT 0,
+      createdAt TEXT NOT NULL
+    );
   `);
+
+  // Migrate columns before creating indexes that reference them
+  ensureColumn(database, "chat_sessions", "deviceId", "TEXT REFERENCES devices(id) ON DELETE SET NULL");
+  ensureColumn(database, "devices", "secondaryIps", "TEXT NOT NULL DEFAULT '[]'");
 
   // Indexes for frequently queried columns
   database.exec(`
@@ -149,6 +264,29 @@ function createSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_graph_nodes_updatedAt ON graph_nodes(updatedAt);
     CREATE INDEX IF NOT EXISTS idx_agent_runs_startedAt ON agent_runs(startedAt);
     CREATE INDEX IF NOT EXISTS idx_oauth_states_expiresAt ON oauth_states(expiresAt);
+    CREATE INDEX IF NOT EXISTS idx_policy_rules_priority ON policy_rules(priority);
+    CREATE INDEX IF NOT EXISTS idx_policy_rules_enabled ON policy_rules(enabled);
+    CREATE INDEX IF NOT EXISTS idx_playbook_runs_status ON playbook_runs(status);
+    CREATE INDEX IF NOT EXISTS idx_playbook_runs_deviceId ON playbook_runs(deviceId);
+    CREATE INDEX IF NOT EXISTS idx_playbook_runs_createdAt ON playbook_runs(createdAt);
+    CREATE INDEX IF NOT EXISTS idx_daily_digests_generatedAt ON daily_digests(generatedAt);
+    CREATE INDEX IF NOT EXISTS idx_chat_sessions_updatedAt ON chat_sessions(updatedAt);
+    CREATE INDEX IF NOT EXISTS idx_chat_sessions_deviceId ON chat_sessions(deviceId);
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_sessionId ON chat_messages(sessionId);
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_createdAt ON chat_messages(createdAt);
+  `);
+
+  // OUI vendor lookup tables
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS oui_prefixes (
+      prefix TEXT PRIMARY KEY,
+      vendor TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS oui_metadata (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
 }
 

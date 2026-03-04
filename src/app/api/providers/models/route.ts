@@ -78,14 +78,11 @@ async function resolveApiKey(provider: LLMProvider): Promise<string | undefined>
   const config = await getProviderConfig(provider);
   if (!config) return undefined;
 
-  if (config.apiKeyEnvVar) {
-    const envVal = process.env[config.apiKeyEnvVar];
-    if (envVal) return envVal;
-  }
-
+  // API key stored in vault (manual entry or created via OAuth)
   const vaultKey = await vault.getSecret(`llm.api.${provider}.key`);
   if (vaultKey) return vaultKey;
 
+  // OAuth access token from vault
   if (config.oauthTokenSecret) {
     return vault.getSecret(config.oauthTokenSecret);
   }
@@ -116,6 +113,15 @@ const DIRECT_API_URLS: Partial<Record<LLMProvider, string>> = {
   togetherai: "https://api.together.xyz/v1",
 };
 
+const OPENAI_OAUTH_CODEX_MODELS = [
+  "gpt-5.3-codex",
+  "gpt-5.2-codex",
+  "gpt-5.1-codex",
+  "gpt-5.1-codex-max",
+  "gpt-5.1-codex-mini",
+  "gpt-5.2",
+];
+
 // ── Route handler ─────────────────────────────────────────────────────────
 
 export async function GET(request: NextRequest) {
@@ -137,6 +143,14 @@ export async function GET(request: NextRequest) {
 
   try {
     let models: string[] = [];
+
+    if (provider === "openai") {
+      const hasOpenAIApiKey = await vault.getSecret("llm.api.openai.key");
+      const hasOpenAIOAuthToken = await vault.getSecret("llm.oauth.openai.access_token");
+      if (!hasOpenAIApiKey && hasOpenAIOAuthToken) {
+        return NextResponse.json({ models: OPENAI_OAUTH_CODEX_MODELS });
+      }
+    }
 
     // Local providers: hit their local endpoint directly
     if (meta.category === "local") {

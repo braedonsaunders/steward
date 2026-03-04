@@ -8,12 +8,15 @@ export interface DiscoveryCandidate {
   os?: string;
   typeHint?: DeviceType;
   services: ServiceFingerprint[];
-  source: "passive" | "active";
+  source: "passive" | "active" | "mdns" | "ssdp";
+  confidence?: number;
   metadata: Record<string, unknown>;
 }
 
 export interface DiscoverySnapshot {
   discoveredAt: string;
+  scanMode: "incremental" | "deep";
+  activeTargets: number;
   passive: DiscoveryCandidate[];
   active: DiscoveryCandidate[];
   merged: DiscoveryCandidate[];

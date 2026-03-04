@@ -12,16 +12,22 @@ import {
 import type {
   ActionLog,
   AgentRunRecord,
+  DailyDigest,
   Device,
   DeviceBaseline,
   GraphEdge,
   GraphNode,
   Incident,
   LLMProvider,
+  MaintenanceWindow,
+  PlaybookRun,
+  PolicyRule,
   ProviderConfig,
   Recommendation,
+  RuntimeSettings,
   StewardState,
 } from "@/lib/state/types";
+import type { DeviceAdoptionStatus } from "@/lib/state/device-adoption";
 
 const POLL_MS = 15_000;
 
@@ -51,6 +57,21 @@ export interface VaultStatus {
   keyCount: number;
 }
 
+export interface PluginRecordClient {
+  id: string;
+  dirName: string;
+  name: string;
+  description: string;
+  version: string;
+  author: string;
+  provides: string[];
+  enabled: boolean;
+  status: "loaded" | "error" | "disabled";
+  error?: string;
+  installedAt: string;
+  updatedAt: string;
+}
+
 export interface StewardContextValue {
   // Data
   devices: Device[];
@@ -63,6 +84,13 @@ export interface StewardContextValue {
   graphNodes: GraphNode[];
   graphEdges: GraphEdge[];
   vaultStatus: VaultStatus | null;
+  policyRules: PolicyRule[];
+  maintenanceWindows: MaintenanceWindow[];
+  playbookRuns: PlaybookRun[];
+  pendingApprovals: PlaybookRun[];
+  latestDigest: DailyDigest | null;
+  plugins: PluginRecordClient[];
+  runtimeSettings: RuntimeSettings;
 
   // Status
   loading: boolean;
@@ -75,6 +103,8 @@ export interface StewardContextValue {
     offline: number;
     incidents: number;
     recommendations: number;
+    pendingApprovals: number;
+    playbooksRunning: number;
   };
 
   // Mutations
@@ -83,7 +113,6 @@ export interface StewardContextValue {
   addDevice: (name: string, ip: string) => Promise<void>;
   updateIncidentStatus: (id: string, status: string) => Promise<void>;
   dismissRecommendation: (id: string) => Promise<void>;
-  vaultAction: (action: "init" | "unlock" | "lock", passphrase?: string) => Promise<void>;
   saveProvider: (
     provider: LLMProvider,
     data: { enabled?: boolean; model?: string; apiKey?: string; baseUrl?: string },
@@ -92,7 +121,16 @@ export interface StewardContextValue {
     input: string,
     provider?: LLMProvider,
     model?: string,
+    sessionId?: string,
   ) => Promise<{ provider: string; response: string }>;
+  approveAction: (id: string) => Promise<void>;
+  denyAction: (id: string, reason: string) => Promise<void>;
+  triggerPlaybook: (playbookId: string, deviceId: string, incidentId?: string) => Promise<void>;
+  generateDigest: () => Promise<void>;
+  togglePlugin: (id: string, enabled: boolean) => Promise<void>;
+  reloadPlugins: () => Promise<void>;
+  saveRuntimeSettings: (settings: RuntimeSettings) => Promise<void>;
+  setDeviceAdoptionStatus: (id: string, status: DeviceAdoptionStatus) => Promise<void>;
 }
 
 const StewardContext = createContext<StewardContextValue | null>(null);
@@ -100,17 +138,26 @@ const StewardContext = createContext<StewardContextValue | null>(null);
 export function StewardProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<StewardState | null>(null);
   const [vaultStatus, setVaultStatus] = useState<VaultStatus | null>(null);
+  const [pendingApprovals, setPendingApprovals] = useState<PlaybookRun[]>([]);
+  const [latestDigest, setLatestDigest] = useState<DailyDigest | null>(null);
+  const [plugins, setPlugins] = useState<PluginRecordClient[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const loadState = useCallback(async () => {
     try {
-      const [s, v] = await Promise.all([
+      const [s, v, approvals, digest, pluginList] = await Promise.all([
         fetchJson<StewardState>("/api/state"),
         fetchJson<VaultStatus>("/api/vault"),
+        fetchJson<PlaybookRun[]>("/api/approvals").catch(() => [] as PlaybookRun[]),
+        fetchJson<DailyDigest>("/api/digest").catch(() => null),
+        fetchJson<PluginRecordClient[]>("/api/plugins").catch(() => [] as PluginRecordClient[]),
       ]);
       setState(s);
       setVaultStatus(v);
+      setPendingApprovals(approvals);
+      setLatestDigest(digest);
+      setPlugins(pluginList);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -126,15 +173,17 @@ export function StewardProvider({ children }: { children: ReactNode }) {
   }, [loadState]);
 
   const overview = useMemo(() => {
-    if (!state) return { devices: 0, online: 0, offline: 0, incidents: 0, recommendations: 0 };
+    if (!state) return { devices: 0, online: 0, offline: 0, incidents: 0, recommendations: 0, pendingApprovals: 0, playbooksRunning: 0 };
     return {
       devices: state.devices.length,
       online: state.devices.filter((d) => d.status === "online").length,
       offline: state.devices.filter((d) => d.status === "offline").length,
       incidents: state.incidents.filter((i) => i.status !== "resolved").length,
       recommendations: state.recommendations.filter((r) => !r.dismissed).length,
+      pendingApprovals: pendingApprovals.length,
+      playbooksRunning: (state.playbookRuns ?? []).filter((r) => ["preflight", "executing", "verifying"].includes(r.status)).length,
     };
-  }, [state]);
+  }, [state, pendingApprovals]);
 
   const refresh = useCallback(async () => {
     await loadState();
@@ -185,18 +234,6 @@ export function StewardProvider({ children }: { children: ReactNode }) {
     [loadState],
   );
 
-  const vaultAction = useCallback(
-    async (action: "init" | "unlock" | "lock", passphrase?: string) => {
-      await fetchJson("/api/vault", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action, passphrase: action === "lock" ? undefined : passphrase }),
-      });
-      await loadState();
-    },
-    [loadState],
-  );
-
   const saveProvider = useCallback(
     async (
       provider: LLMProvider,
@@ -218,15 +255,91 @@ export function StewardProvider({ children }: { children: ReactNode }) {
   );
 
   const sendChat = useCallback(
-    async (input: string, provider?: LLMProvider, model?: string) => {
+    async (input: string, provider?: LLMProvider, model?: string, sessionId?: string) => {
       return fetchJson<{ provider: string; response: string }>("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ input, provider, model }),
+        body: JSON.stringify({ input, provider, model, sessionId }),
       });
     },
     [],
   );
+
+  const approveAction = useCallback(
+    async (id: string) => {
+      await fetchJson(`/api/approvals/${id}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "approve" }),
+      });
+      await loadState();
+    },
+    [loadState],
+  );
+
+  const denyAction = useCallback(
+    async (id: string, reason: string) => {
+      await fetchJson(`/api/approvals/${id}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "deny", reason }),
+      });
+      await loadState();
+    },
+    [loadState],
+  );
+
+  const triggerPlaybook = useCallback(
+    async (playbookId: string, deviceId: string, incidentId?: string) => {
+      await fetchJson("/api/playbooks/runs", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ playbookId, deviceId, incidentId }),
+      });
+      await loadState();
+    },
+    [loadState],
+  );
+
+  const generateDigest = useCallback(async () => {
+    await fetchJson("/api/digest", { method: "POST" });
+    await loadState();
+  }, [loadState]);
+
+  const togglePlugin = useCallback(
+    async (id: string, enabled: boolean) => {
+      await fetchJson(`/api/plugins/${id}/toggle`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      await loadState();
+    },
+    [loadState],
+  );
+
+  const reloadPlugins = useCallback(async () => {
+    await fetchJson("/api/plugins/reload", { method: "POST" });
+    await loadState();
+  }, [loadState]);
+
+  const saveRuntimeSettings = useCallback(async (settings: RuntimeSettings) => {
+    await fetchJson("/api/settings/runtime", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(settings),
+    });
+    await loadState();
+  }, [loadState]);
+
+  const setDeviceAdoptionStatus = useCallback(async (id: string, status: DeviceAdoptionStatus) => {
+    await fetchJson(`/api/devices/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ adoptionStatus: status }),
+    });
+    await loadState();
+  }, [loadState]);
 
   const value = useMemo<StewardContextValue>(
     () => ({
@@ -240,6 +353,27 @@ export function StewardProvider({ children }: { children: ReactNode }) {
       graphNodes: state?.graph?.nodes ?? [],
       graphEdges: state?.graph?.edges ?? [],
       vaultStatus,
+      policyRules: state?.policyRules ?? [],
+      maintenanceWindows: state?.maintenanceWindows ?? [],
+      playbookRuns: state?.playbookRuns ?? [],
+      pendingApprovals,
+      latestDigest,
+      plugins,
+      runtimeSettings: state?.runtimeSettings ?? {
+        agentIntervalMs: 120_000,
+        deepScanIntervalMs: 30 * 60 * 1000,
+        incrementalActiveTargets: 32,
+        deepActiveTargets: 256,
+        incrementalPortScanHosts: 16,
+        deepPortScanHosts: 96,
+        llmDiscoveryLimit: 10,
+        incrementalFingerprintTargets: 6,
+        deepFingerprintTargets: 24,
+        enableMdnsDiscovery: true,
+        enableSsdpDiscovery: true,
+        enableSnmpProbe: true,
+        ouiUpdateIntervalMs: 7 * 24 * 60 * 60 * 1000,
+      },
       loading,
       error,
       overview,
@@ -248,13 +382,23 @@ export function StewardProvider({ children }: { children: ReactNode }) {
       addDevice,
       updateIncidentStatus,
       dismissRecommendation,
-      vaultAction,
       saveProvider,
       sendChat,
+      approveAction,
+      denyAction,
+      triggerPlaybook,
+      generateDigest,
+      togglePlugin,
+      reloadPlugins,
+      saveRuntimeSettings,
+      setDeviceAdoptionStatus,
     }),
     [
       state,
       vaultStatus,
+      pendingApprovals,
+      latestDigest,
+      plugins,
       loading,
       error,
       overview,
@@ -263,9 +407,16 @@ export function StewardProvider({ children }: { children: ReactNode }) {
       addDevice,
       updateIncidentStatus,
       dismissRecommendation,
-      vaultAction,
       saveProvider,
       sendChat,
+      approveAction,
+      denyAction,
+      triggerPlaybook,
+      generateDigest,
+      togglePlugin,
+      reloadPlugins,
+      saveRuntimeSettings,
+      setDeviceAdoptionStatus,
     ],
   );
 

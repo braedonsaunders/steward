@@ -27,7 +27,6 @@ import {
 } from "@/components/ui/tabs";
 import { useSteward } from "@/lib/hooks/use-steward";
 import type { Incident, IncidentSeverity } from "@/lib/state/types";
-import { cn } from "@/lib/utils";
 
 const SEVERITY_ORDER: Record<IncidentSeverity, number> = {
   critical: 0,
@@ -191,6 +190,8 @@ export default function IncidentsPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [severityTab, setSeverityTab] = useState("all");
+  const [page, setPage] = useState(1);
+  const pageSize = 12;
 
   const openCount = useMemo(
     () => incidents.filter((i) => i.status === "open").length,
@@ -247,6 +248,13 @@ export default function IncidentsPage() {
     };
   }, [incidents, search, statusFilter]);
 
+  const totalPages = Math.max(1, Math.ceil(filteredIncidents.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedIncidents = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredIncidents.slice(start, start + pageSize);
+  }, [filteredIncidents, currentPage]);
+
   if (loading) {
     return (
       <div className="space-y-6">
@@ -280,7 +288,7 @@ export default function IncidentsPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="flex h-full min-h-0 flex-col gap-4">
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="space-y-1">
@@ -308,7 +316,10 @@ export default function IncidentsPage() {
           <Input
             placeholder="Search incidents by title, summary, or ID..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(1);
+            }}
             className="pl-9"
           />
         </div>
@@ -319,7 +330,10 @@ export default function IncidentsPage() {
               key={sf.value}
               variant={statusFilter === sf.value ? "default" : "outline"}
               size="sm"
-              onClick={() => setStatusFilter(sf.value)}
+              onClick={() => {
+                setStatusFilter(sf.value);
+                setPage(1);
+              }}
               className="text-xs"
             >
               {sf.label}
@@ -329,7 +343,10 @@ export default function IncidentsPage() {
       </div>
 
       {/* Severity tabs + Content */}
-      <Tabs value={severityTab} onValueChange={setSeverityTab}>
+      <Tabs value={severityTab} onValueChange={(value) => {
+        setSeverityTab(value);
+        setPage(1);
+      }} className="flex min-h-0 flex-1 flex-col">
         <TabsList>
           <TabsTrigger value="all">
             All
@@ -363,9 +380,9 @@ export default function IncidentsPage() {
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="all">
+        <TabsContent value="all" className="mt-4 min-h-0 flex-1 overflow-auto">
           <IncidentList
-            incidents={filteredIncidents}
+            incidents={pagedIncidents}
             emptyMessage={
               incidents.length === 0
                 ? "No incidents have been detected yet. Run an agent cycle to scan for issues."
@@ -373,31 +390,52 @@ export default function IncidentsPage() {
             }
           />
         </TabsContent>
-        <TabsContent value="critical">
+        <TabsContent value="critical" className="mt-4 min-h-0 flex-1 overflow-auto">
           <IncidentList
-            incidents={filteredIncidents}
+            incidents={pagedIncidents}
             emptyMessage="No critical incidents match the current filters."
           />
         </TabsContent>
-        <TabsContent value="warning">
+        <TabsContent value="warning" className="mt-4 min-h-0 flex-1 overflow-auto">
           <IncidentList
-            incidents={filteredIncidents}
+            incidents={pagedIncidents}
             emptyMessage="No warning incidents match the current filters."
           />
         </TabsContent>
-        <TabsContent value="info">
+        <TabsContent value="info" className="mt-4 min-h-0 flex-1 overflow-auto">
           <IncidentList
-            incidents={filteredIncidents}
+            incidents={pagedIncidents}
             emptyMessage="No informational incidents match the current filters."
           />
         </TabsContent>
       </Tabs>
 
-      {/* Results count */}
-      {filteredIncidents.length > 0 && filteredIncidents.length !== incidents.length && (
-        <p className="text-xs text-muted-foreground text-center">
-          Showing {filteredIncidents.length} of {incidents.length} incidents
-        </p>
+      {filteredIncidents.length > 0 && (
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <p>
+            Showing {(currentPage - 1) * pageSize + 1}-{Math.min(currentPage * pageSize, filteredIncidents.length)} of {filteredIncidents.length}
+            {filteredIncidents.length !== incidents.length ? ` filtered from ${incidents.length}` : ""}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+            >
+              Prev
+            </Button>
+            <span className="tabular-nums">Page {currentPage} / {totalPages}</span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage >= totalPages}
+            >
+              Next
+            </Button>
+          </div>
+        </div>
       )}
     </div>
   );

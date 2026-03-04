@@ -12,7 +12,11 @@ import {
   Settings,
   Shield,
   Menu,
-  X,
+  CheckSquare,
+  ShieldCheck,
+  FileText,
+  Network,
+  Puzzle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -24,6 +28,11 @@ const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/devices", label: "Devices", icon: Server },
   { href: "/incidents", label: "Incidents", icon: AlertTriangle },
+  { href: "/approvals", label: "Approvals", icon: CheckSquare },
+  { href: "/policies", label: "Policies", icon: ShieldCheck },
+  { href: "/digest", label: "Digest", icon: FileText },
+  { href: "/topology", label: "Topology", icon: Network },
+  { href: "/plugins", label: "Plugins", icon: Puzzle },
   { href: "/chat", label: "Chat", icon: MessageSquare },
   { href: "/activity", label: "Activity", icon: Activity },
   { href: "/settings", label: "Settings", icon: Settings },
@@ -92,6 +101,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
 
   const getBadge = (href: string) => {
     if (href === "/incidents") return overview.incidents;
+    if (href === "/approvals") return overview.pendingApprovals;
     return undefined;
   };
 
@@ -137,9 +147,9 @@ function ShellInner({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="flex h-dvh flex-col overflow-hidden md:flex-row">
       {/* Desktop sidebar */}
-      <aside className="hidden w-[220px] shrink-0 border-r border-sidebar-border bg-sidebar md:block">
+      <aside className="relative z-20 hidden h-full w-[220px] shrink-0 border-r border-sidebar-border bg-sidebar md:block">
         <SidebarContent />
       </aside>
 
@@ -160,8 +170,10 @@ function ShellInner({ children }: { children: React.ReactNode }) {
       </Sheet>
 
       {/* Main content */}
-      <main className="min-w-0 flex-1 overflow-auto bg-background">
-        <div className="mx-auto max-w-7xl px-4 py-6 md:px-6 lg:px-8">{children}</div>
+      <main className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
+        <div className="flex h-full min-h-0 w-full flex-col overflow-hidden px-4 py-4 md:px-6 md:py-6 lg:px-8">
+          {children}
+        </div>
       </main>
     </div>
   );

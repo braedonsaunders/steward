@@ -3,6 +3,14 @@ import type Database from "better-sqlite3";
 import { getDb, recoverCorruptDatabase } from "@/lib/state/db";
 import type { Device, GraphNode } from "@/lib/state/types";
 
+const subnet24 = (ip: string): string | undefined => {
+  const parts = ip.split(".");
+  if (parts.length !== 4) {
+    return undefined;
+  }
+  return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
+};
+
 function graphNodeFromRow(row: Record<string, unknown>): GraphNode {
   return {
     id: row.id as string,
@@ -106,6 +114,41 @@ export const graphStore = {
           createdAt: now,
           updatedAt: now,
         });
+
+        const subnet = subnet24(device.ip);
+        if (subnet) {
+          const subnetNodeId = `subnet:${subnet}`;
+          upsertNode.run({
+            id: subnetNodeId,
+            type: "site",
+            label: subnet,
+            properties: JSON.stringify({ cidr: subnet }),
+            createdAt: now,
+            updatedAt: now,
+          });
+
+          const siteSubnetEdge = findEdge(db, "site:default", subnetNodeId, "contains");
+          upsertEdge.run({
+            id: siteSubnetEdge?.id ?? randomUUID(),
+            from: "site:default",
+            to: subnetNodeId,
+            type: "contains",
+            properties: JSON.stringify({ kind: "subnet" }),
+            createdAt: now,
+            updatedAt: now,
+          });
+
+          const subnetDeviceEdge = findEdge(db, subnetNodeId, node.id, "contains");
+          upsertEdge.run({
+            id: subnetDeviceEdge?.id ?? randomUUID(),
+            from: subnetNodeId,
+            to: node.id,
+            type: "contains",
+            properties: JSON.stringify({ kind: "member" }),
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
 
         // Upsert service nodes and edges
         for (const service of device.services) {

@@ -89,6 +89,10 @@ const KIND_COLORS: Record<string, string> = {
   learn: "bg-purple-500/15 text-purple-700 dark:text-purple-400 border-purple-500/25",
   config: "bg-slate-500/15 text-slate-700 dark:text-slate-400 border-slate-500/25",
   auth: "bg-rose-500/15 text-rose-700 dark:text-rose-400 border-rose-500/25",
+  policy: "bg-indigo-500/15 text-indigo-700 dark:text-indigo-400 border-indigo-500/25",
+  playbook: "bg-cyan-500/15 text-cyan-700 dark:text-cyan-400 border-cyan-500/25",
+  approval: "bg-orange-500/15 text-orange-700 dark:text-orange-400 border-orange-500/25",
+  digest: "bg-teal-500/15 text-teal-700 dark:text-teal-400 border-teal-500/25",
 };
 
 function KindBadge({ kind }: { kind: string }) {
@@ -252,6 +256,10 @@ const KIND_OPTIONS = [
   { value: "learn", label: "Learn" },
   { value: "config", label: "Config" },
   { value: "auth", label: "Auth" },
+  { value: "policy", label: "Policy" },
+  { value: "playbook", label: "Playbook" },
+  { value: "approval", label: "Approval" },
+  { value: "digest", label: "Digest" },
 ];
 
 export default function ActivityPage() {
@@ -259,6 +267,9 @@ export default function ActivityPage() {
 
   const [actorFilter, setActorFilter] = useState("all");
   const [kindFilter, setKindFilter] = useState("all");
+  const [actionsPage, setActionsPage] = useState(1);
+  const [runsPage, setRunsPage] = useState(1);
+  const pageSize = 20;
 
   // Filter and limit actions
   const filteredActions = useMemo(() => {
@@ -274,7 +285,7 @@ export default function ActivityPage() {
     // Sort newest first
     result.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
 
-    return result.slice(0, 200);
+    return result;
   }, [actions, actorFilter, kindFilter]);
 
   // Sort agent runs newest first
@@ -283,6 +294,13 @@ export default function ActivityPage() {
       (a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime(),
     );
   }, [agentRuns]);
+
+  const actionsTotalPages = Math.max(1, Math.ceil(filteredActions.length / pageSize));
+  const runsTotalPages = Math.max(1, Math.ceil(sortedRuns.length / pageSize));
+  const currentActionsPage = Math.min(actionsPage, actionsTotalPages);
+  const currentRunsPage = Math.min(runsPage, runsTotalPages);
+  const pagedActions = filteredActions.slice((currentActionsPage - 1) * pageSize, currentActionsPage * pageSize);
+  const pagedRuns = sortedRuns.slice((currentRunsPage - 1) * pageSize, currentRunsPage * pageSize);
 
   if (loading) {
     return (
@@ -301,7 +319,7 @@ export default function ActivityPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="flex h-full min-h-0 flex-col gap-4">
       {/* Header */}
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Activity</h1>
@@ -311,7 +329,7 @@ export default function ActivityPage() {
       </div>
 
       {/* Tabs */}
-      <Tabs defaultValue="actions" className="space-y-4">
+      <Tabs defaultValue="actions" className="flex min-h-0 flex-1 flex-col">
         <TabsList>
           <TabsTrigger value="actions">
             Action Log
@@ -332,7 +350,8 @@ export default function ActivityPage() {
         </TabsList>
 
         {/* Action Log Tab */}
-        <TabsContent value="actions" className="space-y-4">
+        <TabsContent value="actions" className="mt-4 min-h-0 flex-1 overflow-auto">
+          <div className="space-y-4">
           {/* Filters */}
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
@@ -340,7 +359,10 @@ export default function ActivityPage() {
               <span>Filter:</span>
             </div>
 
-            <Select value={actorFilter} onValueChange={setActorFilter}>
+            <Select value={actorFilter} onValueChange={(value) => {
+              setActorFilter(value);
+              setActionsPage(1);
+            }}>
               <SelectTrigger className="w-[140px]">
                 <SelectValue />
               </SelectTrigger>
@@ -353,7 +375,10 @@ export default function ActivityPage() {
               </SelectContent>
             </Select>
 
-            <Select value={kindFilter} onValueChange={setKindFilter}>
+            <Select value={kindFilter} onValueChange={(value) => {
+              setKindFilter(value);
+              setActionsPage(1);
+            }}>
               <SelectTrigger className="w-[140px]">
                 <SelectValue />
               </SelectTrigger>
@@ -372,6 +397,7 @@ export default function ActivityPage() {
                 onClick={() => {
                   setActorFilter("all");
                   setKindFilter("all");
+                  setActionsPage(1);
                 }}
                 className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
               >
@@ -391,20 +417,23 @@ export default function ActivityPage() {
             </Card>
           ) : (
             <div className="space-y-2">
-              {filteredActions.map((action) => (
+              {pagedActions.map((action) => (
                 <ActionEntry key={action.id} action={action} />
               ))}
-              {filteredActions.length >= 200 && (
-                <p className="pt-2 text-center text-xs text-muted-foreground">
-                  Showing the most recent 200 entries.
-                </p>
-              )}
             </div>
           )}
+          {filteredActions.length > pageSize && (
+            <div className="flex items-center justify-end gap-2">
+              <button type="button" className="rounded-md border px-3 py-1 text-xs disabled:opacity-50" onClick={() => setActionsPage((p) => Math.max(1, p - 1))} disabled={currentActionsPage === 1}>Prev</button>
+              <span className="text-xs text-muted-foreground tabular-nums">Page {currentActionsPage} / {actionsTotalPages}</span>
+              <button type="button" className="rounded-md border px-3 py-1 text-xs disabled:opacity-50" onClick={() => setActionsPage((p) => Math.min(actionsTotalPages, p + 1))} disabled={currentActionsPage >= actionsTotalPages}>Next</button>
+            </div>
+          )}
+          </div>
         </TabsContent>
 
         {/* Agent Runs Tab */}
-        <TabsContent value="runs" className="space-y-4">
+        <TabsContent value="runs" className="mt-4 min-h-0 flex-1 overflow-auto">
           {sortedRuns.length === 0 ? (
             <Card className="bg-card/60">
               <CardContent className="py-12 text-center text-sm text-muted-foreground">
@@ -412,10 +441,19 @@ export default function ActivityPage() {
               </CardContent>
             </Card>
           ) : (
-            <div className="space-y-2">
-              {sortedRuns.map((run) => (
+            <div className="space-y-4">
+              <div className="space-y-2">
+              {pagedRuns.map((run) => (
                 <AgentRunEntry key={run.id} run={run} />
               ))}
+              </div>
+              {sortedRuns.length > pageSize && (
+                <div className="flex items-center justify-end gap-2">
+                  <button type="button" className="rounded-md border px-3 py-1 text-xs disabled:opacity-50" onClick={() => setRunsPage((p) => Math.max(1, p - 1))} disabled={currentRunsPage === 1}>Prev</button>
+                  <span className="text-xs text-muted-foreground tabular-nums">Page {currentRunsPage} / {runsTotalPages}</span>
+                  <button type="button" className="rounded-md border px-3 py-1 text-xs disabled:opacity-50" onClick={() => setRunsPage((p) => Math.min(runsTotalPages, p + 1))} disabled={currentRunsPage >= runsTotalPages}>Next</button>
+                </div>
+              )}
             </div>
           )}
         </TabsContent>

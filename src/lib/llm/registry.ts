@@ -11,7 +11,6 @@ export interface ProviderMeta {
   description: string;
   defaultModel: string;
   defaultBaseUrl?: string;
-  apiKeyEnvVar?: string;
   apiKeyPlaceholder?: string;
   requiresApiKey: boolean;
   /** Supports OAuth flow via /api/providers/oauth/start */
@@ -32,9 +31,10 @@ export const PROVIDER_REGISTRY: ProviderMeta[] = [
     category: "cloud",
     description: "GPT-4o, GPT-4o-mini, o1, o3 and more",
     defaultModel: "gpt-4o-mini",
-    apiKeyEnvVar: "OPENAI_API_KEY",
     apiKeyPlaceholder: "sk-...",
     requiresApiKey: true,
+    supportsOAuth: true,
+    oauthMethod: "localhost",
     consoleUrl: "https://platform.openai.com/api-keys",
   },
   {
@@ -43,12 +43,11 @@ export const PROVIDER_REGISTRY: ProviderMeta[] = [
     category: "cloud",
     description: "Claude Opus, Sonnet, Haiku",
     defaultModel: "claude-sonnet-4-20250514",
-    apiKeyEnvVar: "ANTHROPIC_API_KEY",
     apiKeyPlaceholder: "sk-ant-...",
     requiresApiKey: true,
     supportsOAuth: true,
     oauthMethod: "code-paste",
-    consoleUrl: "https://console.anthropic.com/settings/keys",
+    consoleUrl: "https://platform.claude.com/settings/keys",
   },
   {
     id: "google",
@@ -56,7 +55,6 @@ export const PROVIDER_REGISTRY: ProviderMeta[] = [
     category: "cloud",
     description: "Gemini 2.5 Pro, Flash, and more",
     defaultModel: "gemini-2.0-flash",
-    apiKeyEnvVar: "GOOGLE_GENERATIVE_AI_API_KEY",
     apiKeyPlaceholder: "AIza...",
     requiresApiKey: true,
     supportsOAuth: true,
@@ -69,7 +67,6 @@ export const PROVIDER_REGISTRY: ProviderMeta[] = [
     category: "cloud",
     description: "Mistral Large, Medium, Small, Codestral",
     defaultModel: "mistral-large-latest",
-    apiKeyEnvVar: "MISTRAL_API_KEY",
     apiKeyPlaceholder: "...",
     requiresApiKey: true,
     consoleUrl: "https://console.mistral.ai/api-keys",
@@ -80,7 +77,6 @@ export const PROVIDER_REGISTRY: ProviderMeta[] = [
     category: "cloud",
     description: "Ultra-fast inference for Llama, Mixtral, Gemma",
     defaultModel: "llama-3.3-70b-versatile",
-    apiKeyEnvVar: "GROQ_API_KEY",
     apiKeyPlaceholder: "gsk_...",
     requiresApiKey: true,
     consoleUrl: "https://console.groq.com/keys",
@@ -91,7 +87,6 @@ export const PROVIDER_REGISTRY: ProviderMeta[] = [
     category: "cloud",
     description: "Grok models",
     defaultModel: "grok-3-mini-fast",
-    apiKeyEnvVar: "XAI_API_KEY",
     apiKeyPlaceholder: "xai-...",
     requiresApiKey: true,
     consoleUrl: "https://console.x.ai",
@@ -102,7 +97,6 @@ export const PROVIDER_REGISTRY: ProviderMeta[] = [
     category: "cloud",
     description: "Command R, Command R+, Embed",
     defaultModel: "command-r-plus",
-    apiKeyEnvVar: "COHERE_API_KEY",
     apiKeyPlaceholder: "...",
     requiresApiKey: true,
     consoleUrl: "https://dashboard.cohere.com/api-keys",
@@ -114,7 +108,6 @@ export const PROVIDER_REGISTRY: ProviderMeta[] = [
     description: "DeepSeek V3, R1 reasoning models",
     defaultModel: "deepseek-chat",
     defaultBaseUrl: "https://api.deepseek.com/v1",
-    apiKeyEnvVar: "DEEPSEEK_API_KEY",
     apiKeyPlaceholder: "sk-...",
     requiresApiKey: true,
     openaiCompatible: true,
@@ -127,7 +120,6 @@ export const PROVIDER_REGISTRY: ProviderMeta[] = [
     description: "Sonar models with built-in search",
     defaultModel: "sonar-pro",
     defaultBaseUrl: "https://api.perplexity.ai",
-    apiKeyEnvVar: "PERPLEXITY_API_KEY",
     apiKeyPlaceholder: "pplx-...",
     requiresApiKey: true,
     openaiCompatible: true,
@@ -140,7 +132,6 @@ export const PROVIDER_REGISTRY: ProviderMeta[] = [
     description: "Fast inference for open models",
     defaultModel: "accounts/fireworks/models/llama-v3p3-70b-instruct",
     defaultBaseUrl: "https://api.fireworks.ai/inference/v1",
-    apiKeyEnvVar: "FIREWORKS_API_KEY",
     apiKeyPlaceholder: "fw_...",
     requiresApiKey: true,
     openaiCompatible: true,
@@ -153,7 +144,6 @@ export const PROVIDER_REGISTRY: ProviderMeta[] = [
     description: "Run open models on fast infrastructure",
     defaultModel: "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
     defaultBaseUrl: "https://api.together.xyz/v1",
-    apiKeyEnvVar: "TOGETHER_API_KEY",
     apiKeyPlaceholder: "...",
     requiresApiKey: true,
     openaiCompatible: true,
@@ -168,7 +158,6 @@ export const PROVIDER_REGISTRY: ProviderMeta[] = [
     description: "Unified API for 200+ models from all providers",
     defaultModel: "openai/gpt-4o-mini",
     defaultBaseUrl: "https://openrouter.ai/api/v1",
-    apiKeyEnvVar: "OPENROUTER_API_KEY",
     apiKeyPlaceholder: "sk-or-...",
     requiresApiKey: true,
     supportsOAuth: true,

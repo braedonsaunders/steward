@@ -14,11 +14,6 @@ export const getProviderConfig = async (
 };
 
 export const getDefaultProvider = async (): Promise<LLMProvider> => {
-  const configured = process.env.STEWARD_DEFAULT_PROVIDER as LLMProvider | undefined;
-  if (configured) {
-    return configured;
-  }
-
   const state = await stateStore.getState();
   const enabled = state.providerConfigs.find((item) => item.enabled);
   return enabled?.provider ?? "openai";

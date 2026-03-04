@@ -1,7 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { isAuthorized } from "@/lib/auth/guard";
-import { exchangeAnthropicCode, createAnthropicApiKey } from "@/lib/auth/oauth";
+import { exchangeAnthropicCode } from "@/lib/auth/oauth";
+import { getProviderConfig } from "@/lib/llm/config";
+import { getProviderMeta } from "@/lib/llm/registry";
 import { ensureVaultReadyForProviders } from "@/lib/security/vault-gate";
 import { vault } from "@/lib/security/vault";
 import { stateStore } from "@/lib/state/store";
@@ -12,6 +14,15 @@ const bodySchema = z.object({
   code: z.string().min(1, "Authorization code is required"),
 });
 
+/**
+ * Anthropic OAuth code exchange — matches oneshot's opencode-anthropic-auth
+ * plugin exactly.
+ *
+ * The code-paste flow returns "code#state" where state == PKCE verifier.
+ * We exchange for OAuth tokens and store them in the vault. The provider
+ * system uses these tokens with a custom fetch interceptor (Bearer token +
+ * anthropic-beta headers) — NOT by creating an API key.
+ */
 export async function POST(request: NextRequest) {
   if (!isAuthorized(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -20,7 +31,7 @@ export async function POST(request: NextRequest) {
   const vaultGate = await ensureVaultReadyForProviders();
   if (!vaultGate.ok) {
     return NextResponse.json(
-      { error: vaultGate.error, code: vaultGate.code },
+      { error: vaultGate.error },
       { status: 409 },
     );
   }
@@ -52,24 +63,33 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    // 1. Exchange code for tokens
+    // Exchange code for OAuth tokens (matches oneshot's exchange() function)
     const tokens = await exchangeAnthropicCode(authCode, verifier, verifier);
 
-    // 2. Create a permanent API key using the access token
-    const apiKey = await createAnthropicApiKey(tokens.access_token);
-
-    // 3. Store the API key in vault (same slot as manual API keys)
-    await vault.setSecret("llm.api.anthropic.key", apiKey);
-
-    // 4. Also store refresh token for potential future use
+    // Store OAuth tokens in vault (like oneshot stores auth info)
+    await vault.setSecret("llm.oauth.anthropic.access_token", tokens.access_token);
     if (tokens.refresh_token) {
       await vault.setSecret("llm.oauth.anthropic.refresh_token", tokens.refresh_token);
     }
+    if (tokens.expires_in) {
+      const expiresAt = Date.now() + tokens.expires_in * 1000;
+      await vault.setSecret("llm.oauth.anthropic.expires_at", String(expiresAt));
+    }
+
+    // Persist provider config so the provider is enabled
+    const meta = getProviderMeta("anthropic");
+    const existingConfig = await getProviderConfig("anthropic");
+    await stateStore.setProviderConfig({
+      provider: "anthropic",
+      enabled: true,
+      model: existingConfig?.model ?? meta?.defaultModel ?? "claude-sonnet-4-20250514",
+      oauthTokenSecret: "llm.oauth.anthropic.access_token",
+    });
 
     await stateStore.addAction({
       actor: "user",
       kind: "auth",
-      message: "Anthropic API key created via OAuth (Claude CLI flow)",
+      message: "Anthropic connected via OAuth (Claude Pro/Max flow)",
       context: { provider: "anthropic" },
     });
 

@@ -15,8 +15,10 @@ const createDeviceSchema = z.object({
       "server",
       "workstation",
       "router",
+      "firewall",
       "switch",
       "access-point",
+      "camera",
       "nas",
       "printer",
       "iot",
@@ -67,7 +69,16 @@ export async function POST(request: NextRequest) {
     firstSeenAt: existing?.firstSeenAt ?? now,
     lastSeenAt: now,
     lastChangedAt: now,
-    metadata: existing?.metadata ?? { source: "manual" },
+    metadata: {
+      ...(existing?.metadata ?? {}),
+      source: "manual",
+      adoption: {
+        ...(typeof existing?.metadata?.adoption === "object" && existing.metadata.adoption !== null
+          ? (existing.metadata.adoption as Record<string, unknown>)
+          : {}),
+        status: "adopted",
+      },
+    },
     mac: existing?.mac,
     hostname: existing?.hostname,
     vendor: existing?.vendor,

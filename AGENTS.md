@@ -2,6 +2,13 @@
 
 **Your network's first employee.**
 
+## Non-Negotiable Configuration Rule
+
+- Under no circumstances should runtime/product configuration be introduced via environment variables.
+- Do not create or rely on `.env` files for product behavior.
+- All configuration must be persisted in SQLite and managed through Steward state/settings flows.
+- If a new tunable is needed, add it to the DB-backed configuration model and expose it through the app/API.
+
 ---
 
 ## The Problem
@@ -743,4 +750,187 @@ Each remediation is a typed playbook:
 - What minimum adapter set is required for a credible "works out of the box" launch?
 - How should data retention defaults vary between homelab, SMB, and MSP deployments?
 - What legal/compliance commitments are needed before multi-tenant cloud relay GA?
+
+---
+
+## Proposed Defaults (v1 Decisions)
+
+These defaults turn the open questions into an implementable baseline for v1 while keeping room for expansion.
+
+### Agent Strategy
+
+- Agentless-by-default across all supported environments.
+- Optional lightweight endpoint helper is explicitly post-v1 and only for deep telemetry and local remediation acceleration.
+- No core feature in v1 may require endpoint helper installation.
+
+### Minimum Adapter Pack for "Works Out of the Box"
+
+- Linux via SSH (`systemd`, package status, disk/service checks)
+- Windows via WinRM (service status, patch state, event log subset)
+- SNMP for switches/printers/UPS (inventory + health)
+- HTTP(S) generic appliance adapter (read-only scrape + health checks)
+- Docker host adapter (container inventory, health, restart actions)
+
+### Data Retention Defaults by Deployment Type
+
+- **Homelab:** metrics 30 days, incidents 180 days, audit 365 days.
+- **SMB:** metrics 90 days, incidents 365 days, audit 2 years.
+- **MSP:** metrics 180 days, incidents 2 years, audit 3 years (tenant-configurable).
+- Retention is policy-driven and persisted in DB-backed settings.
+
+### Cloud Relay Compliance Gate (Before GA)
+
+- Baseline SOC 2 Type I controls documented and independently reviewed.
+- Tenant isolation threat model completed with pen-test findings remediated.
+- Regional data residency controls and retention policy enforcement validated.
+- Customer-visible audit export and key-rotation procedures generally available.
+
+---
+
+## Configuration and State Model (DB-Backed)
+
+Steward configuration is state, not process environment. All tunables are persisted in SQLite and exposed via internal services and APIs.
+
+### Configuration Domains
+
+- **System:** node identity, timezone, digest schedule, upgrade channel.
+- **Policy:** autonomy tiers, action class gates, maintenance windows, freeze periods.
+- **Discovery:** scan scope, cadence caps, passive/active enablement, deny-lists.
+- **Notifications:** channel bindings, routing rules, escalation paths, quiet hours.
+- **Retention:** metrics, incidents, evidence, audit, redaction/TTL behavior.
+
+### Required Configuration Behaviors
+
+- Versioned settings with `effective_from` timestamps.
+- Atomic updates with validation and schema constraints.
+- Audit event emitted for every settings mutation.
+- Read path supports "current" and "as-of" historical evaluation.
+
+---
+
+## Canonical Entity Shape (v1)
+
+The graph is the conceptual model; v1 persistence may blend relational tables with graph projections.
+
+### Device
+
+- Identity: stable `device_id`, `site_id`, observed addresses, vendor/model.
+- Classification: `device_type`, `os_family`, confidence score, management protocols.
+- State: health summary, last contact, autonomy tier, criticality tag.
+
+### Service
+
+- Identity: `service_id`, host `device_id`, service type, endpoint/port.
+- State: availability, latency/error baseline, version/build metadata.
+- Risk: exposure level, dependency count, vuln posture summary.
+
+### Incident
+
+- Identity: `incident_id`, severity, status, first/last observed.
+- Investigation: hypotheses, confidence, affected nodes, evidence references.
+- Outcome: remediation action, approval path, verification result, postmortem note.
+
+### PlaybookRun
+
+- Identity: `run_id`, playbook family/version, triggering condition.
+- Execution: preflight result, step timeline, idempotency key.
+- Result: success/failure/quarantined, rollback status, evidence bundle URI.
+
+---
+
+## API Contract Sketch (v1)
+
+### Core Endpoint Patterns
+
+- `GET /api/devices` with filters (`site`, `risk`, `managed`, `stale`).
+- `GET /api/incidents` with severity/status/time range pagination.
+- `POST /api/incidents/{id}/approve` and `POST /api/incidents/{id}/deny`.
+- `POST /api/playbook-runs` for gated/manual execution with dry-run support.
+- `GET /api/audit-events` as cursor-based immutable stream.
+
+### Contract Requirements
+
+- Idempotency supported for mutating endpoints with caller-supplied keys.
+- Every mutation returns affected resource plus generated audit reference.
+- Permission scopes enforced per endpoint and reflected in error payloads.
+- Time values are UTC ISO-8601; all list endpoints are cursor-paginated.
+
+### Event Streaming
+
+- Server-sent events for inbox updates, incident state transitions, and approvals.
+- Backpressure-safe consumer cursors and replay from last acknowledged offset.
+
+---
+
+## Decisioning and Remediation Flow (Executable Semantics)
+
+### Decision Inputs
+
+- Incident severity/confidence
+- Target device criticality and environment label
+- Action class risk and rollback availability
+- Current maintenance/freeze state
+- Historical failure rate for similar playbook runs
+
+### Deterministic Decision Order
+
+1. Validate action preconditions and required credentials.
+2. Evaluate hard denies (policy, freeze, missing rollback for risky classes).
+3. Evaluate approval requirements.
+4. If auto-allowed, execute with preflight -> run -> postflight.
+5. On postflight failure, trigger rollback; quarantine on repeated failure.
+
+### Escalation Rules
+
+- Approval timeout routes to delegate chain or safe fallback.
+- Repeated quarantines auto-create recommendation to adjust policy/playbook.
+- Critical unresolved incidents force notification escalation across channels.
+
+---
+
+## Validation and Test Strategy
+
+### Test Layers
+
+- **Unit:** policy decisions, parser/normalizer logic, risk scoring.
+- **Integration:** adapter contracts (`detect`, `collect`, `act`, `verify`).
+- **Scenario:** incident pipelines in simulated mixed-network lab fixtures.
+- **Resilience:** provider outage, partial network partitions, DB recovery.
+
+### Required v1 Test Artifacts
+
+- Golden-path "first 30 minutes" fixture with expected milestones.
+- Five playbook families with success + rollback path coverage.
+- False-positive benchmark suite for critical anomaly triggers.
+- Permission matrix tests for all API mutation endpoints.
+
+### Release Gates
+
+- Acceptance criteria in this spec must pass in CI/staging.
+- Migration and backup/restore validation required for every release candidate.
+- No release if critical playbook quarantine rate exceeds error budget.
+
+---
+
+## Observability of Steward Itself
+
+Steward must monitor its own health with the same rigor it applies to managed infrastructure.
+
+### Control Plane Health Signals
+
+- Loop cadence lag, queue depth, action success rate, quarantine count.
+- Adapter error rates by protocol/vendor.
+- Notification delivery success and approval latency distributions.
+- DB/vault operation latency and failure rates.
+
+### Self-Protection Behaviors
+
+- Automatic degrade mode when dependencies fail (LLM/provider/adapter outage).
+- Rate limiting and circuit breakers on unstable integrations.
+- Read-only safe mode for persistent postflight validation failures.
+
+### Operator-Facing Transparency
+
+- Dedicated "Steward Health" view with active degradations and impact.
+- Plain-language explanation when autonomy is reduced automatically.
 

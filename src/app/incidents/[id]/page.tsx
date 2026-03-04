@@ -30,7 +30,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSteward } from "@/lib/hooks/use-steward";
-import type { Incident, IncidentSeverity } from "@/lib/state/types";
+import type { Incident, IncidentSeverity, PlaybookRun } from "@/lib/state/types";
 import { cn } from "@/lib/utils";
 
 function severityBadgeVariant(
@@ -98,7 +98,7 @@ function formatRelativeTime(iso: string): string {
 
 export default function IncidentDetailPage() {
   const params = useParams<{ id: string }>();
-  const { incidents, devices, loading, error, updateIncidentStatus } = useSteward();
+  const { incidents, devices, playbookRuns, loading, error, updateIncidentStatus, approveAction, denyAction } = useSteward();
   const [updating, setUpdating] = useState(false);
 
   const incident = useMemo(
@@ -110,6 +110,11 @@ export default function IncidentDetailPage() {
     if (!incident) return [];
     return devices.filter((d) => incident.deviceIds.includes(d.id));
   }, [incident, devices]);
+
+  const incidentPlaybookRuns = useMemo(() => {
+    if (!incident) return [];
+    return playbookRuns.filter((r) => r.incidentId === incident.id);
+  }, [playbookRuns, incident]);
 
   const handleStatusChange = async (newStatus: Incident["status"]) => {
     if (!incident || updating) return;
@@ -449,6 +454,88 @@ export default function IncidentDetailPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Playbook Runs */}
+      {incidentPlaybookRuns.length > 0 && (
+        <Card className="bg-card/85">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Wrench className="size-4" />
+              Playbook Runs
+              <Badge variant="secondary" className="ml-auto text-[10px] tabular-nums">
+                {incidentPlaybookRuns.length}
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {incidentPlaybookRuns.map((run) => (
+                <div key={run.id} className="rounded-lg border p-3 space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium">{run.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {run.family} · Class {run.actionClass}
+                      </p>
+                    </div>
+                    <Badge
+                      variant={
+                        run.status === "completed" ? "default" :
+                        run.status === "failed" || run.status === "denied" ? "destructive" :
+                        run.status === "pending_approval" ? "secondary" :
+                        "outline"
+                      }
+                      className="shrink-0 text-[10px]"
+                    >
+                      {run.status.replace(/_/g, " ")}
+                    </Badge>
+                  </div>
+                  {run.status === "pending_approval" && (
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="default"
+                        onClick={() => approveAction(run.id)}
+                      >
+                        <Check className="mr-1 size-3" />
+                        Approve
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => denyAction(run.id, "Denied from incident page")}
+                      >
+                        Deny
+                      </Button>
+                      {run.expiresAt && (
+                        <span className="text-[10px] text-muted-foreground ml-auto">
+                          Expires: {formatRelativeTime(run.expiresAt)}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {run.steps.length > 0 && (
+                    <div className="mt-1 space-y-1">
+                      {run.steps.map((step, idx) => (
+                        <div key={idx} className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <span className={cn(
+                            "size-1.5 rounded-full",
+                            step.status === "passed" ? "bg-emerald-500" :
+                            step.status === "failed" ? "bg-red-500" :
+                            step.status === "running" ? "bg-blue-500 animate-pulse" :
+                            "bg-gray-400",
+                          )} />
+                          <span>{step.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Metadata (if present) */}
       {Object.keys(incident.metadata).length > 0 && (

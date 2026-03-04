@@ -1,0 +1,11 @@
+services:
+  steward:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: steward
+    ports:
+      - "3010:3000"
+    volumes:
+      - ./.steward:/app/.steward
+    restart: unless-stopped

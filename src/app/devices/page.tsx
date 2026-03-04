@@ -47,6 +47,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useSteward } from "@/lib/hooks/use-steward";
+import { getDeviceAdoptionStatus, type DeviceAdoptionStatus } from "@/lib/state/device-adoption";
 import type { DeviceStatus, DeviceType } from "@/lib/state/types";
 import { cn } from "@/lib/utils";
 
@@ -54,8 +55,10 @@ const DEVICE_TYPES: DeviceType[] = [
   "server",
   "workstation",
   "router",
+  "firewall",
   "switch",
   "access-point",
+  "camera",
   "nas",
   "printer",
   "iot",
@@ -78,6 +81,13 @@ const TYPE_OPTIONS: Array<{ value: string; label: string }> = [
     value: t,
     label: t.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
   })),
+];
+
+const MANAGEMENT_OPTIONS: Array<{ value: "all" | DeviceAdoptionStatus; label: string }> = [
+  { value: "all", label: "All Devices" },
+  { value: "adopted", label: "Adopted" },
+  { value: "discovered", label: "Discovered" },
+  { value: "ignored", label: "Ignored" },
 ];
 
 function statusDotColor(status: DeviceStatus): string {
@@ -127,6 +137,7 @@ type SortField =
   | "name"
   | "ip"
   | "type"
+  | "management"
   | "status"
   | "services"
   | "autonomyTier"
@@ -141,6 +152,9 @@ export default function DevicesPage() {
   const [typeFilter, setTypeFilter] = useState("all");
   const [sortField, setSortField] = useState<SortField>("name");
   const [sortAsc, setSortAsc] = useState(true);
+  const [managementFilter, setManagementFilter] = useState<"all" | DeviceAdoptionStatus>("all");
+  const [page, setPage] = useState(1);
+  const pageSize = 25;
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [newName, setNewName] = useState("");
@@ -172,18 +186,25 @@ export default function DevicesPage() {
       result = result.filter((d) => d.type === typeFilter);
     }
 
+    if (managementFilter !== "all") {
+      result = result.filter((d) => getDeviceAdoptionStatus(d) === managementFilter);
+    }
+
     // Sort
     result = [...result].sort((a, b) => {
       let cmp = 0;
       switch (sortField) {
         case "name":
-          cmp = a.name.localeCompare(b.name);
+          cmp = (a.hostname ?? a.name).localeCompare(b.hostname ?? b.name);
           break;
         case "ip":
           cmp = a.ip.localeCompare(b.ip);
           break;
         case "type":
           cmp = a.type.localeCompare(b.type);
+          break;
+        case "management":
+          cmp = getDeviceAdoptionStatus(a).localeCompare(getDeviceAdoptionStatus(b));
           break;
         case "status":
           cmp = a.status.localeCompare(b.status);
@@ -204,7 +225,16 @@ export default function DevicesPage() {
     });
 
     return result;
-  }, [devices, search, statusFilter, typeFilter, sortField, sortAsc]);
+  }, [devices, search, statusFilter, typeFilter, managementFilter, sortField, sortAsc]);
+
+  const adoptedCount = useMemo(
+    () => devices.filter((d) => getDeviceAdoptionStatus(d) === "adopted").length,
+    [devices],
+  );
+  const discoveredCount = useMemo(
+    () => devices.filter((d) => getDeviceAdoptionStatus(d) === "discovered").length,
+    [devices],
+  );
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -213,7 +243,15 @@ export default function DevicesPage() {
       setSortField(field);
       setSortAsc(true);
     }
+    setPage(1);
   };
+
+  const totalPages = Math.max(1, Math.ceil(filteredDevices.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedDevices = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredDevices.slice(start, start + pageSize);
+  }, [filteredDevices, currentPage]);
 
   const handleAddDevice = async (e: FormEvent) => {
     e.preventDefault();
@@ -260,7 +298,7 @@ export default function DevicesPage() {
 
   if (loading) {
     return (
-      <main className="mx-auto w-full max-w-[1380px] space-y-6 py-6 md:py-8">
+      <main className="space-y-6">
         <div className="flex items-center justify-between">
           <div className="space-y-1">
             <Skeleton className="h-8 w-32" />
@@ -288,7 +326,7 @@ export default function DevicesPage() {
 
   if (error) {
     return (
-      <main className="mx-auto w-full max-w-[1380px] py-6 md:py-8">
+      <main>
         <Card className="border-destructive">
           <CardHeader>
             <CardTitle className="text-destructive">
@@ -302,7 +340,7 @@ export default function DevicesPage() {
   }
 
   return (
-    <main className="mx-auto w-full max-w-[1380px] space-y-6 py-6 md:py-8">
+    <main className="flex h-full min-h-0 flex-col gap-4">
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="space-y-1">
@@ -316,7 +354,7 @@ export default function DevicesPage() {
             </Badge>
           </div>
           <p className="text-sm text-muted-foreground">
-            Discovered and managed network assets
+            Differentiated discovered vs actively managed assets
           </p>
         </div>
 
@@ -374,11 +412,17 @@ export default function DevicesPage() {
           <Input
             placeholder="Search by name, IP, hostname, or vendor..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(1);
+            }}
             className="pl-9"
           />
         </div>
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
+        <Select value={statusFilter} onValueChange={(value) => {
+          setStatusFilter(value);
+          setPage(1);
+        }}>
           <SelectTrigger className="w-full sm:w-[160px]">
             <SelectValue placeholder="Status" />
           </SelectTrigger>
@@ -390,7 +434,10 @@ export default function DevicesPage() {
             ))}
           </SelectContent>
         </Select>
-        <Select value={typeFilter} onValueChange={setTypeFilter}>
+        <Select value={typeFilter} onValueChange={(value) => {
+          setTypeFilter(value);
+          setPage(1);
+        }}>
           <SelectTrigger className="w-full sm:w-[180px]">
             <SelectValue placeholder="Type" />
           </SelectTrigger>
@@ -402,16 +449,43 @@ export default function DevicesPage() {
             ))}
           </SelectContent>
         </Select>
+        <Select value={managementFilter} onValueChange={(value: "all" | DeviceAdoptionStatus) => {
+          setManagementFilter(value);
+          setPage(1);
+        }}>
+          <SelectTrigger className="w-full sm:w-[180px]">
+            <SelectValue placeholder="Management" />
+          </SelectTrigger>
+          <SelectContent>
+            {MANAGEMENT_OPTIONS.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {/* Stats row */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <Card className="bg-card/85">
           <CardContent className="p-3">
             <p className="text-2xl font-semibold tabular-nums">
               {devices.filter((d) => d.status === "online").length}
             </p>
             <p className="text-xs text-muted-foreground">Online</p>
+          </CardContent>
+        </Card>
+        <Card className="bg-card/85">
+          <CardContent className="p-3">
+            <p className="text-2xl font-semibold tabular-nums">{adoptedCount}</p>
+            <p className="text-xs text-muted-foreground">Adopted</p>
+          </CardContent>
+        </Card>
+        <Card className="bg-card/85">
+          <CardContent className="p-3">
+            <p className="text-2xl font-semibold tabular-nums">{discoveredCount}</p>
+            <p className="text-xs text-muted-foreground">Discovered</p>
           </CardContent>
         </Card>
         <Card className="bg-card/85">
@@ -441,8 +515,8 @@ export default function DevicesPage() {
       </div>
 
       {/* Device Table */}
-      <Card className="bg-card/85">
-        <CardContent className="p-0">
+      <Card className="min-h-0 flex-1 bg-card/85">
+        <CardContent className="flex h-full min-h-0 flex-col p-0">
           {filteredDevices.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
               <Monitor className="size-10 text-muted-foreground/50" />
@@ -468,7 +542,7 @@ export default function DevicesPage() {
               )}
             </div>
           ) : (
-            <div className="overflow-auto">
+            <div className="min-h-0 flex-1 overflow-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -476,6 +550,7 @@ export default function DevicesPage() {
                     <SortableHeader field="name">Name</SortableHeader>
                     <SortableHeader field="ip">IP</SortableHeader>
                     <SortableHeader field="type">Type</SortableHeader>
+                    <SortableHeader field="management">Management</SortableHeader>
                     <SortableHeader field="services">Services</SortableHeader>
                     <SortableHeader field="autonomyTier">Tier</SortableHeader>
                     <SortableHeader field="lastSeenAt">
@@ -484,7 +559,7 @@ export default function DevicesPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredDevices.map((device) => (
+                  {pagedDevices.map((device) => (
                     <TableRow
                       key={device.id}
                       className="cursor-pointer"
@@ -507,13 +582,22 @@ export default function DevicesPage() {
                         </div>
                       </TableCell>
                       <TableCell className="font-medium">
-                        {device.name}
+                        {device.hostname ?? device.name}
                       </TableCell>
                       <TableCell className="font-mono text-xs text-muted-foreground">
                         {device.ip}
                       </TableCell>
                       <TableCell className="capitalize text-sm">
                         {device.type.replace(/-/g, " ")}
+                      </TableCell>
+                      <TableCell>
+                        {getDeviceAdoptionStatus(device) === "adopted" ? (
+                          <Badge variant="default" className="text-[10px]">Adopted</Badge>
+                        ) : getDeviceAdoptionStatus(device) === "ignored" ? (
+                          <Badge variant="outline" className="text-[10px]">Ignored</Badge>
+                        ) : (
+                          <Badge variant="secondary" className="text-[10px]">Discovered</Badge>
+                        )}
                       </TableCell>
                       <TableCell className="tabular-nums">
                         {device.services.length}
@@ -547,11 +631,32 @@ export default function DevicesPage() {
         </CardContent>
       </Card>
 
-      {/* Results count */}
-      {filteredDevices.length > 0 && filteredDevices.length !== devices.length && (
-        <p className="text-xs text-muted-foreground text-center">
-          Showing {filteredDevices.length} of {devices.length} devices
-        </p>
+      {filteredDevices.length > 0 && (
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <p>
+            Showing {(currentPage - 1) * pageSize + 1}-{Math.min(currentPage * pageSize, filteredDevices.length)} of {filteredDevices.length}
+            {filteredDevices.length !== devices.length ? ` filtered from ${devices.length}` : ""}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+            >
+              Prev
+            </Button>
+            <span className="tabular-nums">Page {currentPage} / {totalPages}</span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage >= totalPages}
+            >
+              Next
+            </Button>
+          </div>
+        </div>
       )}
     </main>
   );

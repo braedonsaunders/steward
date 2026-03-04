@@ -16,8 +16,7 @@ export async function GET() {
     devices: state.devices.length,
     openIncidents: state.incidents.filter((incident) => incident.status !== "resolved").length,
     vault: {
-      initialized: await vault.isInitialized(),
-      unlocked: vault.isUnlocked(),
+      ready: vault.isUnlocked() || await vault.ensureUnlocked(),
     },
   });
 }

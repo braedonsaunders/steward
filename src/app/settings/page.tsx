@@ -10,16 +10,11 @@ import {
   ExternalLink,
   Globe,
   HardDrive,
-  Key,
   Loader2,
-  Lock,
   Play,
   RefreshCw,
   Settings2,
-  Shield,
   ShieldCheck,
-  ShieldOff,
-  Unlock,
   XCircle,
 } from "lucide-react";
 import { useSteward } from "@/lib/hooks/use-steward";
@@ -46,7 +41,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
+// Switch removed — dropdown selection = active provider, no separate toggle
 import {
   Tabs,
   TabsContent,
@@ -122,11 +117,19 @@ interface ProviderDraft {
 function OpenAIOAuthSection({
   disabled = false,
   disabledReason,
+  initialConnected = false,
+  onDisconnect,
+  onConnected,
 }: {
   disabled?: boolean;
   disabledReason?: string;
+  initialConnected?: boolean;
+  onDisconnect?: () => Promise<void>;
+  onConnected?: () => Promise<void>;
 }) {
-  const [status, setStatus] = useState<"idle" | "waiting" | "complete" | "error">("idle");
+  const [status, setStatus] = useState<"idle" | "waiting" | "complete" | "error" | "disconnecting">(
+    initialConnected ? "complete" : "idle",
+  );
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -173,6 +176,7 @@ function OpenAIOAuthSection({
           if (statusData.status === "complete") {
             setStatus("complete");
             stopPolling();
+            void onConnected?.();
           } else if (statusData.status === "error") {
             setStatus("error");
             setError(statusData.error ?? "OAuth flow failed");
@@ -186,7 +190,19 @@ function OpenAIOAuthSection({
       setStatus("error");
       setError(err instanceof Error ? err.message : "Failed to start OAuth flow");
     }
-  }, [disabled, disabledReason, stopPolling]);
+  }, [disabled, disabledReason, onConnected, stopPolling]);
+
+  const handleDisconnect = useCallback(async () => {
+    setStatus("disconnecting");
+    setError(null);
+    try {
+      if (onDisconnect) await onDisconnect();
+      setStatus("idle");
+    } catch (err) {
+      setStatus("error");
+      setError(err instanceof Error ? err.message : "Failed to disconnect");
+    }
+  }, [onDisconnect]);
 
   return (
     <div className="space-y-3">
@@ -202,11 +218,27 @@ function OpenAIOAuthSection({
             <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
             Waiting...
           </Button>
+        ) : status === "disconnecting" ? (
+          <Button variant="outline" size="sm" disabled>
+            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            Disconnecting...
+          </Button>
         ) : status === "complete" ? (
-          <Badge variant="default" className="text-xs">
-            <CheckCircle2 className="mr-1 h-3 w-3" />
-            Connected
-          </Badge>
+          <div className="flex items-center gap-2">
+            <Badge variant="default" className="text-xs">
+              <CheckCircle2 className="mr-1 h-3 w-3" />
+              Connected
+            </Badge>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-xs text-muted-foreground hover:text-destructive"
+              onClick={() => void handleDisconnect()}
+            >
+              <XCircle className="mr-1 h-3 w-3" />
+              Disconnect
+            </Button>
+          </div>
         ) : (
           <Button
             variant="outline"
@@ -236,11 +268,20 @@ function OpenAIOAuthSection({
 function AnthropicOAuthSection({
   disabled = false,
   disabledReason,
+  initialConnected = false,
+  onDisconnect,
+  onConnected,
 }: {
   disabled?: boolean;
   disabledReason?: string;
+  initialConnected?: boolean;
+  onDisconnect?: () => Promise<void>;
+  onConnected?: () => Promise<void>;
 }) {
-  const [phase, setPhase] = useState<"idle" | "waiting" | "exchanging" | "complete" | "error">("idle");
+  const [phase, setPhase] = useState<"idle" | "waiting" | "exchanging" | "complete" | "error" | "disconnecting">(
+    initialConnected ? "complete" : "idle",
+  );
+
   const [pastedCode, setPastedCode] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -297,11 +338,24 @@ function AnthropicOAuthSection({
 
       setPhase("complete");
       setPastedCode("");
+      await onConnected?.();
     } catch (err) {
       setPhase("error");
       setError(err instanceof Error ? err.message : "Code exchange failed");
     }
-  }, [disabled, disabledReason, pastedCode]);
+  }, [disabled, disabledReason, onConnected, pastedCode]);
+
+  const handleDisconnect = useCallback(async () => {
+    setPhase("disconnecting");
+    setError(null);
+    try {
+      if (onDisconnect) await onDisconnect();
+      setPhase("idle");
+    } catch (err) {
+      setPhase("error");
+      setError(err instanceof Error ? err.message : "Failed to disconnect");
+    }
+  }, [onDisconnect]);
 
   return (
     <div className="space-y-3">
@@ -312,11 +366,27 @@ function AnthropicOAuthSection({
             Create an API key via your Anthropic account
           </p>
         </div>
-        {phase === "complete" ? (
-          <Badge variant="default" className="text-xs">
-            <CheckCircle2 className="mr-1 h-3 w-3" />
-            Key Created
-          </Badge>
+        {phase === "disconnecting" ? (
+          <Button variant="outline" size="sm" disabled>
+            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            Disconnecting...
+          </Button>
+        ) : phase === "complete" ? (
+          <div className="flex items-center gap-2">
+            <Badge variant="default" className="text-xs">
+              <CheckCircle2 className="mr-1 h-3 w-3" />
+              Key Created
+            </Badge>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-xs text-muted-foreground hover:text-destructive"
+              onClick={() => void handleDisconnect()}
+            >
+              <XCircle className="mr-1 h-3 w-3" />
+              Disconnect
+            </Button>
+          </div>
         ) : phase !== "waiting" && phase !== "exchanging" ? (
           <Button
             variant="outline"
@@ -377,12 +447,35 @@ function RedirectOAuthSection({
   label,
   disabled = false,
   disabledReason,
+  initialConnected = false,
+  onDisconnect,
 }: {
   provider: string;
   label: string;
   disabled?: boolean;
   disabledReason?: string;
+  initialConnected?: boolean;
+  onDisconnect?: () => Promise<void>;
 }) {
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [connected, setConnected] = useState(initialConnected);
+
+  useEffect(() => {
+    setConnected(initialConnected);
+  }, [initialConnected]);
+
+  const handleDisconnect = useCallback(async () => {
+    setDisconnecting(true);
+    try {
+      if (onDisconnect) await onDisconnect();
+      setConnected(false);
+    } catch {
+      // Ignore errors
+    } finally {
+      setDisconnecting(false);
+    }
+  }, [onDisconnect]);
+
   return (
     <div className="flex items-center justify-between rounded-lg border bg-background/50 px-4 py-3">
       <div>
@@ -391,28 +484,51 @@ function RedirectOAuthSection({
           Connect via {label} OAuth flow
         </p>
       </div>
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={disabled}
-        title={disabled ? disabledReason : undefined}
-        onClick={() => {
-          window.open(
-            `/api/providers/oauth/start?provider=${provider}`,
-            "_blank",
-            "noopener,noreferrer",
-          );
-        }}
-      >
-        <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
-        Connect
-      </Button>
+      {disconnecting ? (
+        <Button variant="outline" size="sm" disabled>
+          <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+          Disconnecting...
+        </Button>
+      ) : connected ? (
+        <div className="flex items-center gap-2">
+          <Badge variant="default" className="text-xs">
+            <CheckCircle2 className="mr-1 h-3 w-3" />
+            Connected
+          </Badge>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-xs text-muted-foreground hover:text-destructive"
+            onClick={() => void handleDisconnect()}
+          >
+            <XCircle className="mr-1 h-3 w-3" />
+            Disconnect
+          </Button>
+        </div>
+      ) : (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={disabled}
+          title={disabled ? disabledReason : undefined}
+          onClick={() => {
+            window.open(
+              `/api/providers/oauth/start?provider=${provider}`,
+              "_blank",
+              "noopener,noreferrer",
+            );
+          }}
+        >
+          <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
+          Connect
+        </Button>
+      )}
     </div>
   );
 }
 
 function ProvidersSection() {
-  const { providerConfigs, saveProvider, vaultStatus } = useSteward();
+  const { providerConfigs, refresh, saveProvider, loading: stateLoading } = useSteward();
   const searchParams = useSearchParams();
   const [selectedId, setSelectedId] = useState<LLMProvider>("openai");
   const [draft, setDraft] = useState<ProviderDraft>({
@@ -430,11 +546,26 @@ function ProvidersSection() {
   const [modelsLoading, setModelsLoading] = useState(false);
   const [customModel, setCustomModel] = useState(false);
   const didInitializeSelection = useRef(false);
+  const modelsRequestSeq = useRef(0);
+  const [credentialStatus, setCredentialStatus] = useState<Record<string, boolean>>({});
 
-  const vaultReady = Boolean(vaultStatus?.initialized && vaultStatus?.unlocked);
-  const vaultSetupMessage = !vaultStatus?.initialized
-    ? "Initialize the vault in the Vault tab before configuring providers."
-    : "Unlock the vault in the Vault tab before configuring providers.";
+  // Vault auto-initializes — no manual setup needed
+  const vaultReady = true;
+
+  // Fetch credential status on mount to show "Connected" for existing OAuth tokens
+  const refreshCredentialStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/providers/status");
+      const data = (await res.json()) as Record<string, boolean>;
+      setCredentialStatus(data);
+    } catch {
+      // Ignore credential status errors.
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshCredentialStatus();
+  }, [refreshCredentialStatus]);
 
   // Handle OAuth callback query params
   const oauthStatus = searchParams.get("oauth");
@@ -446,8 +577,10 @@ function ProvidersSection() {
     if (oauthProvider) {
       setSelectedId(oauthProvider);
       didInitializeSelection.current = true;
+      void refreshCredentialStatus();
+      void refresh();
     }
-  }, [oauthProvider]);
+  }, [oauthProvider, refresh, refreshCredentialStatus]);
 
   // On initial load, default to currently active provider instead of hard-coded OpenAI.
   useEffect(() => {
@@ -477,15 +610,24 @@ function ProvidersSection() {
   // Fetch available models
   const fetchModels = useCallback(
     (provider: LLMProvider, refresh = false) => {
+      const requestSeq = ++modelsRequestSeq.current;
       setModelsLoading(true);
       const url = `/api/providers/models?provider=${provider}${refresh ? "&refresh=1" : ""}`;
       fetch(url)
         .then((res) => res.json())
         .then((data: { models?: string[] }) => {
-          setAvailableModels(data.models ?? []);
+          if (requestSeq !== modelsRequestSeq.current) {
+            return;
+          }
+
+          setAvailableModels(Array.isArray(data.models) ? data.models : []);
           setModelsLoading(false);
         })
         .catch(() => {
+          if (requestSeq !== modelsRequestSeq.current) {
+            return;
+          }
+
           setAvailableModels([]);
           setModelsLoading(false);
         });
@@ -505,24 +647,39 @@ function ProvidersSection() {
     const meta = PROVIDER_REGISTRY.find((p) => p.id === selectedId);
     setDraft({
       enabled: selectedConfig?.enabled ?? true,
-      model: selectedConfig?.model ?? meta?.defaultModel ?? "",
+      model: selectedConfig?.model ?? "",
       apiKey: "",
       baseUrl: selectedConfig?.baseUrl ?? meta?.defaultBaseUrl ?? "",
     });
     setFeedback(null);
   }, [selectedId, selectedConfig]);
 
-  const handleSave = useCallback(async () => {
-    if (!vaultReady) {
-      setFeedback({ type: "error", message: vaultSetupMessage });
+  useEffect(() => {
+    if (customModel || stateLoading) {
       return;
     }
 
+    setDraft((prev) => {
+      if (!availableModels.length) {
+        return prev;
+      }
+
+      if (!prev.model || availableModels.includes(prev.model)) {
+        return prev;
+      }
+
+      return { ...prev, model: "" };
+    });
+  }, [availableModels, customModel, stateLoading]);
+
+  const handleSave = useCallback(async () => {
     setSaving(true);
     setFeedback(null);
     try {
+      // The currently selected provider from the dropdown IS the active one.
+      // Always enable it — the API will disable all others automatically.
       await saveProvider(selectedId, {
-        enabled: draft.enabled,
+        enabled: true,
         model: draft.model,
         apiKey: draft.apiKey || undefined,
         baseUrl: draft.baseUrl || undefined,
@@ -537,7 +694,31 @@ function ProvidersSection() {
     } finally {
       setSaving(false);
     }
-  }, [selectedId, draft, saveProvider, vaultReady, vaultSetupMessage]);
+  }, [selectedId, draft, saveProvider]);
+
+  // Disconnect handler — removes all credentials from vault and refreshes status
+  const handleDisconnect = useCallback(
+    async (provider: LLMProvider) => {
+      const res = await fetch("/api/providers/disconnect", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider }),
+      });
+      if (!res.ok) {
+        const data = (await res.json()) as { error?: string };
+        throw new Error(data.error ?? "Failed to disconnect");
+      }
+      // Refresh credential status
+      await refreshCredentialStatus();
+      await refresh();
+    },
+    [refresh, refreshCredentialStatus],
+  );
+
+  const handleConnected = useCallback(async () => {
+    await refreshCredentialStatus();
+    await refresh();
+  }, [refresh, refreshCredentialStatus]);
 
   const showBaseUrl = selectedMeta?.openaiCompatible || selectedMeta?.category === "local";
   const showApiKey = selectedMeta?.requiresApiKey !== false;
@@ -545,14 +726,7 @@ function ProvidersSection() {
 
   return (
     <div className="space-y-6">
-      {!vaultReady && (
-        <Alert variant="destructive">
-          <ShieldOff className="h-4 w-4" />
-          <AlertDescription className="text-sm">
-            {vaultSetupMessage}
-          </AlertDescription>
-        </Alert>
-      )}
+      {/* Vault auto-initializes — no alert needed */}
 
       {/* OAuth success/error banner */}
       {oauthStatus === "success" && oauthProvider && (
@@ -660,25 +834,6 @@ function ProvidersSection() {
 
           <Separator />
 
-          {/* Enable toggle */}
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium">Active Provider</p>
-              <p className="text-xs text-muted-foreground">
-                Exactly one provider is active at a time. Enabling this provider disables all others on save.
-              </p>
-            </div>
-            <Switch
-              checked={draft.enabled}
-              onCheckedChange={(checked) =>
-                setDraft((prev) => ({ ...prev, enabled: checked }))
-              }
-              disabled={!vaultReady}
-            />
-          </div>
-
-          <Separator />
-
           {/* Model */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
@@ -721,13 +876,7 @@ function ProvidersSection() {
               <Select
                 value={draft.model || undefined}
                 disabled={!vaultReady}
-                onValueChange={(v) => {
-                  if (v === "__custom__") {
-                    setCustomModel(true);
-                  } else {
-                    setDraft((prev) => ({ ...prev, model: v }));
-                  }
-                }}
+                onValueChange={(v) => setDraft((prev) => ({ ...prev, model: v }))}
               >
                 <SelectTrigger id="provider-model" className="w-full">
                   {modelsLoading ? (
@@ -745,15 +894,6 @@ function ProvidersSection() {
                       {m}
                     </SelectItem>
                   ))}
-                  {/* Always include current model if not in list */}
-                  {draft.model && !availableModels.includes(draft.model) && (
-                    <SelectItem value={draft.model}>
-                      {draft.model}
-                    </SelectItem>
-                  )}
-                  <SelectItem value="__custom__">
-                    <span className="text-muted-foreground">Enter custom model ID...</span>
-                  </SelectItem>
                 </SelectContent>
               </Select>
             )}
@@ -799,14 +939,9 @@ function ProvidersSection() {
                         selectedMeta?.apiKeyPlaceholder || "Enter API key"
                       }
                     />
-                    {selectedConfig?.apiKeyEnvVar && (
-                      <p className="text-[10px] text-muted-foreground">
-                        Also reads from env:{" "}
-                        <code className="font-mono">
-                          {selectedConfig.apiKeyEnvVar}
-                        </code>
-                      </p>
-                    )}
+                    <p className="text-[10px] text-muted-foreground">
+                      Stored securely in the encrypted vault.
+                    </p>
                   </div>
                 )}
 
@@ -822,22 +957,27 @@ function ProvidersSection() {
                     )}
                     {selectedMeta?.oauthMethod === "localhost" && (
                       <OpenAIOAuthSection
-                        disabled={!vaultReady}
-                        disabledReason={vaultSetupMessage}
+                        disabled={false}
+                        initialConnected={!!credentialStatus[selectedId]}
+                        onConnected={handleConnected}
+                        onDisconnect={() => handleDisconnect(selectedId)}
                       />
                     )}
                     {selectedMeta?.oauthMethod === "code-paste" && (
                       <AnthropicOAuthSection
-                        disabled={!vaultReady}
-                        disabledReason={vaultSetupMessage}
+                        disabled={false}
+                        initialConnected={!!credentialStatus[selectedId]}
+                        onConnected={handleConnected}
+                        onDisconnect={() => handleDisconnect(selectedId)}
                       />
                     )}
                     {(selectedMeta?.oauthMethod === "redirect" || selectedMeta?.oauthMethod === "openrouter") && (
                       <RedirectOAuthSection
                         provider={selectedId}
                         label={selectedMeta.label}
-                        disabled={!vaultReady}
-                        disabledReason={vaultSetupMessage}
+                        disabled={false}
+                        initialConnected={!!credentialStatus[selectedId]}
+                        onDisconnect={() => handleDisconnect(selectedId)}
                       />
                     )}
                   </>
@@ -891,8 +1031,7 @@ function ProvidersSection() {
             <Button
               size="sm"
               onClick={() => void handleSave()}
-              disabled={saving || !vaultReady}
-              title={!vaultReady ? vaultSetupMessage : undefined}
+              disabled={saving}
             >
               {saving ? (
                 <>
@@ -929,158 +1068,41 @@ function ProvidersSection() {
 // ---------------------------------------------------------------------------
 
 function VaultSection() {
-  const { vaultStatus, vaultAction } = useSteward();
-  const [passphrase, setPassphrase] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [feedback, setFeedback] = useState<{ type: "ok" | "error"; message: string } | null>(null);
+  const { vaultStatus } = useSteward();
 
-  const handleVaultAction = useCallback(
-    async (action: "init" | "unlock" | "lock") => {
-      setBusy(true);
-      setFeedback(null);
-      try {
-        await vaultAction(action, action === "lock" ? undefined : passphrase);
-        setPassphrase("");
-        setFeedback({
-          type: "ok",
-          message:
-            action === "init"
-              ? "Vault initialized successfully."
-              : action === "unlock"
-                ? "Vault unlocked."
-                : "Vault locked.",
-        });
-      } catch (err) {
-        setFeedback({
-          type: "error",
-          message: err instanceof Error ? err.message : "Vault action failed.",
-        });
-      } finally {
-        setBusy(false);
-      }
-    },
-    [vaultAction, passphrase],
-  );
-
-  const initialized = vaultStatus?.initialized ?? false;
-  const unlocked = vaultStatus?.unlocked ?? false;
   const keyCount = vaultStatus?.keyCount ?? 0;
-
-  let stateIcon = <ShieldOff className="h-5 w-5 text-muted-foreground" />;
-  let stateLabel = "Not Initialized";
-  let stateBadgeVariant: "destructive" | "default" | "secondary" = "destructive";
-
-  if (initialized && unlocked) {
-    stateIcon = <ShieldCheck className="h-5 w-5 text-emerald-500" />;
-    stateLabel = "Unlocked";
-    stateBadgeVariant = "default";
-  } else if (initialized && !unlocked) {
-    stateIcon = <Shield className="h-5 w-5 text-amber-500" />;
-    stateLabel = "Locked";
-    stateBadgeVariant = "secondary";
-  }
+  const ready = vaultStatus?.unlocked ?? false;
+  const protection = (vaultStatus as Record<string, unknown> | null)?.protection as string | undefined;
 
   return (
     <div className="space-y-4">
       <Card className="bg-card/60">
         <CardHeader>
           <CardTitle className="text-base">Vault Status</CardTitle>
-          <CardDescription>Secure secret storage for API keys and credentials.</CardDescription>
+          <CardDescription>
+            Encrypted secret storage for API keys and credentials.
+            Keys are protected automatically using {protection ?? "OS-native encryption"}.
+          </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent>
           <div className="flex items-center gap-3 rounded-lg border bg-background/50 px-4 py-3">
-            {stateIcon}
+            {ready ? (
+              <ShieldCheck className="h-5 w-5 text-emerald-500" />
+            ) : (
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            )}
             <div className="flex-1">
               <div className="flex items-center gap-2">
                 <p className="text-sm font-medium">State</p>
-                <Badge variant={stateBadgeVariant} className="text-[10px]">
-                  {stateLabel}
+                <Badge variant={ready ? "default" : "secondary"} className="text-[10px]">
+                  {ready ? "Active" : "Initializing..."}
                 </Badge>
               </div>
               <p className="mt-0.5 text-xs text-muted-foreground">
-                {initialized
-                  ? `${keyCount} secret${keyCount !== 1 ? "s" : ""} stored`
-                  : "Initialize the vault to start storing secrets securely."}
+                {keyCount} secret{keyCount !== 1 ? "s" : ""} stored
               </p>
             </div>
           </div>
-
-          {!initialized && (
-            <div className="space-y-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="vault-passphrase" className="text-xs text-muted-foreground">
-                  Passphrase
-                </Label>
-                <Input
-                  id="vault-passphrase"
-                  type="password"
-                  value={passphrase}
-                  onChange={(e) => setPassphrase(e.target.value)}
-                  placeholder="Enter a strong passphrase"
-                />
-              </div>
-              <Button
-                onClick={() => void handleVaultAction("init")}
-                disabled={busy || !passphrase}
-              >
-                {busy ? (
-                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                ) : (
-                  <Key className="mr-1.5 h-4 w-4" />
-                )}
-                Initialize Vault
-              </Button>
-            </div>
-          )}
-
-          {initialized && !unlocked && (
-            <div className="space-y-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="vault-unlock" className="text-xs text-muted-foreground">
-                  Passphrase
-                </Label>
-                <Input
-                  id="vault-unlock"
-                  type="password"
-                  value={passphrase}
-                  onChange={(e) => setPassphrase(e.target.value)}
-                  placeholder="Enter vault passphrase"
-                />
-              </div>
-              <Button
-                onClick={() => void handleVaultAction("unlock")}
-                disabled={busy || !passphrase}
-              >
-                {busy ? (
-                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                ) : (
-                  <Unlock className="mr-1.5 h-4 w-4" />
-                )}
-                Unlock Vault
-              </Button>
-            </div>
-          )}
-
-          {initialized && unlocked && (
-            <Button
-              variant="outline"
-              onClick={() => void handleVaultAction("lock")}
-              disabled={busy}
-            >
-              {busy ? (
-                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-              ) : (
-                <Lock className="mr-1.5 h-4 w-4" />
-              )}
-              Lock Vault
-            </Button>
-          )}
-
-          {feedback && (
-            <Alert variant={feedback.type === "error" ? "destructive" : "default"}>
-              <AlertDescription className="text-xs">{feedback.message}</AlertDescription>
-            </Alert>
-          )}
         </CardContent>
       </Card>
     </div>
@@ -1092,9 +1114,15 @@ function VaultSection() {
 // ---------------------------------------------------------------------------
 
 function GeneralSection() {
-  const { agentRuns, runAgentCycle } = useSteward();
+  const { agentRuns, runAgentCycle, runtimeSettings, saveRuntimeSettings } = useSteward();
   const [running, setRunning] = useState(false);
+  const [savingRuntime, setSavingRuntime] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "ok" | "error"; message: string } | null>(null);
+  const [runtimeDraft, setRuntimeDraft] = useState(runtimeSettings);
+
+  useEffect(() => {
+    setRuntimeDraft(runtimeSettings);
+  }, [runtimeSettings]);
 
   const lastRun = useMemo(() => {
     if (agentRuns.length === 0) return null;
@@ -1125,6 +1153,23 @@ function GeneralSection() {
       setRunning(false);
     }
   }, [runAgentCycle]);
+
+  const setDraftField = <K extends keyof typeof runtimeDraft>(key: K, value: number) => {
+    setRuntimeDraft((current) => ({ ...current, [key]: Number.isFinite(value) ? Math.max(1, Math.floor(value)) : current[key] }));
+  };
+
+  const handleSaveRuntime = useCallback(async () => {
+    setSavingRuntime(true);
+    setFeedback(null);
+    try {
+      await saveRuntimeSettings(runtimeDraft);
+      setFeedback({ type: "ok", message: "Runtime settings saved." });
+    } catch (err) {
+      setFeedback({ type: "error", message: err instanceof Error ? err.message : "Failed to save runtime settings." });
+    } finally {
+      setSavingRuntime(false);
+    }
+  }, [runtimeDraft, saveRuntimeSettings]);
 
   return (
     <div className="space-y-4">
@@ -1183,7 +1228,7 @@ function GeneralSection() {
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <RefreshCw className="h-3.5 w-3.5" />
             <span>
-              Configured loop interval: <strong className="text-foreground">120s</strong> (default)
+              Configured loop interval: <strong className="text-foreground">{Math.round(runtimeSettings.agentIntervalMs / 1000)}s</strong>
             </span>
           </div>
 
@@ -1197,19 +1242,46 @@ function GeneralSection() {
 
       <Card className="bg-card/60">
         <CardHeader>
-          <CardTitle className="text-base">Additional Settings</CardTitle>
+          <CardTitle className="text-base">Discovery Runtime Tuning</CardTitle>
           <CardDescription>
-            Future configuration options will appear here.
+            Persisted in SQLite and applied by the discovery loop.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="space-y-2 rounded-lg border border-dashed bg-muted/30 px-4 py-6 text-center">
-            <Settings2 className="mx-auto h-8 w-8 text-muted-foreground/50" />
-            <p className="text-sm text-muted-foreground">
-              Notification channels, autonomy tier defaults, scheduled scan windows, and more
-              settings are coming soon.
-            </p>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Agent interval (ms)</Label>
+              <Input type="number" value={runtimeDraft.agentIntervalMs} onChange={(e) => setDraftField("agentIntervalMs", Number(e.target.value))} />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Deep scan interval (ms)</Label>
+              <Input type="number" value={runtimeDraft.deepScanIntervalMs} onChange={(e) => setDraftField("deepScanIntervalMs", Number(e.target.value))} />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Incremental active targets</Label>
+              <Input type="number" value={runtimeDraft.incrementalActiveTargets} onChange={(e) => setDraftField("incrementalActiveTargets", Number(e.target.value))} />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Deep active targets</Label>
+              <Input type="number" value={runtimeDraft.deepActiveTargets} onChange={(e) => setDraftField("deepActiveTargets", Number(e.target.value))} />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Incremental port-scan hosts</Label>
+              <Input type="number" value={runtimeDraft.incrementalPortScanHosts} onChange={(e) => setDraftField("incrementalPortScanHosts", Number(e.target.value))} />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Deep port-scan hosts</Label>
+              <Input type="number" value={runtimeDraft.deepPortScanHosts} onChange={(e) => setDraftField("deepPortScanHosts", Number(e.target.value))} />
+            </div>
+            <div className="space-y-1.5 md:col-span-2">
+              <Label className="text-xs text-muted-foreground">LLM discovery advice batch size</Label>
+              <Input type="number" value={runtimeDraft.llmDiscoveryLimit} onChange={(e) => setDraftField("llmDiscoveryLimit", Number(e.target.value))} />
+            </div>
           </div>
+          <Button onClick={() => void handleSaveRuntime()} disabled={savingRuntime}>
+            {savingRuntime ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Settings2 className="mr-1.5 h-4 w-4" />}
+            {savingRuntime ? "Saving..." : "Save Discovery Settings"}
+          </Button>
         </CardContent>
       </Card>
     </div>
@@ -1237,7 +1309,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="flex h-full min-h-0 flex-col gap-4">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
         <p className="mt-1 text-sm text-muted-foreground">
@@ -1245,22 +1317,22 @@ export default function SettingsPage() {
         </p>
       </div>
 
-      <Tabs defaultValue="providers" className="space-y-4">
+      <Tabs defaultValue="providers" className="flex min-h-0 flex-1 flex-col">
         <TabsList>
           <TabsTrigger value="providers">Providers</TabsTrigger>
           <TabsTrigger value="vault">Vault</TabsTrigger>
           <TabsTrigger value="general">General</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="providers">
+        <TabsContent value="providers" className="mt-4 min-h-0 flex-1 overflow-auto">
           <ProvidersSection />
         </TabsContent>
 
-        <TabsContent value="vault">
+        <TabsContent value="vault" className="mt-4 min-h-0 flex-1 overflow-auto">
           <VaultSection />
         </TabsContent>
 
-        <TabsContent value="general">
+        <TabsContent value="general" className="mt-4 min-h-0 flex-1 overflow-auto">
           <GeneralSection />
         </TabsContent>
       </Tabs>

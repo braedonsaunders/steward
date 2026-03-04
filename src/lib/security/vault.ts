@@ -1,17 +1,22 @@
-import { createCipheriv, createDecipheriv, randomBytes, scrypt } from "node:crypto";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+/**
+ * Vault — encrypted secret storage using OS-native key protection.
+ *
+ * Encryption key is a random 32-byte key protected by:
+ * - Windows: DPAPI (tied to Windows user login)
+ * - macOS: Keychain
+ * - Fallback: machine-derived key
+ *
+ * Secrets are encrypted with AES-256-GCM and stored in .steward/vault.enc.json.
+ * The protected encryption key is stored in .steward/vault.key.
+ *
+ * No passphrase is ever required — the vault auto-initializes and auto-unlocks.
+ */
+
+import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { mkdir, readFile, writeFile, unlink, access } from "node:fs/promises";
 import path from "node:path";
 import { stateStore } from "@/lib/state/store";
-
-const scryptAsync = promisify(scrypt);
-const execFileAsync = promisify(execFile);
-
-interface VaultMeta {
-  salt: string;
-  initializedAt: string;
-}
+import { protectKey, unprotectKey } from "@/lib/security/os-keystore";
 
 interface VaultPayload {
   version: number;
@@ -26,38 +31,30 @@ interface EncryptedEnvelope {
 }
 
 const vaultDir = stateStore.getDataDir();
-const vaultMetaFile = path.join(vaultDir, "vault.meta.json");
+const vaultKeyFile = path.join(vaultDir, "vault.key");
 const vaultDataFile = path.join(vaultDir, "vault.enc.json");
-const keychainService = process.env.STEWARD_KEYCHAIN_SERVICE ?? "com.steward.vault.passphrase";
-const keychainAccount =
-  process.env.STEWARD_KEYCHAIN_ACCOUNT ??
-  `steward:${path.resolve(vaultDir)}`;
+
+// Legacy files from the old passphrase-based vault
+const legacyMetaFile = path.join(vaultDir, "vault.meta.json");
 
 let unlockedKey: Buffer | undefined;
 let cachedPayload: VaultPayload | undefined;
-let autoUnlockSuppressed = false;
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
 
 const ensureVaultDir = async () => {
   await mkdir(vaultDir, { recursive: true });
 };
 
-const deriveKey = async (passphrase: string, salt: Buffer): Promise<Buffer> => {
-  const key = (await scryptAsync(passphrase, salt, 32)) as Buffer;
-  return key;
-};
-
-const readMeta = async (): Promise<VaultMeta | undefined> => {
-  await ensureVaultDir();
+const fileExists = async (filePath: string): Promise<boolean> => {
   try {
-    const raw = await readFile(vaultMetaFile, "utf8");
-    return JSON.parse(raw) as VaultMeta;
+    await access(filePath);
+    return true;
   } catch {
-    return undefined;
+    return false;
   }
-};
-
-const writeMeta = async (meta: VaultMeta): Promise<void> => {
-  await writeFile(vaultMetaFile, JSON.stringify(meta, null, 2), "utf8");
 };
 
 const encryptPayload = (payload: VaultPayload, key: Buffer): EncryptedEnvelope => {
@@ -111,141 +108,90 @@ const writePayload = async (payload: VaultPayload, key: Buffer): Promise<void> =
   await writeFile(vaultDataFile, JSON.stringify(envelope, null, 2), "utf8");
 };
 
-const canUseSystemKeychain = (): boolean => process.platform === "darwin";
-
-const savePassphraseToKeychain = async (passphrase: string): Promise<void> => {
-  if (!canUseSystemKeychain()) return;
-
-  try {
-    await execFileAsync("security", [
-      "add-generic-password",
-      "-U",
-      "-a",
-      keychainAccount,
-      "-s",
-      keychainService,
-      "-w",
-      passphrase,
-    ]);
-  } catch (error) {
-    console.warn("Failed to persist vault passphrase to macOS keychain", error);
-  }
+/**
+ * Remove legacy passphrase-based vault files.
+ * Safe to call even if they don't exist.
+ */
+const removeLegacyVault = async (): Promise<void> => {
+  await unlink(legacyMetaFile).catch(() => {});
+  // Also remove old encrypted data since it's keyed to the old passphrase
+  await unlink(vaultDataFile).catch(() => {});
 };
 
-const readPassphraseFromKeychain = async (): Promise<string | undefined> => {
-  if (!canUseSystemKeychain()) return undefined;
-
-  try {
-    const { stdout } = await execFileAsync("security", [
-      "find-generic-password",
-      "-a",
-      keychainAccount,
-      "-s",
-      keychainService,
-      "-w",
-    ]);
-    const passphrase = stdout.trim();
-    return passphrase || undefined;
-  } catch {
-    return undefined;
-  }
-};
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
 
 export const vault = {
   async isInitialized(): Promise<boolean> {
-    const meta = await readMeta();
-    return Boolean(meta);
-  },
-
-  async initialize(passphrase: string): Promise<void> {
-    const existing = await readMeta();
-    if (existing) {
-      return;
-    }
-
-    const salt = randomBytes(16);
-    await writeMeta({
-      salt: salt.toString("base64"),
-      initializedAt: new Date().toISOString(),
-    });
-
-    const key = await deriveKey(passphrase, salt);
-    await writePayload(defaultPayload(), key);
-    unlockedKey = key;
-    cachedPayload = defaultPayload();
-    autoUnlockSuppressed = false;
-    await savePassphraseToKeychain(passphrase);
-  },
-
-  async unlock(passphrase: string): Promise<boolean> {
-    const meta = await readMeta();
-    if (!meta) {
-      return false;
-    }
-
-    const key = await deriveKey(passphrase, Buffer.from(meta.salt, "base64"));
-    const envelope = await readEnvelope();
-    if (!envelope) {
-      return false;
-    }
-
-    try {
-      const payload = decryptPayload(envelope, key);
-      unlockedKey = key;
-      cachedPayload = payload;
-      autoUnlockSuppressed = false;
-      await savePassphraseToKeychain(passphrase);
-      return true;
-    } catch {
-      return false;
-    }
-  },
-
-  lock(): void {
-    unlockedKey = undefined;
-    cachedPayload = undefined;
-    autoUnlockSuppressed = true;
+    return fileExists(vaultKeyFile);
   },
 
   isUnlocked(): boolean {
     return Boolean(unlockedKey && cachedPayload);
   },
 
+  /**
+   * Auto-initialize and auto-unlock the vault. No user interaction needed.
+   *
+   * 1. If legacy vault exists, remove it and start fresh
+   * 2. If vault.key doesn't exist, generate a new random key and protect it
+   * 3. Read the protected key, unprotect it, decrypt the payload
+   */
   async ensureUnlocked(): Promise<boolean> {
-    if (autoUnlockSuppressed) {
-      return false;
-    }
-
     if (this.isUnlocked()) {
       return true;
     }
 
-    const envPassphrase = process.env.STEWARD_MASTER_PASSPHRASE;
-    const initialized = await this.isInitialized();
-    if (!initialized) {
-      if (!envPassphrase) {
-        return false;
+    try {
+      await ensureVaultDir();
+
+      // Migrate from legacy passphrase vault
+      const hasLegacy = await fileExists(legacyMetaFile);
+      const hasNewKey = await fileExists(vaultKeyFile);
+
+      if (hasLegacy && !hasNewKey) {
+        await removeLegacyVault();
       }
-      await this.initialize(envPassphrase);
+
+      // Initialize if needed
+      if (!await fileExists(vaultKeyFile)) {
+        const rawKey = randomBytes(32);
+        const protectedBlob = await protectKey(rawKey);
+        await writeFile(vaultKeyFile, protectedBlob);
+        await writePayload(defaultPayload(), rawKey);
+        unlockedKey = rawKey;
+        cachedPayload = defaultPayload();
+        return true;
+      }
+
+      // Unlock — read protected key, unprotect, decrypt payload
+      const protectedBlob = await readFile(vaultKeyFile);
+      const rawKey = await unprotectKey(protectedBlob);
+      unlockedKey = rawKey;
+
+      const envelope = await readEnvelope();
+      if (envelope) {
+        cachedPayload = decryptPayload(envelope, rawKey);
+      } else {
+        // Key file exists but no data file — create empty payload
+        cachedPayload = defaultPayload();
+        await writePayload(cachedPayload, rawKey);
+      }
+
       return true;
-    }
-
-    if (envPassphrase) {
-      return this.unlock(envPassphrase);
-    }
-
-    const keychainPassphrase = await readPassphraseFromKeychain();
-    if (!keychainPassphrase) {
+    } catch (error) {
+      console.error("Vault auto-unlock failed:", error);
+      unlockedKey = undefined;
+      cachedPayload = undefined;
       return false;
     }
-
-    return this.unlock(keychainPassphrase);
   },
 
   async setSecret(key: string, value: string): Promise<void> {
     const unlocked = await this.ensureUnlocked();
     if (!unlocked || !unlockedKey) {
-      throw new Error("Vault is locked");
+      throw new Error("Vault is not available");
     }
 
     const payload = cachedPayload ?? defaultPayload();
@@ -262,14 +208,13 @@ export const vault = {
       return undefined;
     }
 
-    const payload = cachedPayload;
-    return payload?.secrets[key];
+    return cachedPayload?.secrets[key];
   },
 
   async deleteSecret(key: string): Promise<void> {
     const unlocked = await this.ensureUnlocked();
     if (!unlocked || !unlockedKey) {
-      throw new Error("Vault is locked");
+      throw new Error("Vault is not available");
     }
 
     const payload = cachedPayload ?? defaultPayload();

@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { LLMProvider } from "@/lib/state/types";
 import { getProviderConfig } from "@/lib/llm/config";
 import { getProviderMeta } from "@/lib/llm/registry";
+import { vault } from "@/lib/security/vault";
 
 interface OAuthSettings {
   provider: LLMProvider;
@@ -44,19 +45,17 @@ export const getProviderOAuthSettings = async (
     );
   }
 
-  const clientId = config.oauthClientIdEnvVar
-    ? process.env[config.oauthClientIdEnvVar]
-    : undefined;
+  // Resolve OAuth client ID from vault
+  const clientId = await vault.getSecret(`llm.oauth.${provider}.client_id`);
 
   if (!clientId) {
     throw new Error(
-      `Missing OAuth client id for ${provider}. Set ${config.oauthClientIdEnvVar ?? "the provider OAuth client id env var"}.`,
+      `Missing OAuth client ID for ${provider}. Add it in Settings > Providers.`,
     );
   }
 
-  const clientSecret = config.oauthClientSecretEnvVar
-    ? process.env[config.oauthClientSecretEnvVar]
-    : undefined;
+  // Resolve OAuth client secret from vault (optional for some flows)
+  const clientSecret = await vault.getSecret(`llm.oauth.${provider}.client_secret`) ?? undefined;
 
   return {
     provider,
@@ -102,6 +101,7 @@ interface TokenResponse {
   expires_in?: number;
   token_type?: string;
   scope?: string;
+  id_token?: string;
 }
 
 export const exchangeOAuthCode = async (params: {
@@ -254,12 +254,109 @@ export const refreshOpenAIToken = async (
   return (await response.json()) as TokenResponse;
 };
 
+/**
+ * Exchange an OpenAI id_token for a real OpenAI Platform API key.
+ * Uses the RFC 8693 token-exchange grant. This produces a key that works
+ * with the standard api.openai.com endpoints (Chat Completions, Responses, etc.).
+ *
+ * Requires the user to have an OpenAI Platform organization/project.
+ */
+export const exchangeOpenAITokenForApiKey = async (
+  idToken: string,
+): Promise<string> => {
+  const body = new URLSearchParams({
+    grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+    requested_token: "openai-api-key",
+    subject_token: idToken,
+    subject_token_type: "urn:ietf:params:oauth:token-type:id_token",
+    client_id: OPENAI_CLIENT_ID,
+  });
+
+  const response = await fetch(OPENAI_TOKEN_URL, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body,
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`OpenAI token→API-key exchange failed (${response.status}): ${text}`);
+  }
+
+  const data = (await response.json()) as { access_token: string };
+  return data.access_token;
+};
+
+/**
+ * Parse a JWT payload without verifying the signature.
+ * Used to extract claims like chatgpt_account_id from OAuth tokens.
+ */
+export const parseJwtPayload = (jwt: string): Record<string, unknown> => {
+  const parts = jwt.split(".");
+  if (parts.length !== 3) throw new Error("Invalid JWT format");
+  // Handle both standard base64 and base64url encoding
+  const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+  const payload = Buffer.from(b64, "base64").toString("utf-8");
+  return JSON.parse(payload);
+};
+
+/**
+ * Extract the ChatGPT account ID from an OpenAI OAuth access token JWT.
+ * The Codex CLI uses this as the `ChatGPT-Account-Id` header when routing
+ * through the ChatGPT backend API.
+ */
+export const extractChatGPTAccountId = (accessToken: string): string | undefined => {
+  try {
+    const payload = parseJwtPayload(accessToken);
+    const directId = payload.chatgpt_account_id;
+    if (typeof directId === "string" && directId.length > 0) {
+      return directId;
+    }
+
+    const authClaims = payload["https://api.openai.com/auth"] as
+      | Record<string, unknown>
+      | undefined;
+    const nestedId = authClaims?.chatgpt_account_id;
+    if (typeof nestedId === "string" && nestedId.length > 0) {
+      return nestedId;
+    }
+
+    const orgs = payload.organizations;
+    if (Array.isArray(orgs)) {
+      const firstOrg = orgs[0] as Record<string, unknown> | undefined;
+      const orgId = firstOrg?.id;
+      if (typeof orgId === "string" && orgId.length > 0) {
+        return orgId;
+      }
+    }
+
+    return undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+export const extractOpenAIAccountIdFromTokens = (tokens: {
+  access_token?: string;
+  id_token?: string;
+}): string | undefined => {
+  if (tokens.id_token) {
+    const fromIdToken = extractChatGPTAccountId(tokens.id_token);
+    if (fromIdToken) return fromIdToken;
+  }
+  if (tokens.access_token) {
+    const fromAccessToken = extractChatGPTAccountId(tokens.access_token);
+    if (fromAccessToken) return fromAccessToken;
+  }
+  return undefined;
+};
+
 // ---------------------------------------------------------------------------
 // Anthropic OAuth (Claude CLI public client – code-paste flow)
 // ---------------------------------------------------------------------------
 
 const ANTHROPIC_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-const ANTHROPIC_AUTH_URL = "https://console.anthropic.com/oauth/authorize";
+const ANTHROPIC_AUTH_URL = "https://claude.ai/oauth/authorize";
 const ANTHROPIC_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token";
 const ANTHROPIC_REDIRECT_URI = "https://console.anthropic.com/oauth/code/callback";
 const ANTHROPIC_SCOPES = "org:create_api_key user:profile user:inference";
@@ -310,6 +407,27 @@ export const exchangeAnthropicCode = async (
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`Anthropic token exchange failed (${response.status}): ${text}`);
+  }
+
+  return (await response.json()) as AnthropicTokenResponse;
+};
+
+export const refreshAnthropicToken = async (
+  refreshToken: string,
+): Promise<AnthropicTokenResponse> => {
+  const response = await fetch(ANTHROPIC_TOKEN_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      client_id: ANTHROPIC_CLIENT_ID,
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Anthropic token refresh failed (${response.status}): ${text}`);
   }
 
   return (await response.json()) as AnthropicTokenResponse;

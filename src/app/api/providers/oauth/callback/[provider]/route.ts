@@ -7,6 +7,7 @@ import {
   providerSupportsOAuth,
 } from "@/lib/auth/oauth";
 import { getProviderConfig } from "@/lib/llm/config";
+import { getProviderMeta } from "@/lib/llm/registry";
 import { ensureVaultReadyForProviders } from "@/lib/security/vault-gate";
 import { vault } from "@/lib/security/vault";
 import { stateStore } from "@/lib/state/store";
@@ -97,7 +98,7 @@ export async function GET(
         context: { provider },
       });
     } else {
-      // Standard OAuth token exchange (Google, Anthropic)
+      // Standard OAuth token exchange (Google)
       const settings = await getProviderOAuthSettings(provider);
       const tokens = await exchangeOAuthCode({
         settings,
@@ -127,6 +128,19 @@ export async function GET(
         },
       });
     }
+
+    // Persist provider config so resolveCredential can find the token
+    const meta = getProviderMeta(provider);
+    const existingConfig = await getProviderConfig(provider);
+    await stateStore.setProviderConfig({
+      provider,
+      enabled: true,
+      model: existingConfig?.model ?? meta?.defaultModel ?? "",
+      ...(existingConfig?.baseUrl && { baseUrl: existingConfig.baseUrl }),
+      oauthTokenSecret: isOpenRouterOAuth(provider)
+        ? undefined
+        : (existingConfig?.oauthTokenSecret ?? `llm.oauth.${provider}.access_token`),
+    });
 
     return NextResponse.redirect(
       new URL(`/settings?oauth=success&provider=${provider}`, request.url),

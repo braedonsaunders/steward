@@ -148,6 +148,62 @@ docker build -t steward .
 docker run --rm -p 3000:3000 --env-file .env.local -v $(pwd)/.steward:/app/.steward steward
 ```
 
+## Production Launch Options
+
+### Script-based local launch
+
+- PowerShell (Windows):
+
+```powershell
+./scripts/run-prod.ps1
+```
+
+- Bash (Linux/macOS/WSL):
+
+```bash
+chmod +x ./scripts/run-prod.sh
+./scripts/run-prod.sh
+```
+
+Both scripts build the production bundle and start the app on port `3010` by default.
+
+Optional custom port:
+
+- PowerShell: `./scripts/run-prod.ps1 -Port 4000`
+- Bash: `./scripts/run-prod.sh 4000`
+
+Stop helpers:
+
+- PowerShell: `./scripts/stop-prod.ps1`
+- Bash: `./scripts/stop-prod.sh`
+
+### PM2 (background process manager)
+
+Install PM2 and run Steward as a persistent process:
+
+```bash
+npm i -g pm2
+npm ci
+npm run build
+pm2 start ecosystem.config.cjs
+pm2 save
+```
+
+Useful PM2 commands:
+
+- `pm2 status`
+- `pm2 logs steward`
+- `pm2 restart steward`
+- `pm2 stop steward`
+
+### Docker Compose
+
+```bash
+docker compose up -d --build
+```
+
+App URL: [http://localhost:3010](http://localhost:3010)
+
 ## Current Scope Notes
 
 This is a full working foundation and includes real orchestration paths, encrypted secret handling, and live provider routing.

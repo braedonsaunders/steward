@@ -1,6 +1,6 @@
 # Steward Spec Checklist (Compared to `AGENTS.md`)
 
-Last audited: 2026-03-03
+Last audited: 2026-03-04
 
 Legend:
 - `[x]` Implemented
@@ -72,7 +72,7 @@ Legend:
 - [x] Context-aware prompt generated from live inventory/incidents
 - [x] Chat UI exists in dashboard
 - [ ] Deep graph query execution from natural language
-- [ ] Task delegation with executable plan + approval flow
+- [x] Task delegation with executable plan + approval flow
 - [ ] Automatic navigation linking chat responses to device/incident detail pages
 
 ## 7) Incident Response Pipeline
@@ -89,12 +89,12 @@ Legend:
 ## 8) Autonomy Model and Policy Engine
 
 - [x] Device autonomy tier field exists (1/2/3)
-- [ ] Tiered behavior enforcement in action runtime
-- [ ] Central policy engine (`ALLOW_AUTO` / `REQUIRE_APPROVAL` / `DENY`)
-- [ ] Action classes (A/B/C/D) and risk scoring
-- [ ] Maintenance windows and freeze calendars
-- [ ] Preflight/postflight gates + rollback policy
-- [ ] Action quarantine/escalation on repeated failure
+- [x] Tiered behavior enforcement in action runtime
+- [x] Central policy engine (`ALLOW_AUTO` / `REQUIRE_APPROVAL` / `DENY`)
+- [x] Action classes (A/B/C/D) and risk scoring
+- [x] Maintenance windows and freeze calendars
+- [x] Preflight/postflight gates + rollback policy
+- [x] Action quarantine/escalation on repeated failure
 
 ## 9) Security Posture (Managed Network)
 
@@ -120,10 +120,10 @@ Legend:
 ## 11) Notifications and Reporting
 
 - [x] In-app incident/recommendation feed in dashboard
-- [ ] Daily digest generation and delivery
+- [x] Daily digest generation and delivery
 - [ ] Weekly executive report generation
 - [ ] Notification channel integrations (email/Slack/Teams/SMS/push)
-- [ ] Approval inbox with TTL/escalation rules
+- [x] Approval inbox with TTL/escalation rules
 
 ## 12) Deployment Model
 
@@ -144,8 +144,8 @@ Legend:
 - [x] Chat endpoint
 - [x] Vault endpoints
 - [x] Provider config + OAuth start/callback endpoints
-- [ ] Policy resource endpoints
-- [ ] Playbook resource endpoints
+- [x] Policy resource endpoints
+- [x] Playbook resource endpoints
 - [ ] Audit export endpoints
 - [ ] Streaming event API for live updates
 
@@ -157,11 +157,11 @@ Legend:
 - [x] Chat panel
 - [x] Provider management panel
 - [x] Vault controls panel
-- [ ] Topology map/dependency visualization
-- [ ] Dedicated device detail pages
-- [ ] Incident deep-dive page with diagnosis/remediation evidence
-- [ ] Policy management UI
-- [ ] Reporting UI (daily/weekly summaries)
+- [x] Topology map/dependency visualization
+- [x] Dedicated device detail pages
+- [x] Incident deep-dive page with diagnosis/remediation evidence
+- [x] Policy management UI
+- [x] Reporting UI (daily/weekly summaries)
 
 ## 15) Extensibility
 
@@ -192,20 +192,20 @@ Legend:
 
 - [ ] Install-to-first-value in < 30 minutes (not benchmarked yet)
 - [ ] Stable operation at >= 50 mixed devices (not validated)
-- [ ] At least 5 remediation playbooks with rollback (not implemented)
+- [x] At least 5 remediation playbooks with rollback
 - [x] Action history is logged and attributable
 - [ ] Low critical false-positive rate validated (not measured)
-- [ ] Daily digest useful for non-technical operators (not implemented)
+- [x] Daily digest useful for non-technical operators
 
 ## 19) Near-Term Build Tasks (Prioritized)
 
-- [ ] Implement policy engine and enforce autonomy tiers at execution time
-- [ ] Add first 5 typed remediation playbooks with preflight/verify/rollback
-- [ ] Build approval workflow with explicit `approve/deny` endpoints and UI actions
+- [x] Implement policy engine and enforce autonomy tiers at execution time
+- [x] Add first 5 typed remediation playbooks with preflight/verify/rollback
+- [x] Build approval workflow with explicit `approve/deny` endpoints and UI actions
 - [ ] Expand discovery to mDNS/SSDP/DHCP and UDP service probes
 - [ ] Add first-party adapters (UniFi, Synology, Proxmox, pfSense)
 - [ ] Implement notification channels (email first, then Slack/Teams)
-- [ ] Add daily digest generator and delivery scheduler
-- [ ] Add topology/dependency map UI
+- [x] Add daily digest generator and delivery scheduler
+- [x] Add topology/dependency map UI
 - [ ] Add RBAC + SSO foundation
 - [ ] Add reliability and product KPI instrumentation (ARR/MTTD/MTTR)

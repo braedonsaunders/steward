@@ -3,7 +3,11 @@ import {
   createPkcePair,
   buildOpenAIAuthorizeUrl,
   exchangeOpenAICode,
+  exchangeOpenAITokenForApiKey,
+  extractOpenAIAccountIdFromTokens,
 } from "@/lib/auth/oauth";
+import { getProviderConfig } from "@/lib/llm/config";
+import { getProviderMeta } from "@/lib/llm/registry";
 import { ensureVaultReadyForProviders } from "@/lib/security/vault-gate";
 import { vault } from "@/lib/security/vault";
 import { stateStore } from "@/lib/state/store";
@@ -104,24 +108,66 @@ export async function startOpenAIOAuthFlow(): Promise<string> {
           }
 
           const tokens = await exchangeOpenAICode(code, verifier);
-          const grantedScope = tokens.scope ?? "";
 
-          await vault.setSecret("llm.oauth.openai.access_token", tokens.access_token);
+          // Always store refresh token for future token refreshes
           if (tokens.refresh_token) {
             await vault.setSecret("llm.oauth.openai.refresh_token", tokens.refresh_token);
           }
-          if (grantedScope) {
-            await vault.setSecret("llm.oauth.openai.scope", grantedScope);
+
+          // Strategy 1: Try to exchange id_token for a real API key.
+          // This works when the user has an OpenAI Platform org/project.
+          let gotApiKey = false;
+          if (tokens.id_token) {
+            try {
+              const apiKey = await exchangeOpenAITokenForApiKey(tokens.id_token);
+              await vault.setSecret("llm.api.openai.key", apiKey);
+              gotApiKey = true;
+            } catch {
+              // Token exchange failed — user likely doesn't have a Platform org.
+              // Fall through to Strategy 2.
+            }
           }
+
+          // Strategy 2: Store the OAuth access token for ChatGPT backend fallback.
+          // Store access token, account ID, and expiry (same as oneshot codex.ts)
+          if (!gotApiKey) {
+            await vault.setSecret("llm.oauth.openai.access_token", tokens.access_token);
+
+            // Store token expiry for refresh logic
+            const expiresAt = Date.now() + (tokens.expires_in ?? 3600) * 1000;
+            await vault.setSecret("llm.oauth.openai.expires_at", String(expiresAt));
+
+            // Extract and store ChatGPT account ID from JWT (needed for backend API)
+            const accountId = extractOpenAIAccountIdFromTokens(tokens);
+            if (accountId) {
+              await vault.setSecret("llm.oauth.openai.account_id", accountId);
+            }
+          }
+
+          // Persist provider config
+          const meta = getProviderMeta("openai");
+          const existingConfig = await getProviderConfig("openai");
+          await stateStore.setProviderConfig({
+            provider: "openai",
+            enabled: true,
+            model: gotApiKey
+              ? (existingConfig?.model ?? meta?.defaultModel ?? "gpt-4o-mini")
+              : "gpt-5.3-codex",
+            // Only set oauthTokenSecret if we're using the OAuth token path
+            oauthTokenSecret: gotApiKey ? undefined : "llm.oauth.openai.access_token",
+          });
 
           await stateStore.addAction({
             actor: "user",
             kind: "auth",
-            message: "OpenAI OAuth tokens obtained via Codex CLI flow",
+            message: gotApiKey
+              ? "OpenAI API key obtained via OAuth token exchange"
+              : "OpenAI OAuth token obtained (ChatGPT backend mode)",
             context: {
               provider: "openai",
               tokenType: tokens.token_type,
               scope: tokens.scope,
+              method: gotApiKey ? "token-exchange" : "chatgpt-backend",
             },
           });
 

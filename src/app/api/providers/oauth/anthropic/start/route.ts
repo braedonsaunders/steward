@@ -13,7 +13,7 @@ export async function POST(request: NextRequest) {
   const vaultGate = await ensureVaultReadyForProviders();
   if (!vaultGate.ok) {
     return NextResponse.json(
-      { error: vaultGate.error, code: vaultGate.code },
+      { error: vaultGate.error },
       { status: 409 },
     );
   }

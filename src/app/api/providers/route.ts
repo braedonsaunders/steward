@@ -23,6 +23,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // Vault auto-unlocks — listSecretKeys calls ensureUnlocked internally
   const configs = await listProviderConfigs();
   const secretKeys = await vault.listSecretKeys();
 
@@ -45,7 +46,7 @@ export async function POST(request: NextRequest) {
   const vaultGate = await ensureVaultReadyForProviders();
   if (!vaultGate.ok) {
     return NextResponse.json(
-      { error: vaultGate.error, code: vaultGate.code },
+      { error: vaultGate.error },
       { status: 409 },
     );
   }
@@ -76,11 +77,9 @@ export async function POST(request: NextRequest) {
       state.providerConfigs.push(nextConfig);
     }
 
-    const configuredDefault = process.env.STEWARD_DEFAULT_PROVIDER as LLMProvider | undefined;
     const providerOrder = Array.from(
       new Set<LLMProvider>([
         provider,
-        ...(configuredDefault ? [configuredDefault] : []),
         "openai",
         ...providerPriority,
         ...state.providerConfigs.map((c) => c.provider),

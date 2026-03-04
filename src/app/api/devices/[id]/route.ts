@@ -8,6 +8,7 @@ export const runtime = "nodejs";
 const updateDeviceSchema = z.object({
   autonomyTier: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
   tags: z.array(z.string().min(1)).optional(),
+  adoptionStatus: z.enum(["discovered", "adopted", "ignored"]).optional(),
 });
 
 export async function GET(
@@ -79,6 +80,21 @@ export async function PATCH(
   if (payload.data.tags !== undefined) {
     device.tags = payload.data.tags;
     updates.tags = payload.data.tags;
+  }
+
+  if (payload.data.adoptionStatus !== undefined) {
+    const existingAdoption =
+      typeof device.metadata.adoption === "object" && device.metadata.adoption !== null
+        ? (device.metadata.adoption as Record<string, unknown>)
+        : {};
+    device.metadata = {
+      ...device.metadata,
+      adoption: {
+        ...existingAdoption,
+        status: payload.data.adoptionStatus,
+      },
+    };
+    updates.adoptionStatus = payload.data.adoptionStatus;
   }
 
   device.lastChangedAt = new Date().toISOString();
