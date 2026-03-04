@@ -127,7 +127,22 @@ export interface GraphEdge {
   updatedAt: string;
 }
 
-export type LLMProvider = "openai" | "anthropic" | "google" | "openrouter";
+export type LLMProvider =
+  | "openai"
+  | "anthropic"
+  | "google"
+  | "mistral"
+  | "groq"
+  | "xai"
+  | "cohere"
+  | "perplexity"
+  | "fireworks"
+  | "togetherai"
+  | "deepseek"
+  | "openrouter"
+  | "ollama"
+  | "lmstudio"
+  | "custom";
 
 export interface ProviderConfig {
   provider: LLMProvider;

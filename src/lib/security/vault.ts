@@ -1,10 +1,12 @@
 import { createCipheriv, createDecipheriv, randomBytes, scrypt } from "node:crypto";
+import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { stateStore } from "@/lib/state/store";
 
 const scryptAsync = promisify(scrypt);
+const execFileAsync = promisify(execFile);
 
 interface VaultMeta {
   salt: string;
@@ -26,9 +28,14 @@ interface EncryptedEnvelope {
 const vaultDir = stateStore.getDataDir();
 const vaultMetaFile = path.join(vaultDir, "vault.meta.json");
 const vaultDataFile = path.join(vaultDir, "vault.enc.json");
+const keychainService = process.env.STEWARD_KEYCHAIN_SERVICE ?? "com.steward.vault.passphrase";
+const keychainAccount =
+  process.env.STEWARD_KEYCHAIN_ACCOUNT ??
+  `steward:${path.resolve(vaultDir)}`;
 
 let unlockedKey: Buffer | undefined;
 let cachedPayload: VaultPayload | undefined;
+let autoUnlockSuppressed = false;
 
 const ensureVaultDir = async () => {
   await mkdir(vaultDir, { recursive: true });
@@ -104,6 +111,46 @@ const writePayload = async (payload: VaultPayload, key: Buffer): Promise<void> =
   await writeFile(vaultDataFile, JSON.stringify(envelope, null, 2), "utf8");
 };
 
+const canUseSystemKeychain = (): boolean => process.platform === "darwin";
+
+const savePassphraseToKeychain = async (passphrase: string): Promise<void> => {
+  if (!canUseSystemKeychain()) return;
+
+  try {
+    await execFileAsync("security", [
+      "add-generic-password",
+      "-U",
+      "-a",
+      keychainAccount,
+      "-s",
+      keychainService,
+      "-w",
+      passphrase,
+    ]);
+  } catch (error) {
+    console.warn("Failed to persist vault passphrase to macOS keychain", error);
+  }
+};
+
+const readPassphraseFromKeychain = async (): Promise<string | undefined> => {
+  if (!canUseSystemKeychain()) return undefined;
+
+  try {
+    const { stdout } = await execFileAsync("security", [
+      "find-generic-password",
+      "-a",
+      keychainAccount,
+      "-s",
+      keychainService,
+      "-w",
+    ]);
+    const passphrase = stdout.trim();
+    return passphrase || undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 export const vault = {
   async isInitialized(): Promise<boolean> {
     const meta = await readMeta();
@@ -126,6 +173,8 @@ export const vault = {
     await writePayload(defaultPayload(), key);
     unlockedKey = key;
     cachedPayload = defaultPayload();
+    autoUnlockSuppressed = false;
+    await savePassphraseToKeychain(passphrase);
   },
 
   async unlock(passphrase: string): Promise<boolean> {
@@ -144,6 +193,8 @@ export const vault = {
       const payload = decryptPayload(envelope, key);
       unlockedKey = key;
       cachedPayload = payload;
+      autoUnlockSuppressed = false;
+      await savePassphraseToKeychain(passphrase);
       return true;
     } catch {
       return false;
@@ -153,6 +204,7 @@ export const vault = {
   lock(): void {
     unlockedKey = undefined;
     cachedPayload = undefined;
+    autoUnlockSuppressed = true;
   },
 
   isUnlocked(): boolean {
@@ -160,22 +212,34 @@ export const vault = {
   },
 
   async ensureUnlocked(): Promise<boolean> {
+    if (autoUnlockSuppressed) {
+      return false;
+    }
+
     if (this.isUnlocked()) {
       return true;
     }
 
     const envPassphrase = process.env.STEWARD_MASTER_PASSPHRASE;
-    if (!envPassphrase) {
-      return false;
-    }
-
     const initialized = await this.isInitialized();
     if (!initialized) {
+      if (!envPassphrase) {
+        return false;
+      }
       await this.initialize(envPassphrase);
       return true;
     }
 
-    return this.unlock(envPassphrase);
+    if (envPassphrase) {
+      return this.unlock(envPassphrase);
+    }
+
+    const keychainPassphrase = await readPassphraseFromKeychain();
+    if (!keychainPassphrase) {
+      return false;
+    }
+
+    return this.unlock(keychainPassphrase);
   },
 
   async setSecret(key: string, value: string): Promise<void> {

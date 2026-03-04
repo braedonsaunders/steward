@@ -396,15 +396,19 @@ export const runStewardCycle = async (
       error: error instanceof Error ? error.stack ?? error.message : String(error),
     };
 
-    await stateStore.addAgentRun(runRecord);
-    await stateStore.addAction({
-      actor: "steward",
-      kind: "diagnose",
-      message: runRecord.summary,
-      context: {
-        runId: runRecord.id,
-      },
-    });
+    try {
+      await stateStore.addAgentRun(runRecord);
+      await stateStore.addAction({
+        actor: "steward",
+        kind: "diagnose",
+        message: runRecord.summary,
+        context: {
+          runId: runRecord.id,
+        },
+      });
+    } catch (persistError) {
+      console.error("Failed to persist failed agent run", persistError);
+    }
 
     throw error;
   } finally {
@@ -419,7 +423,9 @@ export const ensureStewardLoop = (): void => {
 
   const intervalMs = Number(process.env.STEWARD_AGENT_INTERVAL_MS ?? 120_000);
   loopHandle = setInterval(() => {
-    void runStewardCycle("interval");
+    void runStewardCycle("interval").catch((error) => {
+      console.error("Steward interval cycle failed", error);
+    });
   }, intervalMs);
 };
 

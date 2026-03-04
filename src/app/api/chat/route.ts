@@ -13,7 +13,7 @@ export const runtime = "nodejs";
 
 const schema = z.object({
   input: z.string().min(1),
-  provider: z.enum(["openai", "anthropic", "google", "openrouter"]).optional(),
+  provider: z.string().min(1).optional(),
   model: z.string().optional(),
 });
 
@@ -57,9 +57,24 @@ export async function POST(request: NextRequest) {
       usage: result.usage,
     });
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    if (
+      provider === "openai" &&
+      /missing scopes:\s*api\.responses\.write/i.test(message)
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "OpenAI token is missing required API permissions. Configure an OpenAI Platform API key (OPENAI_API_KEY or Settings > Providers > API Key) and retry chat.",
+        },
+        { status: 500 },
+      );
+    }
+
     return NextResponse.json(
       {
-        error: error instanceof Error ? error.message : String(error),
+        error: message,
       },
       { status: 500 },
     );

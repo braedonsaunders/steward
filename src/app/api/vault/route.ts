@@ -16,6 +16,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  await vault.ensureUnlocked();
+
   return NextResponse.json({
     initialized: await vault.isInitialized(),
     unlocked: vault.isUnlocked(),

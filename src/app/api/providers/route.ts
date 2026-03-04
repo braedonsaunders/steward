@@ -2,19 +2,20 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { isAuthorized } from "@/lib/auth/guard";
 import { listProviderConfigs } from "@/lib/llm/config";
+import { ensureVaultReadyForProviders } from "@/lib/security/vault-gate";
 import { vault } from "@/lib/security/vault";
+import { providerPriority } from "@/lib/state/defaults";
 import { stateStore } from "@/lib/state/store";
+import type { LLMProvider } from "@/lib/state/types";
 
 export const runtime = "nodejs";
 
 const providerSchema = z.object({
-  provider: z.enum(["openai", "anthropic", "google", "openrouter"]),
+  provider: z.string().min(1),
   enabled: z.boolean().optional(),
-  model: z.string().min(1).optional(),
+  model: z.string().optional(),
   apiKey: z.string().min(1).optional(),
-  baseUrl: z.string().url().optional(),
-  oauthAuthUrl: z.string().url().optional(),
-  oauthTokenUrl: z.string().url().optional(),
+  baseUrl: z.string().optional(),
 });
 
 export async function GET(request: NextRequest) {
@@ -41,46 +42,91 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const vaultGate = await ensureVaultReadyForProviders();
+  if (!vaultGate.ok) {
+    return NextResponse.json(
+      { error: vaultGate.error, code: vaultGate.code },
+      { status: 409 },
+    );
+  }
+
   const payload = providerSchema.safeParse(await request.json());
   if (!payload.success) {
     return NextResponse.json({ error: payload.error.flatten() }, { status: 400 });
   }
 
   const data = payload.data;
+  const provider = data.provider as LLMProvider;
+  let activeProvider: LLMProvider | undefined;
 
-  await stateStore.updateState(async (state) => {
-    const idx = state.providerConfigs.findIndex((item) => item.provider === data.provider);
-    if (idx === -1) {
-      return state;
+  await stateStore.updateState((state) => {
+    const existingIndex = state.providerConfigs.findIndex((c) => c.provider === provider);
+    const existing = existingIndex >= 0 ? state.providerConfigs[existingIndex] : undefined;
+
+    const nextConfig = {
+      ...(existing ?? { provider, enabled: false, model: "" }),
+      ...(data.enabled !== undefined && { enabled: data.enabled }),
+      ...(data.model !== undefined && { model: data.model }),
+      ...(data.baseUrl !== undefined && { baseUrl: data.baseUrl || undefined }),
+    };
+
+    if (existingIndex >= 0) {
+      state.providerConfigs[existingIndex] = nextConfig;
+    } else {
+      state.providerConfigs.push(nextConfig);
     }
 
-    state.providerConfigs[idx] = {
-      ...state.providerConfigs[idx],
-      enabled: data.enabled ?? state.providerConfigs[idx].enabled,
-      model: data.model ?? state.providerConfigs[idx].model,
-      baseUrl: data.baseUrl ?? state.providerConfigs[idx].baseUrl,
-      oauthAuthUrl: data.oauthAuthUrl ?? state.providerConfigs[idx].oauthAuthUrl,
-      oauthTokenUrl: data.oauthTokenUrl ?? state.providerConfigs[idx].oauthTokenUrl,
-    };
+    const configuredDefault = process.env.STEWARD_DEFAULT_PROVIDER as LLMProvider | undefined;
+    const providerOrder = Array.from(
+      new Set<LLMProvider>([
+        provider,
+        ...(configuredDefault ? [configuredDefault] : []),
+        "openai",
+        ...providerPriority,
+        ...state.providerConfigs.map((c) => c.provider),
+      ]),
+    );
+
+    if (nextConfig.enabled) {
+      activeProvider = provider;
+    } else {
+      const currentlyEnabled = state.providerConfigs
+        .filter((c) => c.enabled)
+        .map((c) => c.provider);
+
+      const candidates = currentlyEnabled.length > 0
+        ? currentlyEnabled
+        : state.providerConfigs.map((c) => c.provider);
+
+      activeProvider =
+        providerOrder.find((candidate) => candidates.includes(candidate)) ??
+        candidates[0];
+    }
+
+    state.providerConfigs = state.providerConfigs.map((config) => ({
+      ...config,
+      enabled: config.provider === activeProvider,
+    }));
 
     return state;
   });
 
   if (data.apiKey) {
-    await vault.setSecret(`llm.api.${data.provider}.key`, data.apiKey);
+    await vault.setSecret(`llm.api.${provider}.key`, data.apiKey);
   }
 
   await stateStore.addAction({
     actor: "user",
     kind: "config",
-    message: `Provider updated: ${data.provider}`,
+    message: `Provider updated: ${provider}`,
     context: {
-      provider: data.provider,
+      provider,
       model: data.model,
       enabled: data.enabled,
+      activeProvider,
       hasApiKeyUpdate: Boolean(data.apiKey),
     },
   });
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, activeProvider });
 }

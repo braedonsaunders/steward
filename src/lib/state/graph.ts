@@ -1,134 +1,180 @@
 import { randomUUID } from "node:crypto";
-import { stateStore } from "@/lib/state/store";
-import type { Device, GraphEdge, GraphNode } from "@/lib/state/types";
+import type Database from "better-sqlite3";
+import { getDb, recoverCorruptDatabase } from "@/lib/state/db";
+import type { Device, GraphNode } from "@/lib/state/types";
 
-const upsertGraphNode = (nodes: GraphNode[], node: GraphNode): GraphNode[] => {
-  const idx = nodes.findIndex((n) => n.id === node.id);
-  if (idx === -1) {
-    return [...nodes, node];
-  }
-
-  const next = [...nodes];
-  next[idx] = {
-    ...next[idx],
-    ...node,
-    updatedAt: new Date().toISOString(),
+function graphNodeFromRow(row: Record<string, unknown>): GraphNode {
+  return {
+    id: row.id as string,
+    type: row.type as GraphNode["type"],
+    label: row.label as string,
+    properties: JSON.parse(row.properties as string) as Record<string, unknown>,
+    createdAt: row.createdAt as string,
+    updatedAt: row.updatedAt as string,
   };
-  return next;
-};
+}
 
-const upsertGraphEdge = (edges: GraphEdge[], edge: GraphEdge): GraphEdge[] => {
-  const idx = edges.findIndex(
-    (e) => e.from === edge.from && e.to === edge.to && e.type === edge.type,
-  );
+const upsertNodeStmt = (db: Database.Database) =>
+  db.prepare(`
+    INSERT INTO graph_nodes (id, type, label, properties, createdAt, updatedAt)
+    VALUES (@id, @type, @label, @properties, @createdAt, @updatedAt)
+    ON CONFLICT(id) DO UPDATE SET
+      type = excluded.type,
+      label = excluded.label,
+      properties = excluded.properties,
+      updatedAt = excluded.updatedAt
+  `);
 
-  if (idx === -1) {
-    return [...edges, edge];
+const upsertEdgeStmt = (db: Database.Database) =>
+  db.prepare(`
+    INSERT INTO graph_edges (id, "from", "to", type, properties, createdAt, updatedAt)
+    VALUES (@id, @from, @to, @type, @properties, @createdAt, @updatedAt)
+    ON CONFLICT(id) DO UPDATE SET
+      properties = json_patch(graph_edges.properties, excluded.properties),
+      updatedAt = excluded.updatedAt
+  `);
+
+/**
+ * Find an existing edge by (from, to, type) composite key.
+ */
+function findEdge(
+  db: Database.Database,
+  from: string,
+  to: string,
+  type: string,
+): { id: string; properties: string } | undefined {
+  return db
+    .prepare('SELECT id, properties FROM graph_edges WHERE "from" = ? AND "to" = ? AND type = ?')
+    .get(from, to, type) as { id: string; properties: string } | undefined;
+}
+
+function withDbRecovery<T>(context: string, operation: (db: Database.Database) => T): T {
+  const run = () => operation(getDb());
+  try {
+    return run();
+  } catch (error) {
+    if (!recoverCorruptDatabase(error, context)) {
+      throw error;
+    }
+    return run();
   }
-
-  const next = [...edges];
-  next[idx] = {
-    ...next[idx],
-    properties: {
-      ...next[idx].properties,
-      ...edge.properties,
-    },
-    updatedAt: new Date().toISOString(),
-  };
-
-  return next;
-};
+}
 
 export const graphStore = {
   async attachDevice(device: Device): Promise<void> {
-    await stateStore.updateState(async (state) => {
-      const node: GraphNode = {
-        id: `device:${device.id}`,
-        type: "device",
-        label: device.name,
-        properties: {
-          ip: device.ip,
-          type: device.type,
-          status: device.status,
-          role: device.role,
-          protocols: device.protocols,
-          services: device.services,
-        },
-        createdAt: device.firstSeenAt,
-        updatedAt: device.lastSeenAt,
-      };
+    withDbRecovery("graphStore.attachDevice", (db) => {
+      const now = new Date().toISOString();
+      const upsertNode = upsertNodeStmt(db);
+      const upsertEdge = upsertEdgeStmt(db);
 
-      state.graph.nodes = upsertGraphNode(state.graph.nodes, node);
-      state.graph.edges = upsertGraphEdge(state.graph.edges, {
-        id: randomUUID(),
-        from: "site:default",
-        to: node.id,
-        type: "contains",
-        properties: {},
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-
-      for (const service of device.services) {
-        const serviceNodeId = `service:${device.id}:${service.transport}:${service.port}`;
-        const serviceNode: GraphNode = {
-          id: serviceNodeId,
-          type: "service",
-          label: `${service.name}:${service.port}`,
+      const tx = db.transaction(() => {
+        // Upsert device node
+        const node: GraphNode = {
+          id: `device:${device.id}`,
+          type: "device",
+          label: device.name,
           properties: {
-            ...service,
+            ip: device.ip,
+            type: device.type,
+            status: device.status,
+            role: device.role,
+            protocols: device.protocols,
+            services: device.services,
           },
-          createdAt: service.lastSeenAt,
-          updatedAt: service.lastSeenAt,
+          createdAt: device.firstSeenAt,
+          updatedAt: device.lastSeenAt,
         };
 
-        state.graph.nodes = upsertGraphNode(state.graph.nodes, serviceNode);
-        state.graph.edges = upsertGraphEdge(state.graph.edges, {
-          id: randomUUID(),
-          from: node.id,
-          to: serviceNodeId,
-          type: "runs",
-          properties: {
-            secure: service.secure,
-          },
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
+        upsertNode.run({
+          id: node.id,
+          type: node.type,
+          label: node.label,
+          properties: JSON.stringify(node.properties),
+          createdAt: node.createdAt,
+          updatedAt: node.updatedAt,
         });
-      }
 
-      return state;
+        // Upsert site -> device edge
+        const siteEdgeExisting = findEdge(db, "site:default", node.id, "contains");
+        const siteEdgeId = siteEdgeExisting?.id ?? randomUUID();
+        upsertEdge.run({
+          id: siteEdgeId,
+          from: "site:default",
+          to: node.id,
+          type: "contains",
+          properties: JSON.stringify({}),
+          createdAt: now,
+          updatedAt: now,
+        });
+
+        // Upsert service nodes and edges
+        for (const service of device.services) {
+          const serviceNodeId = `service:${device.id}:${service.transport}:${service.port}`;
+          upsertNode.run({
+            id: serviceNodeId,
+            type: "service",
+            label: `${service.name}:${service.port}`,
+            properties: JSON.stringify({ ...service }),
+            createdAt: service.lastSeenAt,
+            updatedAt: service.lastSeenAt,
+          });
+
+          const serviceEdgeExisting = findEdge(db, node.id, serviceNodeId, "runs");
+          const serviceEdgeId = serviceEdgeExisting?.id ?? randomUUID();
+          upsertEdge.run({
+            id: serviceEdgeId,
+            from: node.id,
+            to: serviceNodeId,
+            type: "runs",
+            properties: JSON.stringify({ secure: service.secure }),
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
+      });
+
+      tx();
     });
   },
 
   async addDependency(fromDeviceId: string, toDeviceId: string, reason: string): Promise<void> {
-    await stateStore.updateState(async (state) => {
-      state.graph.edges = upsertGraphEdge(state.graph.edges, {
-        id: randomUUID(),
-        from: `device:${fromDeviceId}`,
-        to: `device:${toDeviceId}`,
-        type: "depends_on",
-        properties: { reason },
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
+    withDbRecovery("graphStore.addDependency", (db) => {
+      const now = new Date().toISOString();
+      const from = `device:${fromDeviceId}`;
+      const to = `device:${toDeviceId}`;
 
-      return state;
+      const existing = findEdge(db, from, to, "depends_on");
+      const edgeId = existing?.id ?? randomUUID();
+
+      upsertEdgeStmt(db).run({
+        id: edgeId,
+        from,
+        to,
+        type: "depends_on",
+        properties: JSON.stringify({ reason }),
+        createdAt: now,
+        updatedAt: now,
+      });
     });
   },
 
   async getDependents(deviceId: string): Promise<string[]> {
-    const state = await stateStore.getState();
-    const target = `device:${deviceId}`;
-
-    return state.graph.edges
-      .filter((edge) => edge.type === "depends_on" && edge.to === target)
-      .map((edge) => edge.from.replace(/^device:/, ""));
+    return withDbRecovery("graphStore.getDependents", (db) => {
+      const target = `device:${deviceId}`;
+      const rows = db
+        .prepare('SELECT "from" FROM graph_edges WHERE type = \'depends_on\' AND "to" = ?')
+        .all(target) as Array<{ from: string }>;
+      return rows.map((row) => row.from.replace(/^device:/, ""));
+    });
   },
 
   async getRecentChanges(hours = 24): Promise<GraphNode[]> {
-    const cutoff = Date.now() - hours * 60 * 60 * 1000;
-    const state = await stateStore.getState();
-
-    return state.graph.nodes.filter((node) => new Date(node.updatedAt).getTime() >= cutoff);
+    return withDbRecovery("graphStore.getRecentChanges", (db) => {
+      const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+      const rows = db
+        .prepare("SELECT * FROM graph_nodes WHERE updatedAt >= ?")
+        .all(cutoff) as Record<string, unknown>[];
+      return rows.map(graphNodeFromRow);
+    });
   },
 };
