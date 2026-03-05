@@ -181,9 +181,18 @@ const parseNmapLine = (line: string): DiscoveryCandidate | undefined => {
   };
 };
 
-const tryGetLocalIp = async (): Promise<string | undefined> => {
+const VIRTUAL_IFACE_HINTS = ["virtual", "veth", "docker", "wsl", "hyper-v", "vmware", "loopback"];
+
+const scoreInterfaceName = (name: string): number => {
+  const lower = name.toLowerCase();
+  return VIRTUAL_IFACE_HINTS.some((hint) => lower.includes(hint)) ? 1 : 0;
+};
+
+const tryGetLocalIps = async (): Promise<string[]> => {
   const interfaces = os.networkInterfaces();
-  for (const iface of Object.values(interfaces)) {
+  const fromInterfaces: Array<{ ip: string; score: number }> = [];
+
+  for (const [name, iface] of Object.entries(interfaces)) {
     if (!iface) continue;
     for (const address of iface) {
       if (address.family !== "IPv4" || address.internal) {
@@ -191,9 +200,20 @@ const tryGetLocalIp = async (): Promise<string | undefined> => {
       }
 
       if (/^(10\.|172\.(1[6-9]|2\d|3[0-1])\.|192\.168\.)/.test(address.address)) {
-        return address.address;
+        fromInterfaces.push({
+          ip: address.address,
+          score: scoreInterfaceName(name),
+        });
       }
     }
+  }
+
+  const orderedInterfaceIps = fromInterfaces
+    .sort((a, b) => a.score - b.score || a.ip.localeCompare(b.ip))
+    .map((item) => item.ip);
+
+  if (orderedInterfaceIps.length > 0) {
+    return Array.from(new Set(orderedInterfaceIps));
   }
 
   const candidates = [
@@ -212,11 +232,11 @@ const tryGetLocalIp = async (): Promise<string | undefined> => {
 
     const ip = result.stdout.split(/\s+/).find((item) => /\d+\.\d+\.\d+\.\d+/.test(item));
     if (ip) {
-      return ip;
+      return [ip];
     }
   }
 
-  return undefined;
+  return [];
 };
 
 const toSlash24 = (ip: string): string => {
@@ -350,7 +370,10 @@ const scanTcpServices = async (ip: string): Promise<ServiceFingerprint[]> => {
 
 const reverseLookup = async (ip: string): Promise<string | undefined> => {
   try {
-    const names = await dns.reverse(ip);
+    const names = await Promise.race<string[]>([
+      dns.reverse(ip),
+      new Promise<string[]>((resolve) => setTimeout(() => resolve([]), 1_500)),
+    ]);
     const first = names.find((value) => value.trim().length > 0);
     return first;
   } catch {
@@ -409,10 +432,10 @@ export const collectActiveCandidates = async (
 
   const hasNmap = await runShell(process.platform === "win32" ? "where nmap" : "command -v nmap", 1_500);
 
-  const localIp = await tryGetLocalIp();
+  const localIps = await tryGetLocalIps();
   const nmapSubnets = uniqueSubnetsFromIps([
     ...seedIps,
-    ...(localIp ? [localIp] : []),
+    ...localIps,
   ]).slice(0, maxNmapSubnets);
 
   if (deepScan && hasNmap.ok && hasNmap.stdout && nmapSubnets.length > 0) {
@@ -435,6 +458,7 @@ export const collectActiveCandidates = async (
   let targets = sliceWithOffset(deduped, targetOffset, maxTargets);
 
   if (targets.length === 0) {
+    const localIp = localIps[0];
     if (!localIp) {
       return [];
     }
@@ -446,7 +470,7 @@ export const collectActiveCandidates = async (
     const fallbackSubnets = uniqueSubnetsFromIps([
       ...seedIps,
       ...targets,
-      ...(localIp ? [localIp] : []),
+      ...localIps,
     ]);
     const fallbackHosts = buildHostCandidatesFromSubnets(fallbackSubnets).filter((ip) => !targets.includes(ip));
     if (fallbackHosts.length > 0) {

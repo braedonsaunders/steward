@@ -12,6 +12,14 @@ export interface StoreDeviceCredentialInput {
   scopeJson?: Record<string, unknown>;
 }
 
+export interface UpdateDeviceCredentialInput {
+  deviceId: string;
+  credentialId: string;
+  protocol?: string;
+  secret?: string;
+  accountLabel?: string;
+}
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -169,6 +177,75 @@ export async function validateDeviceCredential(
   });
 
   return updated;
+}
+
+export async function updateDeviceCredential(input: UpdateDeviceCredentialInput): Promise<DeviceCredential> {
+  const device = stateStore.getDeviceById(input.deviceId);
+  if (!device) {
+    throw new Error("Device not found");
+  }
+
+  const existing = stateStore.getDeviceCredentialById(input.credentialId);
+  if (!existing || existing.deviceId !== input.deviceId) {
+    throw new Error("Credential not found");
+  }
+
+  const nextProtocol = input.protocol ? normalizeProtocol(input.protocol) : existing.protocol;
+  if (input.secret && input.secret.trim().length > 0) {
+    const unlocked = await vault.ensureUnlocked();
+    if (!unlocked) {
+      throw new Error("Vault is unavailable");
+    }
+    await vault.setSecret(existing.vaultSecretRef, input.secret);
+  }
+
+  const updated: DeviceCredential = {
+    ...existing,
+    protocol: nextProtocol,
+    accountLabel: input.accountLabel?.trim() || undefined,
+    scopeJson: existing.scopeJson ?? defaultScope(nextProtocol),
+    status: "provided",
+    updatedAt: nowIso(),
+  };
+
+  stateStore.upsertDeviceCredential(updated);
+  await stateStore.addAction({
+    actor: "user",
+    kind: "config",
+    message: `Updated credential ${updated.id} for ${device.name}`,
+    context: {
+      deviceId: device.id,
+      credentialId: updated.id,
+      protocol: updated.protocol,
+    },
+  });
+
+  return updated;
+}
+
+export async function deleteDeviceCredential(deviceId: string, credentialId: string): Promise<void> {
+  const device = stateStore.getDeviceById(deviceId);
+  if (!device) {
+    throw new Error("Device not found");
+  }
+
+  const credential = stateStore.getDeviceCredentialById(credentialId);
+  if (!credential || credential.deviceId !== deviceId) {
+    throw new Error("Credential not found");
+  }
+
+  await vault.deleteSecret(credential.vaultSecretRef);
+  stateStore.deleteDeviceCredential(credentialId);
+  await stateStore.addAction({
+    actor: "user",
+    kind: "config",
+    message: `Deleted credential ${credential.id} for ${device.name}`,
+    context: {
+      deviceId: device.id,
+      credentialId: credential.id,
+      protocol: credential.protocol,
+    },
+  });
 }
 
 export function redactDeviceCredential(credential: DeviceCredential): Omit<DeviceCredential, "vaultSecretRef"> {

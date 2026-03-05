@@ -30,9 +30,7 @@ import type {
   SystemSettings,
 } from "@/lib/state/types";
 import type { DeviceAdoptionStatus } from "@/lib/state/device-adoption";
-import { persistApiToken, withClientApiToken } from "@/lib/auth/client-token";
-
-const POLL_MS = 15_000;
+import { persistApiToken, withApiTokenQuery, withClientApiToken } from "@/lib/auth/client-token";
 
 async function fetchJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
   const res = await fetch(input, withClientApiToken(init));
@@ -106,6 +104,15 @@ export interface AdapterRecordClient {
       description: string;
       parameters: Record<string, unknown>;
     };
+    execution?: {
+      kind?: string;
+      mode?: "read" | "mutate";
+      adapterId?: string;
+      timeoutMs?: number;
+      expectedSemanticTarget?: string;
+      commandTemplate?: string;
+      commandTemplates?: Record<string, string>;
+    };
     skillMdPath?: string;
     skillMd?: {
       path: string;
@@ -176,7 +183,7 @@ export interface StewardContextValue {
 
   // Mutations
   refresh: () => Promise<void>;
-  runAgentCycle: () => Promise<{ summary: Record<string, number> }>;
+  runAgentCycle: () => Promise<{ started: boolean; summary?: Record<string, number> }>;
   addDevice: (name: string, ip: string) => Promise<void>;
   renameDevice: (id: string, name: string) => Promise<void>;
   updateIncidentStatus: (id: string, status: string) => Promise<void>;
@@ -251,8 +258,65 @@ export function StewardProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void loadState();
-    const id = setInterval(() => void loadState(), POLL_MS);
-    return () => clearInterval(id);
+  }, [loadState]);
+
+  useEffect(() => {
+    let disposed = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let stream: EventSource | null = null;
+
+    const clearReconnect = () => {
+      if (!reconnectTimer) {
+        return;
+      }
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    };
+
+    const connect = () => {
+      if (disposed) {
+        return;
+      }
+
+      clearReconnect();
+      stream = new EventSource(withApiTokenQuery("/api/state/stream"));
+
+      const onState = (event: MessageEvent<string>) => {
+        try {
+          const next = JSON.parse(event.data) as StewardState;
+          setState(next);
+          setPendingApprovals((next.playbookRuns ?? []).filter((run) => run.status === "pending_approval"));
+          setLatestDigest(next.dailyDigests?.[0] ?? null);
+          setLoading(false);
+          setError(null);
+        } catch (streamError) {
+          setError(streamError instanceof Error ? streamError.message : "Failed to parse state stream event.");
+        }
+      };
+
+      const onError = () => {
+        if (disposed) {
+          return;
+        }
+        setError("Lost live state stream. Reconnecting...");
+        stream?.close();
+        stream = null;
+        clearReconnect();
+        reconnectTimer = setTimeout(connect, 2000);
+      };
+
+      stream.addEventListener("state", onState as EventListener);
+      stream.onerror = onError;
+    };
+
+    connect();
+
+    return () => {
+      disposed = true;
+      clearReconnect();
+      stream?.close();
+      stream = null;
+    };
   }, [loadState]);
 
   const overview = useMemo(() => {
@@ -273,13 +337,15 @@ export function StewardProvider({ children }: { children: ReactNode }) {
   }, [loadState]);
 
   const runAgentCycle = useCallback(async () => {
-    const result = await fetchJson<{ ok: boolean; summary: Record<string, number> }>(
+    const result = await fetchJson<{ ok: boolean; started?: boolean; summary?: Record<string, number> }>(
       "/api/agent/run",
       { method: "POST" },
     );
-    await loadState();
-    return result;
-  }, [loadState]);
+    return {
+      started: result.started ?? false,
+      summary: result.summary,
+    };
+  }, []);
 
   const addDevice = useCallback(
     async (name: string, ip: string) => {

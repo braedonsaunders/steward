@@ -168,23 +168,6 @@ function buildServiceContracts(device: Device, profile: DeviceAdoptionProfile): 
   }));
 }
 
-function buildQuestions(device: Device, runId: string, profile: DeviceAdoptionProfile): AdoptionQuestion[] {
-  const createdAt = nowIso();
-  return profile.questions.map((question) => ({
-    id: randomUUID(),
-    runId,
-    deviceId: device.id,
-    questionKey: question.questionKey,
-    prompt: question.prompt,
-    options: question.options,
-    required: question.required,
-    answerJson: undefined,
-    answeredAt: undefined,
-    createdAt,
-    updatedAt: createdAt,
-  }));
-}
-
 function upsertDeviceAdoptionMetadata(device: Device, run: AdoptionRun, profile: DeviceAdoptionProfile): Device {
   const adoption = getAdoptionRecord(device);
   const nextDevice: Device = {
@@ -203,6 +186,7 @@ function upsertDeviceAdoptionMetadata(device: Device, run: AdoptionRun, profile:
         profileSummary: profile.summary,
         profileConfidence: profile.confidence,
         requiredCredentials: profile.credentialIntents.map((intent) => intent.protocol),
+        serviceContractCount: profile.criticalServices.length,
         lastProfiledAt: run.updatedAt,
       },
     },
@@ -248,6 +232,7 @@ export async function startDeviceAdoption(
 
   const now = nowIso();
   const existing = stateStore.getLatestAdoptionRun(deviceId);
+  const existingServiceContractsCount = stateStore.getServiceContracts(deviceId).length;
   const run: AdoptionRun = {
     id: existing && !options?.force ? existing.id : randomUUID(),
     deviceId,
@@ -265,6 +250,7 @@ export async function startDeviceAdoption(
   const adapters = activeAdapters(adapterRegistry.getAdapterRecords());
   const profile = await generateDeviceAdoptionProfile(device, {
     adapterIds: adapters.map((adapter) => adapter.id),
+    existingServiceContractsCount,
   });
 
   const profiledRun: AdoptionRun = {
@@ -286,23 +272,33 @@ export async function startDeviceAdoption(
     stateStore.upsertDeviceAdapterBinding(binding);
   }
 
-  const serviceContracts = buildServiceContracts(nextDevice, profile);
-  stateStore.clearServiceContracts(deviceId);
-  for (const contract of serviceContracts) {
-    stateStore.upsertServiceContract(contract);
-  }
+  const existingContracts = stateStore.getServiceContracts(deviceId);
+  const proposedContracts = buildServiceContracts(nextDevice, profile);
 
-  const questions = buildQuestions(nextDevice, profiledRun.id, profile);
+  const questions: AdoptionQuestion[] = [];
   stateStore.deleteAdoptionQuestionsForRun(profiledRun.id);
   for (const question of questions) {
     stateStore.upsertAdoptionQuestion(question);
   }
 
   const unresolvedRequired = questions.filter((question) => question.required).length;
+  const validatedProtocols = stateStore.getValidatedCredentialProtocols(deviceId);
+  const requiredProtocols = Array.from(new Set(profile.credentialIntents.map((intent) => intent.protocol)));
+  const missingRequiredCredentials = requiredProtocols.filter(
+    (protocol) => !validatedProtocols.includes(protocol),
+  );
   const terminalRun: AdoptionRun = {
     ...profiledRun,
-    status: unresolvedRequired > 0 ? "awaiting_user" : "completed",
-    stage: unresolvedRequired > 0 ? "questions" : "completed",
+    status: "awaiting_user",
+    stage: missingRequiredCredentials.length > 0 ? "credentials" : "activation",
+    profileJson: {
+      ...profiledRun.profileJson,
+      proposedContracts,
+      onboardingConversationRequired: true,
+      missingRequiredCredentials,
+      existingServiceContractsCount,
+      existingServiceContractKeys: existingContracts.map((contract) => contract.serviceKey),
+    },
     updatedAt: nowIso(),
   };
   stateStore.upsertAdoptionRun(terminalRun);
@@ -315,6 +311,7 @@ export async function startDeviceAdoption(
         ...getAdoptionRecord(nextDevice),
         runStatus: terminalRun.status,
         runStage: terminalRun.stage,
+        serviceContractCount: existingContracts.length,
         unresolvedRequiredQuestions: unresolvedRequired,
       },
     },

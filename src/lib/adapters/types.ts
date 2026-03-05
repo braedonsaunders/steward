@@ -1,5 +1,5 @@
 import type { DiscoveryCandidate } from "@/lib/discovery/types";
-import type { Device, OperationKind, PlaybookDefinition } from "@/lib/state/types";
+import type { Device, OperationKind, OperationMode, PlaybookDefinition } from "@/lib/state/types";
 import type { ManagementCapability } from "@/lib/protocols/negotiator";
 
 // ---------------------------------------------------------------------------
@@ -63,6 +63,16 @@ export interface AdapterToolSkill {
   defaultConfig?: Record<string, unknown>;
   /** Formal LLM tool-call contract for this skill */
   toolCall?: AdapterLlmToolCall;
+  /** Optional execution defaults for generic chat tool runtime */
+  execution?: {
+    kind?: OperationKind;
+    mode?: OperationMode;
+    adapterId?: string;
+    timeoutMs?: number;
+    expectedSemanticTarget?: string;
+    commandTemplate?: string;
+    commandTemplates?: Partial<Record<OperationKind, string>>;
+  };
   /** Optional relative path to Markdown guidance (e.g. skills/my-tool.md) */
   skillMdPath?: string;
   /** Hydrated Markdown attachment (runtime/API only) */

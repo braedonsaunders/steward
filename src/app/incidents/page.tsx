@@ -4,7 +4,6 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
-  Clock,
   Filter,
   Info,
   Search,
@@ -19,6 +18,14 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import {
   Tabs,
   TabsContent,
@@ -101,60 +108,7 @@ function sortIncidents(incidents: Incident[]): Incident[] {
   });
 }
 
-function IncidentCard({ incident }: { incident: Incident }) {
-  return (
-    <Link href={`/incidents/${incident.id}`}>
-      <Card className="bg-card/85 transition-colors hover:bg-muted/50 cursor-pointer">
-        <CardContent className="p-4">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex items-start gap-3 min-w-0">
-              <div className="mt-0.5 shrink-0">{severityIcon(incident.severity)}</div>
-              <div className="min-w-0 space-y-1">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h3 className="text-sm font-medium leading-tight">
-                    {incident.title}
-                  </h3>
-                  <Badge
-                    variant={severityBadgeVariant(incident.severity)}
-                    className="text-[10px] uppercase"
-                  >
-                    {incident.severity}
-                  </Badge>
-                </div>
-                <p className="text-sm text-muted-foreground line-clamp-2">
-                  {incident.summary}
-                </p>
-                <div className="flex items-center gap-3 pt-1 flex-wrap">
-                  <Badge
-                    variant={statusBadgeVariant(incident.status)}
-                    className="text-[10px] capitalize"
-                  >
-                    {incident.status.replace("_", " ")}
-                  </Badge>
-                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                    <AlertTriangle className="size-3" />
-                    {incident.deviceIds.length} device{incident.deviceIds.length !== 1 ? "s" : ""}
-                  </span>
-                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                    <Clock className="size-3" />
-                    {formatTimeSince(incident.detectedAt)}
-                  </span>
-                  {incident.autoRemediated && (
-                    <Badge variant="outline" className="text-[10px] text-emerald-500 border-emerald-500/30">
-                      Auto-remediated
-                    </Badge>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-    </Link>
-  );
-}
-
-function IncidentList({
+function IncidentTable({
   incidents,
   emptyMessage,
 }: {
@@ -176,10 +130,68 @@ function IncidentList({
   }
 
   return (
-    <div className="space-y-3">
-      {incidents.map((incident) => (
-        <IncidentCard key={incident.id} incident={incident} />
-      ))}
+    <div className="min-h-0 overflow-auto rounded-lg border bg-card/85">
+      <Table className="table-fixed">
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-[110px]">Severity</TableHead>
+            <TableHead>Incident</TableHead>
+            <TableHead className="w-[120px]">Status</TableHead>
+            <TableHead className="w-[90px]">Devices</TableHead>
+            <TableHead className="w-[110px]">Detected</TableHead>
+            <TableHead className="hidden w-[130px] md:table-cell">Remediation</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {incidents.map((incident) => (
+            <TableRow key={incident.id} className="h-12">
+              <TableCell>
+                <Badge
+                  variant={severityBadgeVariant(incident.severity)}
+                  className="inline-flex items-center gap-1 text-[10px] uppercase"
+                >
+                  {severityIcon(incident.severity)}
+                  {incident.severity}
+                </Badge>
+              </TableCell>
+              <TableCell>
+                <div className="min-w-0">
+                  <Link
+                    href={`/incidents/${incident.id}`}
+                    className="truncate text-sm font-medium hover:underline"
+                  >
+                    {incident.title}
+                  </Link>
+                  <p className="truncate text-xs text-muted-foreground">{incident.summary}</p>
+                </div>
+              </TableCell>
+              <TableCell>
+                <Badge
+                  variant={statusBadgeVariant(incident.status)}
+                  className="text-[10px] capitalize"
+                >
+                  {incident.status.replace("_", " ")}
+                </Badge>
+              </TableCell>
+              <TableCell className="text-sm tabular-nums">
+                {incident.deviceIds.length}
+              </TableCell>
+              <TableCell className="text-xs text-muted-foreground">
+                {formatTimeSince(incident.detectedAt)}
+              </TableCell>
+              <TableCell className="hidden md:table-cell">
+                {incident.autoRemediated ? (
+                  <Badge variant="outline" className="border-emerald-500/30 text-[10px] text-emerald-500">
+                    Auto-remediated
+                  </Badge>
+                ) : (
+                  <span className="text-xs text-muted-foreground">Manual</span>
+                )}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
     </div>
   );
 }
@@ -381,7 +393,7 @@ export default function IncidentsPage() {
         </TabsList>
 
         <TabsContent value="all" className="mt-4 min-h-0 flex-1 overflow-auto">
-          <IncidentList
+          <IncidentTable
             incidents={pagedIncidents}
             emptyMessage={
               incidents.length === 0
@@ -391,19 +403,19 @@ export default function IncidentsPage() {
           />
         </TabsContent>
         <TabsContent value="critical" className="mt-4 min-h-0 flex-1 overflow-auto">
-          <IncidentList
+          <IncidentTable
             incidents={pagedIncidents}
             emptyMessage="No critical incidents match the current filters."
           />
         </TabsContent>
         <TabsContent value="warning" className="mt-4 min-h-0 flex-1 overflow-auto">
-          <IncidentList
+          <IncidentTable
             incidents={pagedIncidents}
             emptyMessage="No warning incidents match the current filters."
           />
         </TabsContent>
         <TabsContent value="info" className="mt-4 min-h-0 flex-1 overflow-auto">
-          <IncidentList
+          <IncidentTable
             incidents={pagedIncidents}
             emptyMessage="No informational incidents match the current filters."
           />

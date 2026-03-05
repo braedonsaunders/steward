@@ -1,9 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { motion, useReducedMotion } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { quickSpring } from "@/lib/motion";
 
 interface CardProps
   extends Omit<
@@ -20,25 +18,14 @@ interface CardProps
 
 const Card = React.forwardRef<HTMLDivElement, CardProps>(
   ({ className, interactive = true, ...props }, ref) => {
-    const reduceMotion = useReducedMotion();
-
     return (
-      <motion.div
+      <div
         ref={ref}
         className={cn(
-          "rounded-xl border bg-card text-card-foreground shadow-sm transition-[transform,border-color,box-shadow]",
+          "rounded-xl border bg-card text-card-foreground shadow-sm transition-colors",
+          interactive ? "hover:border-ring" : "",
           className,
         )}
-        whileHover={
-          reduceMotion || !interactive
-            ? undefined
-            : {
-                y: -2,
-                scale: 1.002,
-                borderColor: "var(--ring)",
-              }
-        }
-        transition={quickSpring}
         {...props}
       />
     );

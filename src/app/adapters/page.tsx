@@ -65,6 +65,18 @@ const STATUS_CONFIG = {
   disabled: { icon: Power, label: "Disabled", color: "text-muted-foreground" },
 } as const;
 
+const TOOL_OPERATION_KIND_OPTIONS = [
+  "shell.command",
+  "service.restart",
+  "service.stop",
+  "container.restart",
+  "container.stop",
+  "http.request",
+  "cert.renew",
+  "file.copy",
+  "network.config",
+] as const;
+
 function parseJsonValue(raw: string): unknown {
   try {
     return JSON.parse(raw);
@@ -107,6 +119,12 @@ const DEFAULT_MANIFEST_TEMPLATE: Record<string, unknown> = {
           required: ["device_id"],
           additionalProperties: true,
         },
+      },
+      execution: {
+        kind: "shell.command",
+        mode: "read",
+        adapterId: "ssh",
+        commandTemplate: "ssh {{host}} 'uname -a; uptime'",
       },
       skillMdPath: "skills/skill.custom.example.md",
     },
@@ -232,6 +250,89 @@ export default function AdaptersPage() {
         },
       };
       setRawToolConfig(stringifyConfig(next));
+      return next;
+    });
+  };
+
+  const updateToolConfig = (
+    skillId: string,
+    updater: (current: Record<string, unknown>) => Record<string, unknown>,
+  ) => {
+    setDraftToolConfig((prev) => {
+      const current = prev[skillId] ?? {};
+      const nextSkillConfig = updater(current);
+      const next = {
+        ...prev,
+        [skillId]: nextSkillConfig,
+      };
+      setRawToolConfig(stringifyConfig(next));
+      return next;
+    });
+  };
+
+  const updateToolExecutionField = (
+    skillId: string,
+    key: string,
+    value: unknown,
+  ) => {
+    updateToolConfig(skillId, (current) => {
+      const baseExecution = current.execution && typeof current.execution === "object" && !Array.isArray(current.execution)
+        ? { ...(current.execution as Record<string, unknown>) }
+        : {};
+
+      if (value === undefined || value === "") {
+        delete baseExecution[key];
+      } else {
+        baseExecution[key] = value;
+      }
+
+      const next = { ...current };
+      if (Object.keys(baseExecution).length === 0) {
+        delete next.execution;
+      } else {
+        next.execution = baseExecution;
+      }
+
+      return next;
+    });
+  };
+
+  const updateToolExecutionTemplate = (
+    skillId: string,
+    kind: string,
+    value: string,
+  ) => {
+    updateToolConfig(skillId, (current) => {
+      const execution = current.execution && typeof current.execution === "object" && !Array.isArray(current.execution)
+        ? { ...(current.execution as Record<string, unknown>) }
+        : {};
+
+      const templates = execution.commandTemplates
+        && typeof execution.commandTemplates === "object"
+        && !Array.isArray(execution.commandTemplates)
+        ? { ...(execution.commandTemplates as Record<string, unknown>) }
+        : {};
+
+      const trimmed = value.trim();
+      if (!trimmed) {
+        delete templates[kind];
+      } else {
+        templates[kind] = value;
+      }
+
+      if (Object.keys(templates).length === 0) {
+        delete execution.commandTemplates;
+      } else {
+        execution.commandTemplates = templates;
+      }
+
+      const next = { ...current };
+      if (Object.keys(execution).length === 0) {
+        delete next.execution;
+      } else {
+        next.execution = execution;
+      }
+
       return next;
     });
   };
@@ -824,6 +925,22 @@ export default function AdaptersPage() {
                   <div className="space-y-2">
                     {activeAdapter.toolSkills.map((skill) => (
                       <div key={skill.id} className="rounded-md border p-3">
+                        {(() => {
+                          const effectiveEnabled = typeof draftToolConfig[skill.id]?.enabled === "boolean"
+                            ? Boolean(draftToolConfig[skill.id]?.enabled)
+                            : (skill.enabledByDefault ?? true);
+                          const runtimeConfig = draftToolConfig[skill.id] ?? { enabled: effectiveEnabled };
+                          const execution = runtimeConfig.execution && typeof runtimeConfig.execution === "object" && !Array.isArray(runtimeConfig.execution)
+                            ? (runtimeConfig.execution as Record<string, unknown>)
+                            : {};
+                          const commandTemplates = execution.commandTemplates
+                            && typeof execution.commandTemplates === "object"
+                            && !Array.isArray(execution.commandTemplates)
+                            ? (execution.commandTemplates as Record<string, unknown>)
+                            : {};
+
+                          return (
+                            <>
                         <div className="flex items-center justify-between gap-2">
                           <div className="space-y-1">
                             <p className="text-xs font-medium">{skill.name}</p>
@@ -832,11 +949,7 @@ export default function AdaptersPage() {
                           <div className="flex items-center gap-2">
                             {skill.category && <Badge variant="outline" className="text-[10px]">{skill.category}</Badge>}
                             <Switch
-                              checked={
-                                typeof draftToolConfig[skill.id]?.enabled === "boolean"
-                                  ? Boolean(draftToolConfig[skill.id]?.enabled)
-                                  : (skill.enabledByDefault ?? true)
-                              }
+                              checked={effectiveEnabled}
                               onCheckedChange={(checked) => updateToolEnabled(skill.id, checked)}
                             />
                           </div>
@@ -857,12 +970,125 @@ export default function AdaptersPage() {
                             Skill markdown: <code>{skill.skillMdPath}</code>
                           </p>
                         )}
+
+                        <div className="mt-3 rounded-md border bg-muted/25 p-2.5">
+                          <p className="text-[11px] font-medium">Execution Defaults</p>
+                          <p className="text-[10px] text-muted-foreground">
+                            Configure how this tool skill executes in chat for custom and imported adapters.
+                          </p>
+
+                          <div className="mt-2 grid gap-2 md:grid-cols-2">
+                            <div className="space-y-1.5">
+                              <Label className="text-[10px]">Operation Kind</Label>
+                              <Select
+                                value={typeof execution.kind === "string" ? execution.kind : "__auto__"}
+                                onValueChange={(value) => updateToolExecutionField(skill.id, "kind", value === "__auto__" ? undefined : value)}
+                              >
+                                <SelectTrigger className="h-8 text-xs">
+                                  <SelectValue placeholder="Auto" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="__auto__">Auto</SelectItem>
+                                  {TOOL_OPERATION_KIND_OPTIONS.map((kind) => (
+                                    <SelectItem key={`${skill.id}:kind:${kind}`} value={kind}>{kind}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <Label className="text-[10px]">Mode</Label>
+                              <Select
+                                value={execution.mode === "read" || execution.mode === "mutate" ? execution.mode : "__auto__"}
+                                onValueChange={(value) => updateToolExecutionField(skill.id, "mode", value === "__auto__" ? undefined : value)}
+                              >
+                                <SelectTrigger className="h-8 text-xs">
+                                  <SelectValue placeholder="Auto" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="__auto__">Auto</SelectItem>
+                                  <SelectItem value="read">read</SelectItem>
+                                  <SelectItem value="mutate">mutate</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <Label className="text-[10px]">Adapter ID Override</Label>
+                              <Input
+                                className="h-8 text-xs"
+                                placeholder="auto"
+                                value={typeof execution.adapterId === "string" ? execution.adapterId : ""}
+                                onChange={(event) => updateToolExecutionField(skill.id, "adapterId", event.target.value || undefined)}
+                              />
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <Label className="text-[10px]">Timeout (ms)</Label>
+                              <Input
+                                className="h-8 text-xs"
+                                type="number"
+                                min={1000}
+                                max={600000}
+                                placeholder="auto"
+                                value={typeof execution.timeoutMs === "number" ? execution.timeoutMs : ""}
+                                onChange={(event) => {
+                                  const raw = event.target.value.trim();
+                                  updateToolExecutionField(skill.id, "timeoutMs", raw ? Number(raw) : undefined);
+                                }}
+                              />
+                            </div>
+
+                            <div className="space-y-1.5 md:col-span-2">
+                              <Label className="text-[10px]">Expected Semantic Target</Label>
+                              <Input
+                                className="h-8 text-xs"
+                                placeholder="skill.custom.example:shell.command"
+                                value={typeof execution.expectedSemanticTarget === "string" ? execution.expectedSemanticTarget : ""}
+                                onChange={(event) => updateToolExecutionField(skill.id, "expectedSemanticTarget", event.target.value || undefined)}
+                              />
+                            </div>
+
+                            <div className="space-y-1.5 md:col-span-2">
+                              <Label className="text-[10px]">Command Template (fallback)</Label>
+                              <Textarea
+                                className="min-h-20 font-mono text-[11px]"
+                                placeholder="ssh {{host}} 'uname -a'"
+                                value={typeof execution.commandTemplate === "string" ? execution.commandTemplate : ""}
+                                onChange={(event) => updateToolExecutionField(skill.id, "commandTemplate", event.target.value || undefined)}
+                              />
+                            </div>
+                          </div>
+
+                          {Array.isArray(skill.operationKinds) && skill.operationKinds.length > 0 && (
+                            <div className="mt-3 space-y-1.5">
+                              <Label className="text-[10px]">Per-Operation Templates</Label>
+                              <div className="grid gap-2">
+                                {skill.operationKinds.map((kind) => (
+                                  <div key={`${skill.id}:tmpl:${kind}`} className="space-y-1">
+                                    <Label className="text-[10px] text-muted-foreground">{kind}</Label>
+                                    <Textarea
+                                      className="min-h-16 font-mono text-[11px]"
+                                      placeholder={`Template for ${kind}`}
+                                      value={typeof commandTemplates[kind] === "string" ? String(commandTemplates[kind]) : ""}
+                                      onChange={(event) => updateToolExecutionTemplate(skill.id, kind, event.target.value)}
+                                    />
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
                         <div className="mt-2 rounded bg-muted/40 p-2 text-[11px]">
                           <p className="font-medium">Runtime tool config</p>
                           <pre className="mt-1 overflow-x-auto whitespace-pre-wrap text-[10px] text-muted-foreground">
-                            {JSON.stringify(draftToolConfig[skill.id] ?? { enabled: skill.enabledByDefault ?? true }, null, 2)}
+                            {JSON.stringify(runtimeConfig, null, 2)}
                           </pre>
                         </div>
+                            </>
+                          );
+                        })()}
                       </div>
                     ))}
                   </div>

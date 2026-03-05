@@ -412,7 +412,10 @@ async function fetchUpnpDescription(url: string, timeoutMs = 3000): Promise<Upnp
       res.setEncoding("utf-8");
       res.on("data", (chunk: string) => {
         body += chunk;
-        if (body.length > 16384) res.destroy();
+        if (body.length > 16384) {
+          settle(undefined);
+          res.destroy();
+        }
       });
       res.on("end", () => {
         const extract = (tag: string): string | undefined => {
@@ -428,9 +431,11 @@ async function fetchUpnpDescription(url: string, timeoutMs = 3000): Promise<Upnp
         });
       });
       res.on("error", () => settle(undefined));
+      res.on("close", () => settle(undefined));
     });
     req.on("error", () => settle(undefined));
     req.on("timeout", () => { req.destroy(); settle(undefined); });
+    req.on("close", () => settle(undefined));
   });
 }
 

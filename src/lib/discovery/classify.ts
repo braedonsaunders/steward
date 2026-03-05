@@ -696,7 +696,27 @@ export function classifyDevice(candidate: DiscoveryCandidate): ClassificationRes
     }
   }
 
-  return { type: bestType, confidence, os, signals };
+  let finalType = bestType;
+
+  const printerScore = scores.get("printer") ?? 0;
+  const serverScore = scores.get("server") ?? 0;
+  const containerHostScore = scores.get("container-host") ?? 0;
+  const linuxLike = typeof os === "string" && /(ubuntu|debian|linux|unix|centos|rhel)/i.test(os);
+  const hasSsh = ports.includes(22);
+  const hasWeb = ports.includes(80) || ports.includes(443);
+  const printerOnlyEvidence = !hasSsh && !ports.includes(3306) && !ports.includes(5432);
+
+  if (bestType === "printer" && linuxLike && hasSsh && hasWeb && !printerOnlyEvidence) {
+    finalType = containerHostScore >= serverScore && containerHostScore >= 35
+      ? "container-host"
+      : "server";
+  }
+
+  if (bestType === "printer" && serverScore >= printerScore * 0.9 && hasSsh) {
+    finalType = "server";
+  }
+
+  return { type: finalType, confidence, os, signals };
 }
 
 /* ---------- Protocol Inference ---------- */

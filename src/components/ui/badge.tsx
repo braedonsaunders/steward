@@ -2,9 +2,7 @@
 
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
-import { motion, useReducedMotion } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { quickSpring } from "@/lib/motion";
 
 const badgeVariants = cva(
   "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors",
@@ -26,23 +24,11 @@ const badgeVariants = cva(
 );
 
 export interface BadgeProps
-  extends React.HTMLAttributes<HTMLDivElement>,
+  extends React.HTMLAttributes<HTMLSpanElement>,
     VariantProps<typeof badgeVariants> {}
 
 function Badge({ className, variant, ...props }: BadgeProps) {
-  const reduceMotion = useReducedMotion();
-
-  return (
-    <motion.div
-      layout
-      initial={reduceMotion ? undefined : { opacity: 0, scale: 0.9, y: 3 }}
-      animate={reduceMotion ? undefined : { opacity: 1, scale: 1, y: 0 }}
-      transition={quickSpring}
-      className="inline-flex"
-    >
-      <div className={cn(badgeVariants({ variant }), className)} {...props} />
-    </motion.div>
-  );
+  return <span className={cn(badgeVariants({ variant }), className)} {...props} />;
 }
 
 export { Badge, badgeVariants };

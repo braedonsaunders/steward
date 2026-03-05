@@ -194,7 +194,9 @@ function toQuestions(value: unknown): OnboardingQuestionDraft[] {
 
 function fallbackProfile(device: Device): DeviceAdoptionProfile {
   const credentialIntents: DeviceCredentialIntent[] = [];
-  const askQuestionForServices = device.services.length > 0;
+  const existingContractsRaw = Number((device.metadata.adoption as Record<string, unknown> | undefined)?.serviceContractCount ?? 0);
+  const existingContracts = Number.isFinite(existingContractsRaw) ? Math.max(0, Math.floor(existingContractsRaw)) : 0;
+  const askQuestionForServices = device.services.length > 0 && existingContracts === 0;
 
   if (device.protocols.includes("ssh")) {
     credentialIntents.push({ protocol: "ssh", reason: "Remote shell management and diagnostics", priority: "high" });
@@ -226,13 +228,14 @@ function fallbackProfile(device: Device): DeviceAdoptionProfile {
 
   const questions: OnboardingQuestionDraft[] = [];
   if (askQuestionForServices) {
+    const discoveredServicesLabel = device.services
+      .slice(0, 8)
+      .map((service) => `${service.name}:${service.port}`)
+      .join(", ");
     questions.push({
       questionKey: "critical_services_confirm",
-      prompt: "Which of these discovered services must Steward keep running and monitor closely?",
-      options: device.services.slice(0, 8).map((service) => ({
-        label: `${service.name}:${service.port}`,
-        value: `${service.transport}:${service.port}`,
-      })),
+      prompt: `List every service Steward must keep running and monitor closely (comma-separated). Discovered: ${discoveredServicesLabel || "none"}. Include any app services that discovery missed (for example: nginx, php-fpm, laravel-worker, mysql).`,
+      options: [],
       required: true,
     });
   } else {
@@ -260,8 +263,15 @@ function fallbackProfile(device: Device): DeviceAdoptionProfile {
     });
   }
 
+  questions.push({
+    questionKey: "manual_service_contracts",
+    prompt: "Any additional service contracts to add manually? Provide comma-separated service names and optional ports (example: laravel-api:443, queue-worker, scheduler).",
+    options: [],
+    required: false,
+  });
+
   return {
-    summary: `Steward onboarded ${device.name} as ${device.type} and prepared management intents.`,
+    summary: `Steward onboarded ${device.name} and prepared management intents.`,
     role: device.role,
     confidence: 0.55,
     criticalServices,
@@ -304,6 +314,7 @@ export async function generateDeviceAdoptionProfile(
   device: Device,
   context: {
     adapterIds: string[];
+    existingServiceContractsCount?: number;
   },
 ): Promise<DeviceAdoptionProfile> {
   let providerForHealth = "default";
@@ -336,6 +347,7 @@ export async function generateDeviceAdoptionProfile(
         fingerprint: device.metadata.fingerprint,
       },
       availableAdapters: context.adapterIds,
+      existingServiceContractsCount: context.existingServiceContractsCount ?? 0,
     });
 
     const firewall = applyPromptFirewall(telemetry);
@@ -353,10 +365,12 @@ export async function generateDeviceAdoptionProfile(
         "credentialIntents (array of {protocol, reason, priority}),",
         "adapterCandidates (array of {adapterId, protocol, score, reason}),",
         "questions (array of {questionKey, prompt, options:[{label,value}], required:boolean}).",
-        "Rules:",
-        "- Ask questions only when evidence is ambiguous.",
-        "- Keep questions under 8 total.",
-        "- Use only these protocols: ssh, winrm, snmp, http-api, docker, kubernetes, mqtt, rtsp, printing.",
+         "Rules:",
+         "- Ask questions only when evidence is ambiguous.",
+         "- Keep questions under 8 total.",
+         "- For questionKey 'critical_services_confirm', do NOT provide options. Ask for a comma-separated free-text list so user can include undiscovered services.",
+         "- If existingServiceContractsCount > 0, do not require critical_services_confirm again unless telemetry clearly conflicts.",
+         "- Use only these protocols: ssh, winrm, snmp, http-api, docker, kubernetes, mqtt, rtsp, printing.",
         `Known adapter ids: ${context.adapterIds.join(", ") || "none"}`,
         firewall.tainted
           ? `Telemetry was sanitized by prompt firewall. Reasons: ${firewall.reasons.join(", ")}`
@@ -374,8 +388,24 @@ export async function generateDeviceAdoptionProfile(
     }
 
     const profile = parseProfile(parsed, device);
+    const normalizedQuestions = profile.questions.map((question) => {
+      if (question.questionKey !== "critical_services_confirm") {
+        return question;
+      }
+      return {
+        ...question,
+        options: [],
+      };
+    }).filter((question) => {
+      if (question.questionKey !== "critical_services_confirm") {
+        return true;
+      }
+      return (context.existingServiceContractsCount ?? 0) === 0;
+    });
+
     return {
       ...profile,
+      questions: normalizedQuestions,
       credentialIntents: profile.credentialIntents.length > 0
         ? profile.credentialIntents
         : fallbackProfile(device).credentialIntents,

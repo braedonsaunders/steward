@@ -55,6 +55,25 @@ const ManifestSchema = z.object({
         description: z.string().min(1),
         parameters: z.record(z.string(), z.unknown()),
       }).optional(),
+      execution: z.object({
+        kind: z.enum([
+          "shell.command",
+          "service.restart",
+          "service.stop",
+          "container.restart",
+          "container.stop",
+          "http.request",
+          "cert.renew",
+          "file.copy",
+          "network.config",
+        ]).optional(),
+        mode: z.enum(["read", "mutate"]).optional(),
+        adapterId: z.string().min(1).optional(),
+        timeoutMs: z.number().int().min(1000).max(600000).optional(),
+        expectedSemanticTarget: z.string().min(1).optional(),
+        commandTemplate: z.string().min(1).optional(),
+        commandTemplates: z.record(z.string(), z.string()).optional(),
+      }).optional(),
       skillMdPath: z.string().min(1).optional(),
       operationKinds: z.array(
         z.enum([

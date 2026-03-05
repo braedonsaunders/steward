@@ -28,22 +28,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -54,11 +38,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { DeviceOnboardingPanel } from "@/components/device-onboarding-panel";
+import { DeviceContractsPanel } from "@/components/device-contracts-panel";
+import { DeviceCredentialsPanel } from "@/components/device-credentials-panel";
+import { DeviceSettingsPanel } from "@/components/device-settings-panel";
 import { useSteward } from "@/lib/hooks/use-steward";
-import { getDeviceAdoptionStatus, type DeviceAdoptionStatus } from "@/lib/state/device-adoption";
+import { getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
 import type { DeviceStatus, IncidentSeverity, RecommendationPriority } from "@/lib/state/types";
 import { cn } from "@/lib/utils";
+import { withClientApiToken } from "@/lib/auth/client-token";
 
 function statusDotColor(status: DeviceStatus): string {
   switch (status) {
@@ -173,16 +160,13 @@ export default function DeviceDetailPage() {
     playbookRuns,
     graphEdges,
     graphNodes,
-    setDeviceAdoptionStatus,
-    renameDevice,
     loading,
     error,
   } = useSteward();
-  const [adoptionSaving, setAdoptionSaving] = useState(false);
-  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
-  const [renameSaving, setRenameSaving] = useState(false);
-  const [renameValue, setRenameValue] = useState("");
   const [activeTab, setActiveTab] = useState("overview");
+  const [startingOnboarding, setStartingOnboarding] = useState(false);
+  const [chatSessionRefreshToken, setChatSessionRefreshToken] = useState(0);
+  const [preferredChatSessionId, setPreferredChatSessionId] = useState<string | undefined>(undefined);
 
   const device = useMemo(
     () => devices.find((d) => d.id === deviceId),
@@ -278,6 +262,26 @@ export default function DeviceDetailPage() {
   }
 
   const adoptionStatus = getDeviceAdoptionStatus(device);
+  const adoptionMeta = asRecord(device.metadata.adoption) ?? {};
+  const onboardingRunStatus = typeof adoptionMeta.runStatus === "string"
+    ? adoptionMeta.runStatus
+    : undefined;
+  const needsOnboardingNudge = adoptionStatus === "adopted" && onboardingRunStatus !== "completed";
+  const startOnboardingFromNudge = async () => {
+    if (!device || startingOnboarding) return;
+    setStartingOnboarding(true);
+    try {
+      const res = await fetch(`/api/devices/${device.id}/onboarding/session`, withClientApiToken({ method: "POST" }));
+      const data = (await res.json()) as { session?: { id?: string } | null };
+      if (data.session?.id) {
+        setPreferredChatSessionId(data.session.id);
+      }
+      setChatSessionRefreshToken((prev) => prev + 1);
+      setActiveTab("chat");
+    } finally {
+      setStartingOnboarding(false);
+    }
+  };
   const discoveryMeta = asRecord(device.metadata.discovery) ?? {};
   const discoveryConfidenceRaw = Number(discoveryMeta.confidence ?? 0);
   const discoveryConfidence = Number.isFinite(discoveryConfidenceRaw) ? discoveryConfidenceRaw : 0;
@@ -369,41 +373,9 @@ export default function DeviceDetailPage() {
     : undefined;
   const visibleEvidenceTypes = discoveryEvidenceTypes.slice(0, 6);
   const visibleSourceCounts = discoverySourceCounts.slice(0, 4);
-  const visibleRecommendations = relatedRecommendations.slice(0, 4);
-  const hiddenRecommendationCount = Math.max(0, relatedRecommendations.length - visibleRecommendations.length);
+  const visibleRecommendations = relatedRecommendations.filter((recommendation) => !recommendation.dismissed);
   const visibleClassificationSignals = topClassificationSignals.slice(0, 3);
   const visibleProtocols = device.protocols.slice(0, 8);
-
-  const updateAdoption = async (status: DeviceAdoptionStatus) => {
-    setAdoptionSaving(true);
-    try {
-      await setDeviceAdoptionStatus(device.id, status);
-    } finally {
-      setAdoptionSaving(false);
-    }
-  };
-
-  const openRenameDialog = () => {
-    setRenameValue(device.name);
-    setRenameDialogOpen(true);
-  };
-
-  const handleRenameDevice = async () => {
-    const nextName = renameValue.trim();
-    if (!nextName) return;
-    if (nextName === device.name) {
-      setRenameDialogOpen(false);
-      return;
-    }
-
-    setRenameSaving(true);
-    try {
-      await renameDevice(device.id, nextName);
-      setRenameDialogOpen(false);
-    } finally {
-      setRenameSaving(false);
-    }
-  };
 
   return (
     <main className="flex h-full min-h-0 flex-col gap-4">
@@ -448,77 +420,6 @@ export default function DeviceDetailPage() {
             </div>
           </div>
           <div className="flex items-end gap-2 sm:flex-col sm:text-right">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button type="button" size="sm" variant="outline" disabled={adoptionSaving}>
-                  Actions
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-52">
-                <DropdownMenuItem
-                  disabled={adoptionSaving || renameSaving || adoptionStatus !== "adopted"}
-                  onClick={openRenameDialog}
-                >
-                  Rename Device
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  disabled={adoptionSaving || adoptionStatus === "adopted"}
-                  onClick={() => void updateAdoption("adopted")}
-                >
-                  Adopt For Management
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  disabled={adoptionSaving || adoptionStatus === "discovered"}
-                  onClick={() => void updateAdoption("discovered")}
-                >
-                  Keep As Discovered
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  disabled={adoptionSaving || adoptionStatus === "ignored"}
-                  onClick={() => void updateAdoption("ignored")}
-                >
-                  Ignore Device
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <Dialog open={renameDialogOpen} onOpenChange={setRenameDialogOpen}>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Rename Device</DialogTitle>
-                  <DialogDescription>
-                    Update the managed display name for this adopted device.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="grid gap-2 py-2">
-                  <Label htmlFor="rename-device-name">Device Name</Label>
-                  <Input
-                    id="rename-device-name"
-                    value={renameValue}
-                    onChange={(event) => setRenameValue(event.target.value)}
-                    placeholder="e.g. nas-01"
-                    disabled={renameSaving}
-                    autoFocus
-                  />
-                </div>
-                <DialogFooter>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => setRenameDialogOpen(false)}
-                    disabled={renameSaving}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    type="button"
-                    onClick={() => void handleRenameDevice()}
-                    disabled={renameSaving || renameValue.trim().length === 0}
-                  >
-                    {renameSaving ? "Saving..." : "Save Name"}
-                  </Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
             <div className="text-sm text-muted-foreground">
               <p>First seen: {formatDate(device.firstSeenAt)}</p>
               <p>Last seen: {formatRelative(device.lastSeenAt)}</p>
@@ -526,12 +427,30 @@ export default function DeviceDetailPage() {
           </div>
         </div>
 
+        {needsOnboardingNudge && (
+          <Card className="border-amber-300/60 bg-amber-50/70 dark:border-amber-500/40 dark:bg-amber-950/20">
+            <CardContent className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-medium text-amber-900 dark:text-amber-100">Onboarding pending</p>
+                <p className="text-xs text-amber-800/90 dark:text-amber-200/90">
+                  This device is adopted. Start onboarding from device chat so Steward can explore it and propose contracts.
+                </p>
+              </div>
+              <Button size="sm" onClick={() => void startOnboardingFromNudge()} disabled={startingOnboarding}>
+                {startingOnboarding ? "Starting..." : "Start Onboarding"}
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
       </section>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-1 flex-col">
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="contracts">Contracts</TabsTrigger>
+          <TabsTrigger value="credentials">Credentials</TabsTrigger>
+          <TabsTrigger value="settings">Settings</TabsTrigger>
           <TabsTrigger value="services">Services</TabsTrigger>
           <TabsTrigger value="chat">Chat</TabsTrigger>
           <TabsTrigger value="dependencies">Dependencies</TabsTrigger>
@@ -667,6 +586,42 @@ export default function DeviceDetailPage() {
                   </div>
                 </div>
 
+                <div className="space-y-2 rounded-md border bg-background/55 p-3">
+                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Latest Probe Signals</p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <div className="rounded-md border bg-background/70 p-2.5">
+                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">DNS</p>
+                      <p className="text-xs text-muted-foreground line-clamp-1">{dnsProbeSummary ?? "n/a"}</p>
+                    </div>
+                    <div className="rounded-md border bg-background/70 p-2.5">
+                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">WinRM</p>
+                      <p className="text-xs text-muted-foreground line-clamp-1">{winrmProbeSummary ?? "n/a"}</p>
+                    </div>
+                    <div className="rounded-md border bg-background/70 p-2.5">
+                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">MQTT</p>
+                      <p className="text-xs text-muted-foreground line-clamp-1">{mqttProbeSummary ?? "n/a"}</p>
+                    </div>
+                    {fingerprintSnmpSysName && (
+                      <div className="rounded-md border bg-background/70 p-2.5">
+                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">SNMP sysName</p>
+                        <p className="text-xs text-muted-foreground line-clamp-1">{fingerprintSnmpSysName}</p>
+                      </div>
+                    )}
+                    {fingerprintNetbiosName && (
+                      <div className="rounded-md border bg-background/70 p-2.5">
+                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">NetBIOS</p>
+                        <p className="text-xs text-muted-foreground line-clamp-1">{fingerprintNetbiosName}</p>
+                      </div>
+                    )}
+                    {fingerprintSmbDialect && (
+                      <div className="rounded-md border bg-background/70 p-2.5">
+                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">SMB Dialect</p>
+                        <p className="text-xs text-muted-foreground line-clamp-1">{fingerprintSmbDialect}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
                 {visibleProtocols.length > 0 && (
                   <div className="space-y-1">
                     <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Protocols</p>
@@ -699,41 +654,21 @@ export default function DeviceDetailPage() {
               </CardContent>
             </Card>
 
-            <div className="grid min-h-0 gap-4">
-              <Card className="bg-card/85">
-                <CardHeader className="pb-3">
-                  <div className="flex items-center gap-2">
-                    <Wrench className="size-4 text-muted-foreground" />
-                    <CardTitle className="text-base">Contracts & Onboarding</CardTitle>
-                  </div>
-                  <CardDescription>
-                    Manage endpoint contracts, credentials, monitor expectations, and onboarding state.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="flex flex-wrap gap-2">
-                  <Button size="sm" type="button" onClick={() => setActiveTab("contracts")}>
-                    Open Contracts Tab
-                  </Button>
-                  <Button size="sm" variant="outline" asChild>
-                    <Link href={`/devices/${device.id}/onboarding`}>Open Full-Page View</Link>
-                  </Button>
-                </CardContent>
-              </Card>
-
-              <Card className="overflow-hidden bg-card/85">
+            <div className="min-h-0">
+              <Card className="flex h-full min-h-0 flex-col overflow-hidden bg-card/85">
                 <CardHeader className="pb-3">
                   <div className="flex items-center gap-2">
                     <Lightbulb className="size-4 text-muted-foreground" />
                     <CardTitle className="text-base">Recommendations</CardTitle>
-                    {relatedRecommendations.length > 0 && (
+                    {visibleRecommendations.length > 0 && (
                       <Badge variant="secondary" className="ml-auto tabular-nums">
-                        {relatedRecommendations.length}
+                        {visibleRecommendations.length}
                       </Badge>
                     )}
                   </div>
                   <CardDescription>Highest-impact next actions for this device</CardDescription>
                 </CardHeader>
-                <CardContent>
+                <CardContent className="min-h-0 flex-1 overflow-auto">
                   {visibleRecommendations.length === 0 ? (
                     <div className="flex flex-col items-center gap-2 py-6 text-center">
                       <Lightbulb className="size-8 text-muted-foreground/40" />
@@ -764,53 +699,6 @@ export default function DeviceDetailPage() {
                       ))}
                     </ul>
                   )}
-                  {hiddenRecommendationCount > 0 && (
-                    <p className="mt-2 text-[10px] uppercase tracking-wide text-muted-foreground">
-                      +{hiddenRecommendationCount} more in incidents/history views
-                    </p>
-                  )}
-                </CardContent>
-              </Card>
-
-              <Card className="overflow-hidden bg-card/85">
-                <CardHeader className="pb-3">
-                  <div className="flex items-center gap-2">
-                    <Wrench className="size-4 text-muted-foreground" />
-                    <CardTitle className="text-base">Probe Snapshot</CardTitle>
-                  </div>
-                  <CardDescription>Latest protocol probe outcomes and key banners</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-2 text-xs">
-                  <div className="rounded-md border bg-background/60 p-2.5">
-                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">DNS</p>
-                    <p className="text-muted-foreground line-clamp-1">{dnsProbeSummary ?? "n/a"}</p>
-                  </div>
-                  <div className="rounded-md border bg-background/60 p-2.5">
-                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">WinRM</p>
-                    <p className="text-muted-foreground line-clamp-1">{winrmProbeSummary ?? "n/a"}</p>
-                  </div>
-                  <div className="rounded-md border bg-background/60 p-2.5">
-                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">MQTT</p>
-                    <p className="text-muted-foreground line-clamp-1">{mqttProbeSummary ?? "n/a"}</p>
-                  </div>
-                  {fingerprintSnmpSysName && (
-                    <div className="rounded-md border bg-background/60 p-2.5">
-                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">SNMP sysName</p>
-                      <p className="text-muted-foreground line-clamp-1">{fingerprintSnmpSysName}</p>
-                    </div>
-                  )}
-                  {fingerprintNetbiosName && (
-                    <div className="rounded-md border bg-background/60 p-2.5">
-                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">NetBIOS</p>
-                      <p className="text-muted-foreground line-clamp-1">{fingerprintNetbiosName}</p>
-                    </div>
-                  )}
-                  {fingerprintSmbDialect && (
-                    <div className="rounded-md border bg-background/60 p-2.5">
-                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">SMB Dialect</p>
-                      <p className="text-muted-foreground line-clamp-1">{fingerprintSmbDialect}</p>
-                    </div>
-                  )}
                 </CardContent>
               </Card>
             </div>
@@ -819,7 +707,19 @@ export default function DeviceDetailPage() {
 
         <TabsContent value="contracts" className="mt-4 min-h-0 flex-1 overflow-hidden">
           <div className="h-full min-h-0 overflow-hidden">
-            <DeviceOnboardingPanel deviceId={device.id} className="h-full" />
+            <DeviceContractsPanel deviceId={device.id} className="h-full" />
+          </div>
+        </TabsContent>
+
+        <TabsContent value="credentials" className="mt-4 min-h-0 flex-1 overflow-hidden">
+          <div className="h-full min-h-0 overflow-auto">
+            <DeviceCredentialsPanel deviceId={device.id} className="h-full" />
+          </div>
+        </TabsContent>
+
+        <TabsContent value="settings" className="mt-4 min-h-0 flex-1 overflow-hidden">
+          <div className="h-full min-h-0 overflow-auto">
+            <DeviceSettingsPanel deviceId={device.id} />
           </div>
         </TabsContent>
 
@@ -974,8 +874,13 @@ export default function DeviceDetailPage() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="chat" className="mt-4 min-h-0 flex-1 overflow-hidden">
-          <ChatWorkspace initialDeviceId={device.id} compact respectUrlParams={false} />
+        <TabsContent value="chat" forceMount className="mt-4 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
+          <ChatWorkspace
+            initialDeviceId={device.id}
+            respectUrlParams={false}
+            sessionRefreshToken={chatSessionRefreshToken}
+            preferredSessionId={preferredChatSessionId}
+          />
         </TabsContent>
 
         <TabsContent value="dependencies" className="mt-4 min-h-0 flex-1 overflow-hidden">

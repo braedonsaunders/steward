@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useMemo } from "react";
 import { useParams } from "next/navigation";
 import { ArrowLeft, Server, Wrench } from "lucide-react";
-import { DeviceOnboardingPanel } from "@/components/device-onboarding-panel";
+import { DeviceContractsPanel } from "@/components/device-contracts-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -97,7 +97,7 @@ export default function DeviceOnboardingPage() {
       </section>
 
       <div className="min-h-0 flex-1 overflow-hidden">
-        <DeviceOnboardingPanel deviceId={deviceId} className="h-full" />
+        <DeviceContractsPanel deviceId={deviceId} className="h-full" />
       </div>
     </main>
   );

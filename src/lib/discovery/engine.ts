@@ -53,9 +53,25 @@ const MQTT_PORTS = new Set([1883, 8883]);
 const SMB_PORTS = new Set([445]);
 const NETBIOS_PORTS = new Set([137, 139]);
 
+const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> => {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+};
+
 const reverseHostname = async (ip: string): Promise<string | undefined> => {
   try {
-    const names = await dns.reverse(ip);
+    const names = await withTimeout(dns.reverse(ip), 1_500, [] as string[]);
     const resolved = names.find((value) => value.trim().length > 0);
     if (resolved) {
       return resolved;

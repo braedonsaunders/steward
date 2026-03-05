@@ -1,14 +1,11 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import {
   Server,
   Wifi,
   AlertTriangle,
   Lightbulb,
-  Play,
-  Plus,
   ArrowRight,
   Clock,
   CheckCircle2,
@@ -26,16 +23,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 
@@ -70,31 +57,7 @@ export default function DashboardPage() {
     agentRuns,
     pendingApprovals,
     loading,
-    runAgentCycle,
-    addDevice,
   } = useSteward();
-
-  const [running, setRunning] = useState(false);
-  const [addOpen, setAddOpen] = useState(false);
-  const [newName, setNewName] = useState("");
-  const [newIp, setNewIp] = useState("");
-
-  const handleRunCycle = async () => {
-    setRunning(true);
-    try {
-      await runAgentCycle();
-    } finally {
-      setRunning(false);
-    }
-  };
-
-  const handleAddDevice = async () => {
-    if (!newName || !newIp) return;
-    await addDevice(newName, newIp);
-    setNewName("");
-    setNewIp("");
-    setAddOpen(false);
-  };
 
   const openIncidents = incidents
     .filter((i) => i.status !== "resolved")
@@ -140,51 +103,6 @@ export default function DashboardPage() {
           <p className="text-sm text-muted-foreground">
             Network operations overview
           </p>
-        </div>
-        <div className="flex gap-2">
-          <Dialog open={addOpen} onOpenChange={setAddOpen}>
-            <DialogTrigger asChild>
-              <Button variant="outline" size="sm">
-                <Plus className="mr-1.5 h-3.5 w-3.5" />
-                Add Device
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Add Device</DialogTitle>
-                <DialogDescription>
-                  Register a new device for Steward to manage.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="grid gap-4 py-4">
-                <div className="grid gap-2">
-                  <Label htmlFor="name">Name</Label>
-                  <Input
-                    id="name"
-                    value={newName}
-                    onChange={(e) => setNewName(e.target.value)}
-                    placeholder="e.g., nas-01"
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="ip">IP Address</Label>
-                  <Input
-                    id="ip"
-                    value={newIp}
-                    onChange={(e) => setNewIp(e.target.value)}
-                    placeholder="e.g., 192.168.1.40"
-                  />
-                </div>
-              </div>
-              <Button onClick={handleAddDevice} disabled={!newName || !newIp}>
-                Add Device
-              </Button>
-            </DialogContent>
-          </Dialog>
-          <Button size="sm" onClick={handleRunCycle} disabled={running}>
-            <Play className="mr-1.5 h-3.5 w-3.5" />
-            {running ? "Running..." : "Run Cycle"}
-          </Button>
         </div>
       </div>
 

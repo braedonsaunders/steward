@@ -7,11 +7,30 @@ import { stateStore } from "@/lib/state/store";
 
 export const runtime = "nodejs";
 
+const ADOPTION_RECOMMENDATION_TITLE = /adopt\s+.+\s+for\s+active\s+management/i;
+
 const updateDeviceSchema = z.object({
   name: z.string().trim().min(1).max(128).optional(),
+  type: z.enum([
+    "server",
+    "workstation",
+    "router",
+    "firewall",
+    "switch",
+    "access-point",
+    "camera",
+    "nas",
+    "printer",
+    "iot",
+    "container-host",
+    "hypervisor",
+    "unknown",
+  ]).optional(),
   autonomyTier: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
   tags: z.array(z.string().min(1)).optional(),
   adoptionStatus: z.enum(["discovered", "adopted", "ignored"]).optional(),
+  operatorNotes: z.string().trim().max(4000).nullable().optional(),
+  operatorMemoryJson: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 
 export async function GET(
@@ -113,7 +132,53 @@ export async function PATCH(
 
     if (previousStatus !== "adopted" && payload.data.adoptionStatus === "adopted") {
       updates.adoptionOnboarding = "requested";
+
+      const latestState = await stateStore.getState();
+      const filteredRecommendations = latestState.recommendations.filter((recommendation) => {
+        const matchesDevice = recommendation.relatedDeviceIds.includes(device.id);
+        return !(matchesDevice && ADOPTION_RECOMMENDATION_TITLE.test(recommendation.title));
+      });
+      if (filteredRecommendations.length !== latestState.recommendations.length) {
+        await stateStore.setRecommendations(filteredRecommendations);
+        updates.adoptionRecommendationsRemoved = latestState.recommendations.length - filteredRecommendations.length;
+      }
     }
+  }
+
+  if (payload.data.operatorNotes !== undefined) {
+    const existingNotes =
+      typeof device.metadata.notes === "object" && device.metadata.notes !== null
+        ? (device.metadata.notes as Record<string, unknown>)
+        : {};
+    device.metadata = {
+      ...device.metadata,
+      notes: {
+        ...existingNotes,
+        operatorContext: payload.data.operatorNotes,
+      },
+    };
+    updates.operatorNotes = payload.data.operatorNotes;
+  }
+
+  if (payload.data.operatorMemoryJson !== undefined) {
+    const existingNotes =
+      typeof device.metadata.notes === "object" && device.metadata.notes !== null
+        ? (device.metadata.notes as Record<string, unknown>)
+        : {};
+    device.metadata = {
+      ...device.metadata,
+      notes: {
+        ...existingNotes,
+        structuredContext: payload.data.operatorMemoryJson,
+        structuredContextUpdatedAt: new Date().toISOString(),
+      },
+    };
+    updates.operatorMemoryJson = payload.data.operatorMemoryJson;
+  }
+
+  if (payload.data.type !== undefined) {
+    device.type = payload.data.type;
+    updates.type = payload.data.type;
   }
 
   device.lastChangedAt = new Date().toISOString();

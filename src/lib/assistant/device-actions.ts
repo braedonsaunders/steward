@@ -12,6 +12,7 @@ import {
 } from "@/lib/monitoring/contracts";
 import type {
   Device,
+  DeviceType,
   LLMProvider,
   OperationSpec,
   PlaybookDefinition,
@@ -22,6 +23,27 @@ const monitorIntentPattern = /\b(monitor|watch|track|observe|alert if|keep an ey
 const uiIntentPattern = /\b(ui|gui|desktop|screen|window|rdp|vnc)\b/i;
 const uiCheckPattern = /\b(check|verify|watch|see|inspect)\b/i;
 const adhocTaskPattern = /\b(install|set up|setup|deploy|provision|configure|bootstrap)\b/i;
+const renameIntentPattern = /\b(rename|name\s+this|call\s+it)\b/i;
+const categoryIntentPattern = /\b(category|device\s+type|type\s+to|mark\s+as)\b/i;
+
+const DEVICE_TYPE_MAP: Record<string, DeviceType> = {
+  server: "server",
+  workstation: "workstation",
+  desktop: "workstation",
+  laptop: "workstation",
+  router: "router",
+  firewall: "firewall",
+  switch: "switch",
+  "access-point": "access-point",
+  ap: "access-point",
+  camera: "camera",
+  nas: "nas",
+  printer: "printer",
+  iot: "iot",
+  "container-host": "container-host",
+  hypervisor: "hypervisor",
+  unknown: "unknown",
+};
 
 const AdhocPlanSchema = z.object({
   family: z.string().min(1).max(80),
@@ -60,6 +82,89 @@ function looksLikeMonitorIntent(input: string): boolean {
 
 function looksLikeAdhocTaskIntent(input: string): boolean {
   return adhocTaskPattern.test(input);
+}
+
+function extractSuggestedName(input: string): string | null {
+  const quoted = input.match(/["']([^"']{2,64})["']/);
+  if (quoted?.[1]) {
+    return quoted[1].trim();
+  }
+
+  const direct = input.match(/\b(?:rename|call\s+it|name\s+this(?:\s+device)?)\s+(?:to\s+)?([a-zA-Z0-9._-]{2,64})/i);
+  if (direct?.[1]) {
+    return direct[1].trim();
+  }
+
+  return null;
+}
+
+function extractSuggestedCategory(input: string): DeviceType | null {
+  const normalized = input.toLowerCase();
+  for (const [key, value] of Object.entries(DEVICE_TYPE_MAP)) {
+    if (normalized.includes(key)) {
+      return value;
+    }
+  }
+  return null;
+}
+
+async function handleDeviceSettingsRequest(
+  input: string,
+  device: Device | null,
+  sessionId?: string,
+): Promise<DeviceChatActionResult> {
+  if (!device) {
+    return {
+      handled: true,
+      response: "I can update device settings, but this chat is not attached to a device.",
+      metadata: { action: "device_settings", blocked: "missing_device", sessionId },
+    };
+  }
+
+  const suggestedName = extractSuggestedName(input);
+  const suggestedType = extractSuggestedCategory(input);
+  if (!suggestedName && !suggestedType) {
+    return { handled: false };
+  }
+
+  const updated: Device = {
+    ...device,
+    name: suggestedName ?? device.name,
+    type: suggestedType ?? device.type,
+    lastChangedAt: new Date().toISOString(),
+  };
+  await stateStore.upsertDevice(updated);
+  await stateStore.addAction({
+    actor: "steward",
+    kind: "config",
+    message: `Updated device settings for ${device.name}`,
+    context: {
+      deviceId: device.id,
+      previousName: device.name,
+      nextName: updated.name,
+      previousType: device.type,
+      nextType: updated.type,
+      sessionId: sessionId ?? null,
+    },
+  });
+
+  const changes = [
+    suggestedName && suggestedName !== device.name ? `name -> ${suggestedName}` : null,
+    suggestedType && suggestedType !== device.type ? `category -> ${suggestedType}` : null,
+  ].filter(Boolean);
+
+  return {
+    handled: true,
+    response: changes.length > 0
+      ? `Updated ${device.name}: ${changes.join(", ")}.`
+      : `No settings changes were needed for ${device.name}.`,
+    metadata: {
+      action: "device_settings",
+      deviceId: device.id,
+      changes,
+      sessionId,
+    },
+  };
 }
 
 function extractServiceToken(input: string): string {
@@ -318,9 +423,7 @@ async function handleMonitorRequest(
     },
   });
 
-  const noteSuffix = draft.notes.length > 0
-    ? `\nNotes: ${draft.notes.join(" ")}`
-    : "";
+  const noteSuffix = draft.notes.length > 0 ? `\nNotes: ${draft.notes.join(" ")}` : "";
   const credentialSuffix = missing.length > 0
     ? `\nThis monitor is pending credentials for: ${missing.join(", ")}.`
     : "";
@@ -523,6 +626,13 @@ export async function tryHandleDeviceChatAction(
   const text = input.input.trim();
   if (!text) {
     return { handled: false };
+  }
+
+  if (renameIntentPattern.test(text) || categoryIntentPattern.test(text)) {
+    const settingsResult = await handleDeviceSettingsRequest(text, input.attachedDevice, input.sessionId);
+    if (settingsResult.handled) {
+      return settingsResult;
+    }
   }
 
   if (looksLikeMonitorIntent(text)) {

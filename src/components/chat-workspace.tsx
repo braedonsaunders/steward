@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   Bot,
@@ -36,14 +36,20 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { PROVIDER_REGISTRY } from "@/lib/llm/registry";
-import type { LLMProvider } from "@/lib/state/types";
+import type { Device, LLMProvider } from "@/lib/state/types";
 import { withClientApiToken } from "@/lib/auth/client-token";
+import { getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import remarkBreaks from "remark-breaks";
 
 export interface ChatWorkspaceProps {
   initialDeviceId?: string;
   autostart?: boolean;
   respectUrlParams?: boolean;
   compact?: boolean;
+  sessionRefreshToken?: number;
+  preferredSessionId?: string;
 }
 
 interface ChatSession {
@@ -94,11 +100,115 @@ function relativeDate(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString();
 }
 
+const ChatMessageBubble = memo(function ChatMessageBubble({ msg }: { msg: ChatMessage }) {
+  return (
+    <div
+      className={cn(
+        "flex gap-3",
+        msg.role === "user" ? "flex-row-reverse" : "flex-row",
+      )}
+    >
+      <div
+        className={cn(
+          "flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
+          msg.role === "user"
+            ? "bg-primary text-primary-foreground"
+            : "bg-muted text-muted-foreground",
+        )}
+      >
+        {msg.role === "user" ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
+      </div>
+
+      <div
+        className={cn(
+          "max-w-[80%] rounded-2xl px-4 py-2.5",
+          msg.role === "user"
+            ? "bg-primary text-primary-foreground"
+            : msg.error
+              ? "border border-destructive/30 bg-destructive/10 text-destructive"
+              : "border bg-card text-card-foreground",
+        )}
+      >
+        {msg.role === "assistant" && msg.provider && !msg.error && (
+          <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+            {msg.provider}
+          </p>
+        )}
+        {msg.error && (
+          <p className="mb-1 text-[10px] font-medium uppercase tracking-wider">Error</p>
+        )}
+
+        <div className="text-sm leading-relaxed">
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm, remarkBreaks]}
+            components={{
+              p: ({ children }: { children?: ReactNode }) => <p className="mb-2 last:mb-0">{children}</p>,
+              ul: ({ children }: { children?: ReactNode }) => <ul className="mb-2 list-disc pl-5 last:mb-0">{children}</ul>,
+              ol: ({ children }: { children?: ReactNode }) => <ol className="mb-2 list-decimal pl-5 last:mb-0">{children}</ol>,
+              code: ({ children }: { children?: ReactNode }) => <code className="rounded bg-muted/50 px-1 py-0.5 text-xs">{children}</code>,
+              pre: ({ children }: { children?: ReactNode }) => <pre className="mb-2 overflow-x-auto rounded bg-muted/50 p-2 text-xs">{children}</pre>,
+              table: ({ children }: { children?: ReactNode }) => (
+                <div className="mb-2 w-full overflow-x-auto rounded-md border border-border/70">
+                  <table className="w-full border-collapse text-xs">{children}</table>
+                </div>
+              ),
+              thead: ({ children }: { children?: ReactNode }) => <thead className="bg-muted/40">{children}</thead>,
+              tbody: ({ children }: { children?: ReactNode }) => <tbody>{children}</tbody>,
+              tr: ({ children }: { children?: ReactNode }) => <tr className="border-b border-border/60">{children}</tr>,
+              th: ({ children }: { children?: ReactNode }) => (
+                <th className="border-r border-border/60 px-3 py-2 text-left font-semibold last:border-r-0">{children}</th>
+              ),
+              td: ({ children }: { children?: ReactNode }) => (
+                <td className="border-r border-border/60 px-3 py-2 align-top last:border-r-0">{children}</td>
+              ),
+            }}
+          >
+            {msg.content || (msg.streaming ? "Streaming response..." : "")}
+          </ReactMarkdown>
+          {msg.streaming && (
+            <span className="ml-2 inline-flex items-center gap-1 align-middle text-xs text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              live
+            </span>
+          )}
+        </div>
+        <p
+          className={cn(
+            "mt-1.5 text-[10px]",
+            msg.role === "user"
+              ? "text-primary-foreground/60"
+              : "text-muted-foreground",
+          )}
+        >
+          {formatTime(msg.createdAt)}
+        </p>
+      </div>
+    </div>
+  );
+});
+
+function getDeviceChatBlockReason(
+  device: Device,
+): string | null {
+  const adoptionStatus = getDeviceAdoptionStatus(device);
+  if (adoptionStatus !== "adopted") {
+    return "Adopt this device before using attached chat controls.";
+  }
+
+  return null;
+}
+
+function isOnboardingChatSession(session: ChatSession | undefined): boolean {
+  return Boolean(session?.title?.startsWith("[Onboarding]"));
+}
+
 export function ChatWorkspace({
   initialDeviceId,
   autostart,
   respectUrlParams = true,
   compact = false,
+  sessionRefreshToken,
+  preferredSessionId,
 }: ChatWorkspaceProps = {}) {
   const { devices, providerConfigs, loading: contextLoading } = useSteward();
   const searchParams = useSearchParams();
@@ -115,6 +225,9 @@ export function ChatWorkspace({
   // Chat input
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [sendStartedAt, setSendStartedAt] = useState<number | null>(null);
+  const [sendElapsedSec, setSendElapsedSec] = useState(0);
+  const [stickToBottom, setStickToBottom] = useState(true);
   const [selectedProvider, setSelectedProvider] = useState<LLMProvider>("openai");
 
   // UI
@@ -144,6 +257,19 @@ export function ChatWorkspace({
   const activeSessionDevice = activeSession?.deviceId
     ? deviceById.get(activeSession.deviceId)
     : undefined;
+  const selectedDevice = newChatDeviceId !== "__none__"
+    ? deviceById.get(newChatDeviceId)
+    : undefined;
+  const activeSessionBlockReason = activeSessionDevice
+    ? getDeviceChatBlockReason(activeSessionDevice)
+    : null;
+  const selectedDeviceBlockReason = selectedDevice
+    ? getDeviceChatBlockReason(selectedDevice)
+    : null;
+  const chatBlockReason = activeSessionDevice
+    ? (isOnboardingChatSession(activeSession) ? null : activeSessionBlockReason)
+    : selectedDeviceBlockReason;
+  const blockedDevice = activeSessionDevice ?? selectedDevice;
 
   const groupedSessions = useMemo(() => {
     if (groupBy === "recent") {
@@ -197,8 +323,8 @@ export function ChatWorkspace({
     }
   }, [enabledProviders, selectedProvider]);
 
-  // Load sessions on mount
-  useEffect(() => {
+  const refreshSessions = useCallback(() => {
+    setSessionsLoading(true);
     fetch("/api/chat/sessions", withClientApiToken())
       .then((res) => res.json())
       .then((data: ChatSession[]) => {
@@ -207,6 +333,21 @@ export function ChatWorkspace({
       })
       .catch(() => setSessionsLoading(false));
   }, []);
+
+  // Load sessions on mount
+  useEffect(() => {
+    refreshSessions();
+  }, [refreshSessions]);
+
+  useEffect(() => {
+    if (sessionRefreshToken === undefined) return;
+    refreshSessions();
+  }, [sessionRefreshToken, refreshSessions]);
+
+  useEffect(() => {
+    if (!preferredSessionId) return;
+    setActiveSessionId(preferredSessionId);
+  }, [preferredSessionId]);
 
   // Load messages when active session changes
   useEffect(() => {
@@ -231,10 +372,27 @@ export function ChatWorkspace({
   // Auto-scroll to bottom
   useEffect(() => {
     const el = scrollRef.current;
-    if (el) {
+    if (el && stickToBottom) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [messages, sending]);
+  }, [messages, sending, stickToBottom]);
+
+  useEffect(() => {
+    setStickToBottom(true);
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    if (!sending || !sendStartedAt) {
+      setSendElapsedSec(0);
+      return;
+    }
+
+    setSendElapsedSec(Math.max(0, Math.floor((Date.now() - sendStartedAt) / 1000)));
+    const timer = setInterval(() => {
+      setSendElapsedSec(Math.max(0, Math.floor((Date.now() - sendStartedAt) / 1000)));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [sendStartedAt, sending]);
 
   const createSession = useCallback(async (deviceId?: string) => {
     try {
@@ -269,7 +427,9 @@ export function ChatWorkspace({
     setNewChatDeviceId(requestedDeviceId);
     setGroupBy("device");
 
-    const matchingSession = sessions.find((session) => session.deviceId === requestedDeviceId);
+    const matchingSession = sessions.find(
+      (session) => session.deviceId === requestedDeviceId && isOnboardingChatSession(session),
+    ) ?? sessions.find((session) => session.deviceId === requestedDeviceId);
     if (matchingSession) {
       setActiveSessionId(matchingSession.id);
       return;
@@ -375,7 +535,7 @@ export function ChatWorkspace({
 
   const handleSend = useCallback(async () => {
     const trimmed = input.trim();
-    if (!trimmed || sending || enabledProviders.length === 0) return;
+    if (!trimmed || sending || enabledProviders.length === 0 || chatBlockReason) return;
 
     let sessionId = activeSessionId;
 
@@ -400,7 +560,9 @@ export function ChatWorkspace({
 
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
+    setStickToBottom(true);
     setSending(true);
+    setSendStartedAt(Date.now());
 
     setTimeout(() => textareaRef.current?.focus(), 0);
 
@@ -533,10 +695,12 @@ export function ChatWorkspace({
       );
     } finally {
       setSending(false);
+      setSendStartedAt(null);
     }
   }, [
     activeSessionId,
     createSession,
+    chatBlockReason,
     enabledProviders.length,
     input,
     newChatDeviceId,
@@ -813,7 +977,22 @@ export function ChatWorkspace({
         </div>
 
         {/* Message area */}
-        <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 md:px-6">
+        <div
+          ref={scrollRef}
+          className="flex-1 overflow-y-auto px-4 py-4 md:px-6"
+          onScroll={(event) => {
+            const el = event.currentTarget;
+            const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+            setStickToBottom(distanceFromBottom <= 80);
+          }}
+        >
+          {chatBlockReason && blockedDevice && (
+            <div className="mb-3 rounded-lg border border-amber-200/70 bg-amber-50/80 p-3 text-sm text-amber-900 dark:border-amber-500/40 dark:bg-amber-950/30 dark:text-amber-100">
+              <p className="font-medium">Attached device chat is gated</p>
+              <p className="mt-1 text-xs sm:text-sm">{chatBlockReason}</p>
+            </div>
+          )}
+
           {!activeSessionId && !contextLoading && (
             <div className="flex h-full flex-col items-center justify-center text-center">
               <div className="rounded-full bg-primary/10 p-4">
@@ -861,75 +1040,7 @@ export function ChatWorkspace({
               )}
 
               {messages.map((msg) => (
-                <div
-                  key={msg.id}
-                  className={cn(
-                    "flex gap-3",
-                    msg.role === "user" ? "flex-row-reverse" : "flex-row",
-                  )}
-                >
-                  <div
-                    className={cn(
-                      "flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
-                      msg.role === "user"
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-muted text-muted-foreground",
-                    )}
-                  >
-                    {msg.role === "user" ? (
-                      <User className="h-4 w-4" />
-                    ) : (
-                      <Bot className="h-4 w-4" />
-                    )}
-                  </div>
-
-                  <div
-                    className={cn(
-                      "max-w-[80%] rounded-2xl px-4 py-2.5",
-                      msg.role === "user"
-                        ? "bg-primary text-primary-foreground"
-                        : msg.error
-                          ? "border border-destructive/30 bg-destructive/10 text-destructive"
-                          : "border bg-card text-card-foreground",
-                    )}
-                  >
-                    {msg.role === "assistant" && msg.provider && !msg.error && (
-                      <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                        {msg.provider}
-                      </p>
-                    )}
-                    {msg.error && (
-                      <p className="mb-1 text-[10px] font-medium uppercase tracking-wider">
-                        Error
-                      </p>
-                    )}
-
-                    {!!msg.reasoning && !msg.error && (
-                      <div className="mb-2 rounded-md border border-border/60 bg-muted/40 px-2.5 py-2">
-                        <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                          Thinking
-                        </p>
-                        <p className="whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">
-                          {msg.reasoning}
-                        </p>
-                      </div>
-                    )}
-
-                    <p className="whitespace-pre-wrap text-sm leading-relaxed">
-                      {msg.content || (msg.streaming ? "Thinking..." : "")}
-                    </p>
-                    <p
-                      className={cn(
-                        "mt-1.5 text-[10px]",
-                        msg.role === "user"
-                          ? "text-primary-foreground/60"
-                          : "text-muted-foreground",
-                      )}
-                    >
-                      {formatTime(msg.createdAt)}
-                    </p>
-                  </div>
-                </div>
+                <ChatMessageBubble key={msg.id} msg={msg} />
               ))}
 
             </div>
@@ -947,11 +1058,11 @@ export function ChatWorkspace({
               placeholder="Ask Steward anything about your environment..."
               className="min-h-[44px] max-h-[160px] resize-none"
               rows={1}
-              disabled={sending || enabledProviders.length === 0}
+              disabled={sending || enabledProviders.length === 0 || Boolean(chatBlockReason)}
             />
             <Button
               onClick={() => void handleSend()}
-              disabled={sending || !input.trim() || enabledProviders.length === 0}
+              disabled={sending || !input.trim() || enabledProviders.length === 0 || Boolean(chatBlockReason)}
               size="icon"
               className="h-[44px] w-[44px] shrink-0"
             >
@@ -963,7 +1074,11 @@ export function ChatWorkspace({
             </Button>
           </div>
           <p className="mt-1.5 text-[10px] text-muted-foreground">
-            Press Enter to send, Shift+Enter for new line
+            {sending
+              ? `Streaming live... ${sendElapsedSec}s elapsed`
+              : chatBlockReason
+                ? "Finish onboarding to enable attached chat actions"
+                : "Press Enter to send, Shift+Enter for new line"}
           </p>
         </div>
       </div>

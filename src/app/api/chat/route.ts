@@ -1,16 +1,25 @@
 import { randomUUID } from "node:crypto";
-import { generateText, streamText } from "ai";
+import { generateText, stepCountIs, streamText } from "ai";
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { isAuthorized } from "@/lib/auth/guard";
 import { buildAssistantContext } from "@/lib/assistant/context";
 import { tryHandleDeviceChatAction } from "@/lib/assistant/device-actions";
 import { tryExecuteGraphQuery } from "@/lib/assistant/graph-query";
+import { maybeUpdateOperatorNotes } from "@/lib/assistant/operator-notes";
 import { buildStewardSystemPrompt } from "@/lib/assistant/prompt";
+import { buildAdapterSkillTools } from "@/lib/assistant/tool-skills";
+import { buildOnboardingSystemPrompt, isOnboardingSession } from "@/lib/adoption/conversation";
 import { getDefaultProvider } from "@/lib/llm/config";
 import { buildLanguageModel } from "@/lib/llm/providers";
+import { getAdoptionRecord, getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
 import { stateStore } from "@/lib/state/store";
 import type { LLMProvider } from "@/lib/state/types";
+
+const CHAT_MAX_OUTPUT_TOKENS = 8_000;
+const ONBOARDING_MAX_OUTPUT_TOKENS = 12_000;
+const CHAT_MAX_STEPS = 16;
+const CHAT_MAX_AUTO_CONTINUATIONS = 3;
 
 export const runtime = "nodejs";
 
@@ -32,6 +41,127 @@ function toFriendlyChatError(rawMessage: string, provider: LLMProvider): string 
   return rawMessage;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function ndjsonStreamFromEvents(events: Array<Record<string, unknown>>): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const event of events) {
+        controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+      }
+      controller.close();
+    },
+  });
+  return new Response(stream, {
+    headers: {
+      "content-type": "application/x-ndjson; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+    },
+  });
+}
+
+function validateAttachedDeviceChatReadiness(deviceId: string): { ok: true } | { ok: false; reason: string } {
+  const device = stateStore.getDeviceById(deviceId);
+  if (!device) {
+    return { ok: false, reason: "Attached device no longer exists. Pick a valid device and retry." };
+  }
+
+  const adoptionStatus = getDeviceAdoptionStatus(device);
+  if (adoptionStatus !== "adopted") {
+    return { ok: false, reason: `Adopt ${device.name} before using device-attached chat actions.` };
+  }
+
+  const run = stateStore.getLatestAdoptionRun(device.id);
+  if (!run || run.status !== "completed") {
+    return {
+      ok: false,
+      reason: `Finish onboarding for ${device.name} first so Steward has profile context and credentials.`,
+    };
+  }
+
+  const unresolvedRequired = stateStore
+    .getAdoptionQuestions(device.id, { runId: run.id, unresolvedOnly: true })
+    .filter((question) => question.required)
+    .length;
+  if (unresolvedRequired > 0) {
+    return {
+      ok: false,
+      reason: `Onboarding for ${device.name} still has ${unresolvedRequired} required question(s) pending.`,
+    };
+  }
+
+  const adoption = getAdoptionRecord(device);
+  const requiredProtocols = Array.isArray(adoption.requiredCredentials)
+    ? adoption.requiredCredentials
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .map((value) => value.trim().toLowerCase())
+    : [];
+
+  if (requiredProtocols.length > 0) {
+    const provided = new Set(
+      stateStore.getValidatedCredentialProtocols(device.id).map((value) => value.trim().toLowerCase()),
+    );
+    const missing = Array.from(new Set(requiredProtocols)).filter((protocol) => !provided.has(protocol));
+    if (missing.length > 0) {
+      return {
+        ok: false,
+        reason: `Chat actions for ${device.name} are blocked until credentials are added for: ${missing.join(", ")}.`,
+      };
+    }
+  }
+
+  return { ok: true };
+}
+
+async function autoContinueIfTruncated(args: {
+  model: Awaited<ReturnType<typeof buildLanguageModel>>;
+  systemPrompt: string;
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+  tools: Awaited<ReturnType<typeof buildAdapterSkillTools>>;
+  maxOutputTokens: number;
+  initialText: string;
+  initialFinishReason: unknown;
+}): Promise<{ text: string; truncated: boolean }> {
+  let text = args.initialText;
+  let finishReason = args.initialFinishReason;
+
+  for (let i = 0; i < CHAT_MAX_AUTO_CONTINUATIONS; i++) {
+    if (finishReason !== "length") {
+      return { text, truncated: false };
+    }
+
+    const continuation = await generateText({
+      model: args.model,
+      system: args.systemPrompt,
+      messages: [
+        ...args.messages,
+        { role: "assistant", content: text },
+        {
+          role: "user",
+          content: "Continue exactly where you left off. Do not repeat prior content. Return only the continuation.",
+        },
+      ],
+      tools: args.tools,
+      stopWhen: stepCountIs(CHAT_MAX_STEPS),
+      temperature: 0.2,
+      maxOutputTokens: args.maxOutputTokens,
+    });
+
+    const chunk = continuation.text.trim();
+    if (chunk.length === 0) {
+      return { text, truncated: true };
+    }
+    text += `\n${chunk}`;
+    finishReason = await Promise.resolve((continuation as { finishReason?: unknown }).finishReason);
+  }
+
+  return { text, truncated: finishReason === "length" };
+}
+
 export async function POST(request: NextRequest) {
   if (!isAuthorized(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -46,6 +176,20 @@ export async function POST(request: NextRequest) {
   const sessionId = payload.data.sessionId;
   const session = sessionId ? stateStore.getChatSessionById(sessionId) : null;
   const attachedDevice = session?.deviceId ? stateStore.getDeviceById(session.deviceId) : null;
+  const onboardingSession = isOnboardingSession(session);
+
+  if (session?.deviceId && !onboardingSession) {
+    const readiness = validateAttachedDeviceChatReadiness(session.deviceId);
+    if (!readiness.ok) {
+      if (payload.data.stream) {
+        return ndjsonStreamFromEvents([
+          { type: "start", provider },
+          { type: "error", error: readiness.reason, provider },
+        ]);
+      }
+      return NextResponse.json({ error: readiness.reason }, { status: 409 });
+    }
+  }
 
   // Persist the user message if we have a session
   if (sessionId) {
@@ -60,7 +204,9 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const graphQuery = await tryExecuteGraphQuery(payload.data.input, attachedDevice);
+    const graphQuery = onboardingSession
+      ? { handled: false as const, response: "" }
+      : await tryExecuteGraphQuery(payload.data.input, attachedDevice);
     if (graphQuery.handled && graphQuery.response) {
       if (sessionId) {
         stateStore.addChatMessage({
@@ -84,26 +230,23 @@ export async function POST(request: NextRequest) {
         },
       });
 
+      if (attachedDevice) {
+        await maybeUpdateOperatorNotes({
+          device: attachedDevice,
+          provider,
+          model: payload.data.model,
+          userInput: payload.data.input,
+          assistantOutput: graphQuery.response,
+          sessionId,
+          onboarding: onboardingSession,
+        });
+      }
+
       if (payload.data.stream) {
-        const encoder = new TextEncoder();
-        const stream = new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(encoder.encode(`${JSON.stringify({ type: "start", provider: "graph" })}\n`));
-            controller.enqueue(
-              encoder.encode(
-                `${JSON.stringify({ type: "finish", provider: "graph", text: graphQuery.response, reasoning: "" })}\n`,
-              ),
-            );
-            controller.close();
-          },
-        });
-        return new Response(stream, {
-          headers: {
-            "content-type": "application/x-ndjson; charset=utf-8",
-            "cache-control": "no-cache, no-transform",
-            connection: "keep-alive",
-          },
-        });
+        return ndjsonStreamFromEvents([
+          { type: "start", provider: "graph" },
+          { type: "finish", provider: "graph", text: graphQuery.response, reasoning: "" },
+        ]);
       }
 
       return NextResponse.json({
@@ -112,13 +255,15 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const deviceAction = await tryHandleDeviceChatAction({
-      input: payload.data.input,
-      provider,
-      model: payload.data.model,
-      attachedDevice,
-      sessionId: sessionId ?? undefined,
-    });
+    const deviceAction = onboardingSession
+      ? { handled: false as const, response: "", metadata: {} }
+      : await tryHandleDeviceChatAction({
+        input: payload.data.input,
+        provider,
+        model: payload.data.model,
+        attachedDevice,
+        sessionId: sessionId ?? undefined,
+      });
     if (deviceAction.handled && deviceAction.response) {
       if (sessionId) {
         stateStore.addChatMessage({
@@ -132,26 +277,23 @@ export async function POST(request: NextRequest) {
         });
       }
 
+      if (attachedDevice) {
+        await maybeUpdateOperatorNotes({
+          device: attachedDevice,
+          provider,
+          model: payload.data.model,
+          userInput: payload.data.input,
+          assistantOutput: deviceAction.response,
+          sessionId,
+          onboarding: onboardingSession,
+        });
+      }
+
       if (payload.data.stream) {
-        const encoder = new TextEncoder();
-        const stream = new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(encoder.encode(`${JSON.stringify({ type: "start", provider: "steward-action" })}\n`));
-            controller.enqueue(
-              encoder.encode(
-                `${JSON.stringify({ type: "finish", provider: "steward-action", text: deviceAction.response, reasoning: "" })}\n`,
-              ),
-            );
-            controller.close();
-          },
-        });
-        return new Response(stream, {
-          headers: {
-            "content-type": "application/x-ndjson; charset=utf-8",
-            "cache-control": "no-cache, no-transform",
-            connection: "keep-alive",
-          },
-        });
+        return ndjsonStreamFromEvents([
+          { type: "start", provider: "steward-action" },
+          { type: "finish", provider: "steward-action", text: deviceAction.response, reasoning: "" },
+        ]);
       }
 
       return NextResponse.json({
@@ -163,9 +305,24 @@ export async function POST(request: NextRequest) {
 
     const context = await buildAssistantContext();
     const model = await buildLanguageModel(provider, payload.data.model);
-    const systemPrompt = attachedDevice
-      ? `${buildStewardSystemPrompt(context)}\n\nAttached conversation device:\n- ${attachedDevice.name} (${attachedDevice.ip}) id=${attachedDevice.id} type=${attachedDevice.type} status=${attachedDevice.status}\nPrioritize this device when the user's question is ambiguous.`
-      : buildStewardSystemPrompt(context);
+    const operatorNotes = attachedDevice
+      && typeof attachedDevice.metadata.notes === "object"
+      && attachedDevice.metadata.notes !== null
+      && typeof (attachedDevice.metadata.notes as Record<string, unknown>).operatorContext === "string"
+      ? String((attachedDevice.metadata.notes as Record<string, unknown>).operatorContext)
+      : "";
+    const structuredMemory = attachedDevice
+      && typeof attachedDevice.metadata.notes === "object"
+      && attachedDevice.metadata.notes !== null
+      && typeof (attachedDevice.metadata.notes as Record<string, unknown>).structuredContext === "object"
+      && (attachedDevice.metadata.notes as Record<string, unknown>).structuredContext !== null
+      ? JSON.stringify((attachedDevice.metadata.notes as Record<string, unknown>).structuredContext)
+      : "";
+    const systemPrompt = onboardingSession && attachedDevice
+      ? buildOnboardingSystemPrompt(attachedDevice)
+      : attachedDevice
+        ? `${buildStewardSystemPrompt(context)}\n\nAttached conversation device:\n- ${attachedDevice.name} (${attachedDevice.ip}) id=${attachedDevice.id} type=${attachedDevice.type} status=${attachedDevice.status}${operatorNotes.trim().length > 0 ? `\n- Operator notes: ${operatorNotes}` : ""}${structuredMemory.trim().length > 0 ? `\n- Structured memory: ${structuredMemory}` : ""}\nPrioritize this device when the user's question is ambiguous.`
+        : buildStewardSystemPrompt(context);
 
     // Build conversation history from DB for multi-turn context
     const messages: Array<{ role: "user" | "assistant"; content: string }> = [];
@@ -182,6 +339,14 @@ export async function POST(request: NextRequest) {
     // Add the current user message
     messages.push({ role: "user", content: payload.data.input });
 
+    const tools = await buildAdapterSkillTools({
+      attachedDeviceId: attachedDevice?.id,
+      allowPreOnboardingExecution: onboardingSession,
+    });
+    const maxOutputTokens = onboardingSession
+      ? ONBOARDING_MAX_OUTPUT_TOKENS
+      : CHAT_MAX_OUTPUT_TOKENS;
+
     if (payload.data.stream) {
       const encoder = new TextEncoder();
       let assistantText = "";
@@ -191,8 +356,10 @@ export async function POST(request: NextRequest) {
         model,
         system: systemPrompt,
         messages,
+        tools,
+        stopWhen: stepCountIs(CHAT_MAX_STEPS),
         temperature: 0.2,
-        maxOutputTokens: 600,
+        maxOutputTokens,
       });
 
       const stream = new ReadableStream<Uint8Array>({
@@ -211,11 +378,56 @@ export async function POST(request: NextRequest) {
               } else if (part.type === "reasoning-delta") {
                 reasoningText += part.text;
                 send({ type: "reasoning-delta", text: part.text });
+              } else if (part.type === "tool-call") {
+                const line = `[tool] ${part.toolName} called\n`;
+                reasoningText += line;
+                send({ type: "reasoning-delta", text: line });
+              } else if (part.type === "tool-result") {
+                const summary = isRecord(part.output)
+                  ? String(part.output.error ?? part.output.output ?? "tool execution completed")
+                  : "tool execution completed";
+                const line = `[tool] ${part.toolName}: ${summary}\n`;
+                reasoningText += line;
+                send({ type: "reasoning-delta", text: line });
+              } else if (part.type === "tool-error") {
+                const line = `[tool] ${part.toolName} failed: ${String(part.error)}\n`;
+                reasoningText += line;
+                send({ type: "reasoning-delta", text: line });
+              } else if (part.type === "tool-input-start") {
+                const line = `[tool] running ${part.toolName}...\n`;
+                reasoningText += line;
+                send({ type: "reasoning-delta", text: line });
               }
             }
 
             if (assistantText.trim().length === 0) {
               throw new Error("No output generated. Check the stream for errors.");
+            }
+
+            const finishReasonValue = await Promise.resolve(
+              (result as { finishReason?: unknown }).finishReason,
+            );
+
+            const autoContinued = await autoContinueIfTruncated({
+              model,
+              systemPrompt,
+              messages,
+              tools,
+              maxOutputTokens,
+              initialText: assistantText,
+              initialFinishReason: finishReasonValue,
+            });
+            if (autoContinued.text !== assistantText) {
+              const extra = autoContinued.text.slice(assistantText.length);
+              if (extra.trim().length > 0) {
+                send({ type: "text-delta", text: extra });
+              }
+              assistantText = autoContinued.text;
+            }
+            if (autoContinued.truncated) {
+              const continuationHint = "\n\n_Output truncated by response length. Ask 'continue' and I will pick up exactly where I left off._";
+              assistantText += continuationHint;
+              send({ type: "text-delta", text: continuationHint });
             }
 
             if (sessionId) {
@@ -242,6 +454,18 @@ export async function POST(request: NextRequest) {
                 sessionId,
               },
             });
+
+            if (attachedDevice) {
+              await maybeUpdateOperatorNotes({
+                device: attachedDevice,
+                provider,
+                model: payload.data.model,
+                userInput: payload.data.input,
+                assistantOutput: assistantText,
+                sessionId,
+                onboarding: onboardingSession,
+              });
+            }
 
             send({
               type: "finish",
@@ -286,11 +510,31 @@ export async function POST(request: NextRequest) {
       model,
       system: systemPrompt,
       messages,
+      tools,
+      stopWhen: stepCountIs(CHAT_MAX_STEPS),
       temperature: 0.2,
-      maxOutputTokens: 600,
+      maxOutputTokens,
     });
 
-    if (result.text.trim().length === 0) {
+    const nonStreamFinishReason = await Promise.resolve(
+      (result as { finishReason?: unknown }).finishReason,
+    );
+
+    const autoContinued = await autoContinueIfTruncated({
+      model,
+      systemPrompt,
+      messages,
+      tools,
+      maxOutputTokens,
+      initialText: result.text,
+      initialFinishReason: nonStreamFinishReason,
+    });
+
+    const finalText = autoContinued.truncated
+      ? `${autoContinued.text}\n\n_Output truncated by response length. Ask 'continue' and I will pick up exactly where I left off._`
+      : autoContinued.text;
+
+    if (finalText.trim().length === 0) {
       throw new Error("No output generated. Check the stream for errors.");
     }
 
@@ -300,7 +544,7 @@ export async function POST(request: NextRequest) {
         id: randomUUID(),
         sessionId,
         role: "assistant",
-        content: result.text,
+        content: finalText,
         provider,
         error: false,
         createdAt: new Date().toISOString(),
@@ -318,9 +562,21 @@ export async function POST(request: NextRequest) {
       },
     });
 
+    if (attachedDevice) {
+      await maybeUpdateOperatorNotes({
+        device: attachedDevice,
+        provider,
+        model: payload.data.model,
+        userInput: payload.data.input,
+        assistantOutput: finalText,
+        sessionId,
+        onboarding: onboardingSession,
+      });
+    }
+
     return NextResponse.json({
       provider,
-      response: result.text,
+      response: finalText,
       usage: result.usage,
     });
   } catch (error) {

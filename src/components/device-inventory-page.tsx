@@ -5,8 +5,10 @@ import { useRouter } from "next/navigation";
 import {
   Activity,
   ArrowUpDown,
+  Loader2,
   Monitor,
   Network,
+  Play,
   Plus,
   Search,
   Server,
@@ -207,7 +209,7 @@ export type DeviceInventoryScope = "adopted" | "discovery";
 
 export function DeviceInventoryPage({ scope }: { scope: DeviceInventoryScope }) {
   const router = useRouter();
-  const { devices, loading, error, addDevice, setDeviceAdoptionStatus } = useSteward();
+  const { devices, loading, error, addDevice, runAgentCycle, setDeviceAdoptionStatus } = useSteward();
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -223,6 +225,8 @@ export function DeviceInventoryPage({ scope }: { scope: DeviceInventoryScope }) 
   const [newIp, setNewIp] = useState("");
   const [adding, setAdding] = useState(false);
   const [adoptingIds, setAdoptingIds] = useState<Record<string, boolean>>({});
+  const [runningDiscoveryCycle, setRunningDiscoveryCycle] = useState(false);
+  const [runFeedback, setRunFeedback] = useState<string | null>(null);
   const showDiscoveryManagementFilter = scope === "discovery";
 
   useEffect(() => {
@@ -410,6 +414,30 @@ export function DeviceInventoryPage({ scope }: { scope: DeviceInventoryScope }) 
     }
   };
 
+  const handleRunDiscoveryCycle = async () => {
+    if (runningDiscoveryCycle) {
+      return;
+    }
+    setRunningDiscoveryCycle(true);
+    setRunFeedback(null);
+
+    try {
+      const result = await runAgentCycle();
+      if (result.summary) {
+        const parts = Object.entries(result.summary)
+          .map(([key, value]) => `${key}=${value}`)
+          .join(", ");
+        setRunFeedback(parts ? `Cycle complete: ${parts}` : "Cycle completed.");
+      } else {
+        setRunFeedback(result.started ? "Cycle started. Live updates are streaming." : "Cycle trigger accepted.");
+      }
+    } catch (runError) {
+      setRunFeedback(runError instanceof Error ? runError.message : "Run cycle failed.");
+    } finally {
+      setRunningDiscoveryCycle(false);
+    }
+  };
+
   const SortableHeader = ({
     field,
     children,
@@ -511,52 +539,79 @@ export function DeviceInventoryPage({ scope }: { scope: DeviceInventoryScope }) 
               </p>
             </div>
 
-            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-              <DialogTrigger asChild>
-                <Button>
-                  <Plus className="mr-2 size-4" />
-                  Add Device
+            <div className="flex items-center gap-2">
+              {scope === "discovery" && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => void handleRunDiscoveryCycle()}
+                  disabled={runningDiscoveryCycle}
+                >
+                  {runningDiscoveryCycle ? (
+                    <>
+                      <Loader2 className="mr-2 size-4 animate-spin" />
+                      Running...
+                    </>
+                  ) : (
+                    <>
+                      <Play className="mr-2 size-4" />
+                      Run Cycle
+                    </>
+                  )}
                 </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <form onSubmit={handleAddDevice}>
-                  <DialogHeader>
-                    <DialogTitle>Add Device</DialogTitle>
-                    <DialogDescription>
-                      Manually register a new device on the network.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="grid gap-4 py-4">
-                    <div className="grid gap-2">
-                      <Label htmlFor="device-name">Device Name</Label>
-                      <Input
-                        id="device-name"
-                        placeholder="e.g. core-switch-01"
-                        value={newName}
-                        onChange={(e) => setNewName(e.target.value)}
-                        required
-                      />
+              )}
+
+              <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button>
+                    <Plus className="mr-2 size-4" />
+                    Add Device
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <form onSubmit={handleAddDevice}>
+                    <DialogHeader>
+                      <DialogTitle>Add Device</DialogTitle>
+                      <DialogDescription>
+                        Manually register a new device on the network.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="grid gap-4 py-4">
+                      <div className="grid gap-2">
+                        <Label htmlFor="device-name">Device Name</Label>
+                        <Input
+                          id="device-name"
+                          placeholder="e.g. core-switch-01"
+                          value={newName}
+                          onChange={(e) => setNewName(e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="device-ip">IP Address</Label>
+                        <Input
+                          id="device-ip"
+                          placeholder="e.g. 192.168.1.1"
+                          value={newIp}
+                          onChange={(e) => setNewIp(e.target.value)}
+                          required
+                        />
+                      </div>
                     </div>
-                    <div className="grid gap-2">
-                      <Label htmlFor="device-ip">IP Address</Label>
-                      <Input
-                        id="device-ip"
-                        placeholder="e.g. 192.168.1.1"
-                        value={newIp}
-                        onChange={(e) => setNewIp(e.target.value)}
-                        required
-                      />
-                    </div>
-                  </div>
-                  <DialogFooter>
-                    <Button type="submit" disabled={adding}>
-                      {adding ? "Adding..." : "Add Device"}
-                    </Button>
-                  </DialogFooter>
-                </form>
-              </DialogContent>
-            </Dialog>
+                    <DialogFooter>
+                      <Button type="submit" disabled={adding}>
+                        {adding ? "Adding..." : "Add Device"}
+                      </Button>
+                    </DialogFooter>
+                  </form>
+                </DialogContent>
+              </Dialog>
+            </div>
           </div>
+
+          {scope === "discovery" && runFeedback && (
+            <p className="text-xs text-muted-foreground">{runFeedback}</p>
+          )}
 
           <div className="grid grid-cols-2 gap-2 md:grid-cols-6">
             <div className="rounded-lg border bg-background/70 px-3 py-2">
@@ -700,7 +755,7 @@ export function DeviceInventoryPage({ scope }: { scope: DeviceInventoryScope }) 
               )}
             </div>
           ) : (
-            <div className="min-h-0 flex-1 overflow-hidden">
+            <div className="min-h-0 flex-1 overflow-auto">
               <Table className="table-fixed">
                 <TableHeader>
                   <TableRow>

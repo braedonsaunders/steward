@@ -2299,6 +2299,13 @@ class StateStore {
     });
   }
 
+  deleteDeviceCredential(id: string): boolean {
+    return this.withDbRecovery("StateStore.deleteDeviceCredential", (db) => {
+      const result = db.prepare("DELETE FROM device_credentials WHERE id = ?").run(id);
+      return result.changes > 0;
+    });
+  }
+
   getValidatedCredentialProtocols(deviceId: string): string[] {
     return this.withDbRecovery("StateStore.getValidatedCredentialProtocols", (db) => {
       const rows = db.prepare(`

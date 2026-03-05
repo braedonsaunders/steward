@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { runShell } from "@/lib/utils/shell";
 import { capabilityBroker } from "@/lib/security/capability-broker";
+import { vault } from "@/lib/security/vault";
 import { isLaneAllowed, resolveLaneEnvironment } from "@/lib/execution/lanes";
+import { stateStore } from "@/lib/state/store";
 import type {
   ActionClass,
   Device,
@@ -80,6 +82,81 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function shellEscapeSingleQuoted(value: string): string {
+  return value.replace(/'/g, "'\"'\"'");
+}
+
+function shellEscapeDoubleQuoted(value: string): string {
+  return value.replace(/"/g, '\\"');
+}
+
+async function injectCredentialIntoCommand(
+  command: string,
+  operation: OperationSpec,
+  device: Device,
+): Promise<string> {
+  const adapter = operation.adapterId.toLowerCase();
+  if (!(adapter === "ssh" || adapter === "network-ssh" || adapter === "shell")) {
+    return command;
+  }
+
+  const hostPatterns = [device.ip, device.ip.includes(":") ? `[${device.ip}]` : null]
+    .filter((value): value is string => Boolean(value));
+
+  const usesSshHost = hostPatterns.some((host) => command.includes(`ssh ${host}`));
+  if (!usesSshHost) {
+    return command;
+  }
+
+  const candidates = stateStore
+    .getDeviceCredentials(device.id)
+    .filter((credential) => credential.protocol.toLowerCase() === "ssh")
+    .sort((a, b) => {
+      const rank = (status: string): number => (status === "validated" ? 0 : status === "provided" ? 1 : 2);
+      return rank(a.status) - rank(b.status);
+    });
+
+  const credential = candidates[0];
+  if (!credential) {
+    return command;
+  }
+
+  const username = (credential.accountLabel ?? "").trim();
+  const hostToken = username.length > 0 ? `${username}@${device.ip}` : device.ip;
+  const baseSsh = `ssh -o BatchMode=yes -o StrictHostKeyChecking=no ${hostToken}`;
+
+  let rewritten = command;
+  for (const host of hostPatterns) {
+    rewritten = rewritten.replace(new RegExp(`ssh\\s+${host.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "g"), baseSsh);
+  }
+
+  const secret = await vault.getSecret(credential.vaultSecretRef);
+  if (!secret || secret.trim().length === 0) {
+    return rewritten;
+  }
+
+  if (process.platform === "win32") {
+    const plinkPath = '"C:\\Program Files\\PuTTY\\plink.exe"';
+    const sshWithQuotedCommand = /ssh(?:\s+-[^\s]+(?:\s+[^\s]+)?)*\s+[^\s]+\s+'([^']*)'/;
+    const match = rewritten.match(sshWithQuotedCommand);
+    if (match?.[1]) {
+      const remoteCommand = match[1];
+      const plinkCommand = `${plinkPath} -batch -ssh ${hostToken} -pw "${shellEscapeDoubleQuoted(secret)}" "${shellEscapeDoubleQuoted(remoteCommand)}"`;
+      return rewritten.replace(sshWithQuotedCommand, plinkCommand);
+    }
+
+    const plinkPrefix = `${plinkPath} -batch -ssh ${hostToken} -pw "${shellEscapeDoubleQuoted(secret)}"`;
+    const sshCommandPattern = /ssh(?:\s+-[^\s]+(?:\s+[^\s]+)?)*\s+[^\s]+/;
+    return rewritten.replace(sshCommandPattern, plinkPrefix);
+  }
+
+  if (rewritten.includes("sshpass -p")) {
+    return rewritten;
+  }
+
+  return `sshpass -p '${shellEscapeSingleQuoted(secret)}' ${rewritten}`;
+}
+
 function gate(
   gateName: SafetyGateResult["gate"],
   passed: boolean,
@@ -105,6 +182,7 @@ const ADAPTER_ALIASES: Record<string, string[]> = {
   winrm: ["winrm", "rdp"],
   docker: ["docker"],
   "http-api": ["http", "https", "http-api"],
+  snmp: ["snmp"],
   "network-ssh": ["ssh"],
   shell: ["ssh", "winrm", "docker", "http-api"],
 };
@@ -151,7 +229,8 @@ async function runOperationCommand(
   }
 
   const command = interpolate(commandTemplate, device, params);
-  const result = await runShell(command, operation.timeoutMs);
+  const commandWithCredential = await injectCredentialIntoCommand(command, operation, device);
+  const result = await runShell(commandWithCredential, operation.timeoutMs);
   const output = `${result.stdout}${result.stderr ? `\n[stderr] ${result.stderr}` : ""}`.trim();
 
   if (!result.ok) {

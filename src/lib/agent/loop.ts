@@ -1232,6 +1232,10 @@ export const runStewardCycle = async (
   trigger: "manual" | "interval" = "manual",
 ): Promise<StewardCycleSummary> => {
   if (loopRunning) {
+    if (trigger === "manual") {
+      throw new Error("Agent cycle already running. Wait for the current cycle to finish.");
+    }
+
     return {
       discovered: 0,
       updatedDevices: 0,
@@ -1259,6 +1263,16 @@ export const runStewardCycle = async (
   };
 
   try {
+    await stateStore.addAction({
+      actor: "steward",
+      kind: "discover",
+      message: `Agent cycle started (${trigger})`,
+      context: {
+        trigger,
+        runId: runRecord.id,
+      },
+    });
+
     const discover = await discoverPhase(trigger);
     const actPromise = actPhase(discover.devices);
     const understandPromise = understandPhase(discover.devices, discover.deepScan);
@@ -1352,3 +1366,5 @@ export const stopStewardLoop = (): void => {
   loopHandle = undefined;
   currentIntervalMs = undefined;
 };
+
+export const isStewardCycleRunning = (): boolean => loopRunning;

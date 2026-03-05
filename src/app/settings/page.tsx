@@ -1159,12 +1159,18 @@ function GeneralSection() {
     setFeedback(null);
     try {
       const result = await runAgentCycle();
-      const parts = Object.entries(result.summary)
-        .map(([k, v]) => `${k}=${v}`)
-        .join(", ");
+      const parts = result.summary
+        ? Object.entries(result.summary)
+            .map(([k, v]) => `${k}=${v}`)
+            .join(", ")
+        : "";
       setFeedback({
         type: "ok",
-        message: parts ? `Cycle complete: ${parts}` : "Cycle completed successfully.",
+        message: result.started
+          ? "Cycle started. Live updates are streaming."
+          : parts
+            ? `Cycle complete: ${parts}`
+            : "Cycle trigger accepted.",
       });
     } catch (err) {
       setFeedback({
