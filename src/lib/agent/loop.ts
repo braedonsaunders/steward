@@ -1,14 +1,28 @@
 import { randomUUID } from "node:crypto";
 import { runDiscovery } from "@/lib/discovery/engine";
 import { candidateToDevice } from "@/lib/discovery/classify";
+import { dedupeObservations, evaluateDiscoveryEvidence } from "@/lib/discovery/evidence";
 import { generateDiscoveryAdvice } from "@/lib/discovery/advisor";
 import { buildManagementSurface } from "@/lib/protocols/negotiator";
 import { evaluatePolicy } from "@/lib/policy/engine";
 import { matchPlaybooksForIncident } from "@/lib/playbooks/registry";
 import { executePlaybook } from "@/lib/playbooks/runtime";
+import { getMissingCredentialProtocolsForPlaybook } from "@/lib/adoption/playbook-credentials";
+import {
+  buildPlaybookRun,
+  countRecentFamilyFailures,
+  criticalityForActionClass,
+  isFamilyQuarantined,
+} from "@/lib/playbooks/factory";
 import { createApproval, expireStale } from "@/lib/approvals/queue";
-import { pluginRegistry } from "@/lib/plugins/registry";
+import { adapterRegistry } from "@/lib/adapters/registry";
+import { ensureDigestScheduler, stopDigestScheduler } from "@/lib/digest/scheduler";
 import { getAdoptionRecord, getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
+import {
+  evaluateServiceContract,
+  getRequiredProtocolsForServiceContract,
+  isServiceContractDue,
+} from "@/lib/monitoring/contracts";
 import { graphStore } from "@/lib/state/graph";
 import { stateStore } from "@/lib/state/store";
 import { runShell } from "@/lib/utils/shell";
@@ -18,7 +32,6 @@ import type {
   DeviceBaseline,
   Incident,
   PlaybookRun,
-  PlaybookStep,
   Recommendation,
 } from "@/lib/state/types";
 
@@ -230,6 +243,221 @@ const ensureRecommendation = (
   };
 };
 
+const criticalityToIncidentSeverity = (
+  criticality: "low" | "medium" | "high",
+): Incident["severity"] => {
+  if (criticality === "high") return "critical";
+  if (criticality === "medium") return "warning";
+  return "info";
+};
+
+const criticalityToRecommendationPriority = (
+  criticality: "low" | "medium" | "high",
+): Recommendation["priority"] => {
+  if (criticality === "high") return "high";
+  if (criticality === "medium") return "medium";
+  return "low";
+};
+
+const resolveIncidentByKey = (
+  incidents: Incident[],
+  key: string,
+  message: string,
+): Incident[] => {
+  const now = new Date().toISOString();
+  return incidents.map((incident) => {
+    const incidentKeyValue = String(incident.metadata.key ?? "");
+    if (incidentKeyValue !== key || incident.status === "resolved") {
+      return incident;
+    }
+    return {
+      ...incident,
+      status: "resolved",
+      updatedAt: now,
+      timeline: [
+        { at: now, message },
+        ...incident.timeline,
+      ].slice(0, 30),
+    };
+  });
+};
+
+const evaluateServiceContractsForDevice = async (
+  device: Device,
+  incidents: Incident[],
+  recommendations: Recommendation[],
+): Promise<{
+  incidents: Incident[];
+  recommendations: Recommendation[];
+  incidentsOpened: number;
+  recommendationsAdded: number;
+}> => {
+  let nextIncidents = incidents;
+  let nextRecommendations = recommendations;
+  let incidentsOpened = 0;
+  let recommendationsAdded = 0;
+
+  const contracts = stateStore.getServiceContracts(device.id);
+  if (contracts.length === 0) {
+    return {
+      incidents: nextIncidents,
+      recommendations: nextRecommendations,
+      incidentsOpened,
+      recommendationsAdded,
+    };
+  }
+
+  const nowMs = Date.now();
+  const validated = new Set(
+    stateStore.getValidatedCredentialProtocols(device.id).map((protocol) => protocol.toLowerCase()),
+  );
+
+  for (const contract of contracts) {
+    if (!isServiceContractDue(contract, nowMs)) {
+      continue;
+    }
+
+    const requiredProtocols = getRequiredProtocolsForServiceContract(contract);
+    const missingProtocols = requiredProtocols.filter((protocol) => !validated.has(protocol.toLowerCase()));
+    const findingKey = `service-contract:${contract.id}`;
+
+    if (missingProtocols.length > 0) {
+      stateStore.upsertDeviceFindingByDedupe({
+        deviceId: device.id,
+        dedupeKey: findingKey,
+        findingType: "missing_credentials",
+        severity: "warning",
+        title: `${contract.displayName} waiting for credentials`,
+        summary: `Monitor "${contract.displayName}" cannot run until credentials are provided for: ${missingProtocols.join(", ")}.`,
+        evidenceJson: {
+          serviceContractId: contract.id,
+          requiredProtocols,
+          missingProtocols,
+        },
+        status: "open",
+      });
+
+      const credentialRecommendation = ensureRecommendation(nextRecommendations, {
+        title: `Provide ${missingProtocols.join(", ")} credentials for ${device.name}`,
+        rationale: `Custom monitor "${contract.displayName}" is blocked by missing credentials.`,
+        impact: "Enables monitor execution and automated incident detection.",
+        priority: "high",
+        relatedDeviceIds: [device.id],
+      });
+      nextRecommendations = credentialRecommendation.next;
+      recommendationsAdded += credentialRecommendation.added ? 1 : 0;
+
+      stateStore.upsertServiceContract({
+        ...contract,
+        policyJson: {
+          ...contract.policyJson,
+          lastEvaluatedAt: new Date().toISOString(),
+          lastStatus: "pending_credentials",
+          missingProtocols,
+        },
+        updatedAt: new Date().toISOString(),
+      });
+      continue;
+    }
+
+    const evaluation = await evaluateServiceContract(device, contract);
+    stateStore.upsertServiceContract({
+      ...contract,
+      policyJson: evaluation.updatedPolicyJson,
+      updatedAt: new Date().toISOString(),
+    });
+
+    if (evaluation.status === "pass") {
+      stateStore.upsertDeviceFindingByDedupe({
+        deviceId: device.id,
+        dedupeKey: findingKey,
+        findingType: "service_contract",
+        severity: "info",
+        title: `${contract.displayName} monitor healthy`,
+        summary: evaluation.summary,
+        evidenceJson: evaluation.evidenceJson,
+        status: "resolved",
+      });
+      nextIncidents = resolveIncidentByKey(
+        nextIncidents,
+        findingKey,
+        `Monitor recovered: ${contract.displayName}`,
+      );
+      continue;
+    }
+
+    if (evaluation.status === "pending") {
+      stateStore.upsertDeviceFindingByDedupe({
+        deviceId: device.id,
+        dedupeKey: findingKey,
+        findingType: "service_contract_pending",
+        severity: "info",
+        title: `${contract.displayName} monitor pending`,
+        summary: evaluation.summary,
+        evidenceJson: evaluation.evidenceJson,
+        status: "open",
+      });
+
+      const configRecommendation = ensureRecommendation(nextRecommendations, {
+        title: `Complete monitor setup: ${contract.displayName}`,
+        rationale: evaluation.summary,
+        impact: "Allows Steward to actively validate this monitor contract.",
+        priority: "medium",
+        relatedDeviceIds: [device.id],
+      });
+      nextRecommendations = configRecommendation.next;
+      recommendationsAdded += configRecommendation.added ? 1 : 0;
+      continue;
+    }
+
+    const severity = criticalityToIncidentSeverity(contract.criticality);
+    const incidentResult = upsertIncident(nextIncidents, {
+      title: `Monitor failed: ${contract.displayName}`,
+      summary: evaluation.summary,
+      severity,
+      deviceIds: [device.id],
+      status: "open",
+      diagnosis: "Service contract monitor drifted from expected state.",
+      remediationPlan: "Inspect contract evidence, confirm credentials, and remediate service drift.",
+      metadata: {
+        key: findingKey,
+        serviceContractId: contract.id,
+        monitorType: evaluation.monitorType,
+      },
+    });
+    nextIncidents = incidentResult.next;
+    incidentsOpened += incidentResult.opened ? 1 : 0;
+
+    stateStore.upsertDeviceFindingByDedupe({
+      deviceId: device.id,
+      dedupeKey: findingKey,
+      findingType: "service_contract",
+      severity,
+      title: `Monitor failed: ${contract.displayName}`,
+      summary: evaluation.summary,
+      evidenceJson: evaluation.evidenceJson,
+      status: "open",
+    });
+
+    const driftRecommendation = ensureRecommendation(nextRecommendations, {
+      title: `Remediate monitor drift: ${contract.displayName}`,
+      rationale: evaluation.summary,
+      impact: "Restores expected runtime behavior and keeps automated checks green.",
+      priority: criticalityToRecommendationPriority(contract.criticality),
+      relatedDeviceIds: [device.id],
+    });
+    nextRecommendations = driftRecommendation.next;
+    recommendationsAdded += driftRecommendation.added ? 1 : 0;
+  }
+
+  return {
+    incidents: nextIncidents,
+    recommendations: nextRecommendations,
+    incidentsOpened,
+    recommendationsAdded,
+  };
+};
+
 const discoverPhase = async (
   trigger: "manual" | "interval",
 ): Promise<{ discovered: number; updatedDevices: number; devices: Device[]; deepScan: boolean }> => {
@@ -254,43 +482,219 @@ const discoverPhase = async (
   }
 
   let updated = 0;
+  let discovered = 0;
   const seenIps = new Set<string>();
 
+  const cycleObservations = snapshot.merged.flatMap((candidate) => candidate.observations ?? []);
+  if (cycleObservations.length > 0) {
+    stateStore.addDiscoveryObservations(cycleObservations);
+  }
+  stateStore.pruneExpiredDiscoveryObservations();
+
+  const recentObservations = stateStore.getRecentDiscoveryObservationsByIp(
+    snapshot.merged.map((candidate) => candidate.ip),
+    {
+      sinceAt: new Date(Date.now() - 45 * 60_000).toISOString(),
+      limitPerIp: 40,
+    },
+  );
+
   for (const candidate of snapshot.merged) {
-    // Try to find existing device by: primary IP, secondary IPs, or MAC
-    let previous = existingByIp.get(candidate.ip);
-    if (!previous && candidate.mac) {
-      previous = existingByMac.get(candidate.mac.toLowerCase());
+    const historical = (recentObservations.get(candidate.ip) ?? []).map((item) => ({
+      ip: item.ip,
+      source: item.source,
+      evidenceType: item.evidenceType,
+      confidence: item.confidence,
+      observedAt: item.observedAt,
+      expiresAt: item.expiresAt,
+      details: item.details,
+    }));
+    const observations = dedupeObservations([...(candidate.observations ?? []), ...historical]);
+    const fusedEvidence = evaluateDiscoveryEvidence(observations);
+    if (!fusedEvidence.hasPositiveEvidence || fusedEvidence.confidence < 0.2) {
+      continue;
     }
 
-    const device = candidateToDevice(candidate, previous);
+    const candidateWithEvidence = {
+      ...candidate,
+      observations,
+      metadata: {
+        ...candidate.metadata,
+        discoveryEvidence: {
+          confidence: fusedEvidence.confidence,
+          status: fusedEvidence.status,
+          hasPositiveEvidence: fusedEvidence.hasPositiveEvidence,
+          hasStrongEvidence: fusedEvidence.hasStrongEvidence,
+          evidenceTypes: fusedEvidence.evidenceTypes,
+          sourceCounts: fusedEvidence.sourceCounts,
+          observationCount: fusedEvidence.observationCount,
+          fusedAt: new Date().toISOString(),
+        },
+      },
+    };
+
+    // Try to find existing device by: primary IP, secondary IPs, or MAC
+    let previous = existingByIp.get(candidateWithEvidence.ip);
+    if (!previous && candidateWithEvidence.mac) {
+      previous = existingByMac.get(candidateWithEvidence.mac.toLowerCase());
+    }
+
+    const device = candidateToDevice(candidateWithEvidence, previous);
     seenIps.add(device.ip);
     for (const secIp of device.secondaryIps ?? []) {
       seenIps.add(secIp);
     }
     await stateStore.upsertDevice(device);
+    stateStore.attachRecentObservationsToDevice(device.ip, device.id);
     await graphStore.attachDevice(device);
     updated += 1;
+    discovered += 1;
   }
 
-  if (seenIps.size > 0) {
-    await stateStore.updateState(async (current) => {
-      for (const device of current.devices) {
-        if (!seenIps.has(device.ip)) {
-          const ageMs = Date.now() - new Date(device.lastSeenAt).getTime();
-          if (ageMs > 30 * 60 * 1000) {
-            device.status = "offline";
-          }
+  let prunedDeviceIds: string[] = [];
+  await stateStore.updateState(async (current) => {
+    const nowMs = Date.now();
+    const nowIso = new Date().toISOString();
+    const removedIds = new Set<string>();
+    const nextDevices: Device[] = [];
+
+    for (const device of current.devices) {
+      const adoptionStatus = getDeviceAdoptionStatus(device);
+      const isPinned = adoptionStatus === "adopted" || adoptionStatus === "ignored";
+      const source = typeof device.metadata.source === "string" ? String(device.metadata.source) : undefined;
+      const manuallyAdded = source === "manual";
+      const shouldRetain = isPinned || manuallyAdded;
+
+      const discoveryMeta = (device.metadata.discovery as Record<string, unknown> | undefined) ?? {};
+      const priorMissCountRaw = Number(discoveryMeta.missCount ?? 0);
+      const priorMissCount = Number.isFinite(priorMissCountRaw) && priorMissCountRaw >= 0
+        ? Math.floor(priorMissCountRaw)
+        : 0;
+
+      if (seenIps.has(device.ip)) {
+        device.metadata.discovery = {
+          ...discoveryMeta,
+          missCount: 0,
+          lastSeenCycleAt: nowIso,
+        };
+        nextDevices.push(device);
+        continue;
+      }
+
+      const ageMs = nowMs - new Date(device.lastSeenAt).getTime();
+      const missCount = priorMissCount + 1;
+      const lowSignal = !device.mac && (device.services?.length ?? 0) === 0;
+      const confidence = Number(discoveryMeta.confidence ?? 0);
+      const hasEvidence = confidence >= 0.35 || !lowSignal;
+
+      device.metadata.discovery = {
+        ...discoveryMeta,
+        missCount,
+        lastMissedAt: nowIso,
+      };
+
+      if (!seenIps.has(device.ip)) {
+        if (ageMs > 30 * 60 * 1000) {
+          device.status = "offline";
         }
       }
+
+      if (lowSignal && confidence < 0.35 && ageMs > 15 * 60 * 1000) {
+        const latestDiscoveryMeta =
+          (device.metadata.discovery as Record<string, unknown> | undefined) ?? {};
+        device.metadata.discovery = {
+          ...latestDiscoveryMeta,
+          quarantined: true,
+          quarantinedReason: "low_evidence_ghost_candidate",
+          quarantinedAt: nowIso,
+        };
+        if (device.status === "online") {
+          device.status = "unknown";
+        }
+      }
+
+      const manualPruneMode = trigger === "manual" && discovered > 0;
+      const shouldPrune =
+        !shouldRetain &&
+        (
+          (manualPruneMode && !seenIps.has(device.ip)) ||
+          (!hasEvidence && missCount >= 2 && ageMs > 10 * 60 * 1000) ||
+          (missCount >= 4 && ageMs > 30 * 60 * 1000)
+        );
+
+      if (shouldPrune) {
+        removedIds.add(device.id);
+        continue;
+      }
+
+      nextDevices.push(device);
+    }
+
+    if (removedIds.size > 0) {
+      const removedNodeIds = new Set(Array.from(removedIds).map((id) => `device:${id}`));
+      const removedServicePrefixes = Array.from(removedIds).map((id) => `service:${id}:`);
+      const isRemovedServiceNode = (nodeId: string): boolean =>
+        removedServicePrefixes.some((prefix) => nodeId.startsWith(prefix));
+      const isRemovedGraphRef = (nodeId: string): boolean =>
+        removedNodeIds.has(nodeId) || isRemovedServiceNode(nodeId);
+
+      current.devices = nextDevices;
+      current.baselines = current.baselines.filter((baseline) => !removedIds.has(baseline.deviceId));
+      current.playbookRuns = current.playbookRuns.filter((run) => !removedIds.has(run.deviceId));
+      current.incidents = current.incidents
+        .map((incident) => {
+          const nextDeviceIds = incident.deviceIds.filter((id) => !removedIds.has(id));
+          if (nextDeviceIds.length === incident.deviceIds.length) {
+            return incident;
+          }
+          return {
+            ...incident,
+            deviceIds: nextDeviceIds,
+            updatedAt: nowIso,
+            timeline: [
+              {
+                at: nowIso,
+                message: `Removed stale device references (${incident.deviceIds.length - nextDeviceIds.length})`,
+              },
+              ...incident.timeline,
+            ].slice(0, 30),
+          };
+        })
+        .filter((incident) => incident.deviceIds.length > 0);
+      current.recommendations = current.recommendations
+        .map((recommendation) => ({
+          ...recommendation,
+          relatedDeviceIds: recommendation.relatedDeviceIds.filter((id) => !removedIds.has(id)),
+        }))
+        .filter((recommendation) => recommendation.relatedDeviceIds.length > 0);
+      current.graph.edges = current.graph.edges.filter((edge) => !isRemovedGraphRef(edge.from) && !isRemovedGraphRef(edge.to));
+      current.graph.nodes = current.graph.nodes.filter((node) => !isRemovedGraphRef(node.id));
+
+      prunedDeviceIds = Array.from(removedIds);
       return current;
+    }
+
+    current.devices = nextDevices;
+    prunedDeviceIds = [];
+    return current;
+  });
+
+  if (prunedDeviceIds.length > 0) {
+    await stateStore.addAction({
+      actor: "steward",
+      kind: "discover",
+      message: `Pruned ${prunedDeviceIds.length} stale unmanaged device${prunedDeviceIds.length === 1 ? "" : "s"}`,
+      context: {
+        trigger,
+        prunedDeviceIds: prunedDeviceIds.slice(0, 200),
+      },
     });
   }
 
   const nextState = await stateStore.getState();
 
   return {
-    discovered: snapshot.merged.length,
+    discovered,
     updatedDevices: updated,
     devices: nextState.devices,
     deepScan: snapshot.scanMode === "deep",
@@ -316,35 +720,34 @@ const subnet24 = (ip: string): string | undefined => {
 
 const understandPhase = async (devices: Device[], deepScan: boolean): Promise<void> => {
   const runtimeSettings = stateStore.getRuntimeSettings();
-
-  await stateStore.updateState(async (state) => {
-    state.devices = state.devices.map((device) => {
-      const surface = buildManagementSurface(device);
-      const protocols = Array.from(
-        new Set([...(device.protocols ?? []), ...(surface.capabilities.map((cap) => cap.protocol) ?? [])]),
-      );
-
-      return {
-        ...device,
-        protocols,
-        metadata: {
-          ...device.metadata,
-          managementSurface: surface,
-          adoption: {
-            ...getAdoptionRecord(device),
-            status: getDeviceAdoptionStatus(device),
-            requiredCredentials: inferCredentialTypes(protocols),
-          },
-        },
-      };
-    });
-
-    return state;
-  });
+  const enrichedDevices: Device[] = [];
 
   for (const device of devices) {
+    const surface = buildManagementSurface(device);
+    const protocols = Array.from(
+      new Set([...(device.protocols ?? []), ...(surface.capabilities.map((cap) => cap.protocol) ?? [])]),
+    );
+
+    const enriched: Device = {
+      ...device,
+      protocols,
+      metadata: {
+        ...device.metadata,
+        managementSurface: surface,
+        adoption: {
+          ...getAdoptionRecord(device),
+          status: getDeviceAdoptionStatus(device),
+          requiredCredentials: inferCredentialTypes(protocols),
+        },
+      },
+    };
+    enrichedDevices.push(enriched);
+    await stateStore.upsertDevice(enriched);
+  }
+
+  for (const device of enrichedDevices) {
     if (device.type === "server") {
-      const nasPeer = devices.find((item) => item.type === "nas");
+      const nasPeer = enrichedDevices.find((item) => item.type === "nas");
       if (nasPeer) {
         await graphStore.addDependency(device.id, nasPeer.id, "Potential backup/data dependency");
       }
@@ -355,7 +758,7 @@ const understandPhase = async (devices: Device[], deepScan: boolean): Promise<vo
       continue;
     }
 
-    const gateway = devices.find((item) => {
+    const gateway = enrichedDevices.find((item) => {
       if (item.id === device.id) return false;
       const sameNetwork = subnet24(item.ip) === network;
       const networkRole = item.type === "router" || item.type === "firewall";
@@ -372,7 +775,7 @@ const understandPhase = async (devices: Device[], deepScan: boolean): Promise<vo
     return;
   }
 
-  const advisoryCandidates = devices
+  const advisoryCandidates = enrichedDevices
     .filter((device) => {
       const adoption = getAdoptionRecord(device);
       const adoptionStatus = getDeviceAdoptionStatus(device);
@@ -394,36 +797,29 @@ const understandPhase = async (devices: Device[], deepScan: boolean): Promise<vo
   }
 
   const adviceByDeviceId = new Map(advice.map((item) => [item.deviceId, item]));
-  await stateStore.updateState(async (state) => {
-    state.devices = state.devices.map((device) => {
-      const item = adviceByDeviceId.get(device.id);
-      if (!item) {
-        return device;
-      }
-
-      const existingAdoption =
-        getAdoptionRecord(device);
-
-      return {
-        ...device,
-        role: device.role ?? item.role,
-        metadata: {
-          ...device.metadata,
-          adoption: {
-            ...existingAdoption,
-            status: getDeviceAdoptionStatus(device),
-            lastAdvisedAt: new Date().toISOString(),
-            shouldManage: item.shouldManage,
-            confidence: item.confidence,
-            reason: item.reason,
-            requiredCredentials: item.requiredCredentials,
-          },
+  for (const device of enrichedDevices) {
+    const item = adviceByDeviceId.get(device.id);
+    if (!item) {
+      continue;
+    }
+    const existingAdoption = getAdoptionRecord(device);
+    await stateStore.upsertDevice({
+      ...device,
+      role: device.role ?? item.role,
+      metadata: {
+        ...device.metadata,
+        adoption: {
+          ...existingAdoption,
+          status: getDeviceAdoptionStatus(device),
+          lastAdvisedAt: new Date().toISOString(),
+          shouldManage: item.shouldManage,
+          confidence: item.confidence,
+          reason: item.reason,
+          requiredCredentials: item.requiredCredentials,
         },
-      };
+      },
     });
-
-    return state;
-  });
+  }
 };
 
 const actPhase = async (devices: Device[]): Promise<{
@@ -442,6 +838,21 @@ const actPhase = async (devices: Device[]): Promise<{
   let credentialOnboardingRecommendations = 0;
 
   for (const device of devices) {
+    if (device.status !== "offline") {
+      stateStore.upsertDeviceFindingByDedupe({
+        deviceId: device.id,
+        dedupeKey: `offline:${device.id}`,
+        findingType: "availability",
+        severity: "warning",
+        title: `${device.name} is offline`,
+        summary: `${device.name} is currently reachable again.`,
+        evidenceJson: {
+          deviceStatus: device.status,
+        },
+        status: "resolved",
+      });
+    }
+
     if (device.status === "offline") {
       const upserted = upsertIncident(incidents, {
         title: `${device.name} is offline`,
@@ -455,9 +866,38 @@ const actPhase = async (devices: Device[]): Promise<{
       });
       incidents = upserted.next;
       incidentsOpened += upserted.opened ? 1 : 0;
+
+      stateStore.upsertDeviceFindingByDedupe({
+        deviceId: device.id,
+        dedupeKey: `offline:${device.id}`,
+        findingType: "availability",
+        severity: "warning",
+        title: `${device.name} is offline`,
+        summary: `${device.name} (${device.ip}) has not been seen recently and appears offline.`,
+        evidenceJson: {
+          incidentKey: `offline:${device.id}`,
+          deviceStatus: device.status,
+        },
+        status: "open",
+      });
     }
 
     const telnetOpen = device.services.some((service) => service.port === 23);
+    if (!telnetOpen) {
+      stateStore.upsertDeviceFindingByDedupe({
+        deviceId: device.id,
+        dedupeKey: `telnet:${device.id}`,
+        findingType: "security_exposure",
+        severity: "critical",
+        title: `${device.name} exposes Telnet`,
+        summary: `Telnet exposure appears closed for ${device.name}.`,
+        evidenceJson: {
+          port: 23,
+          open: false,
+        },
+        status: "resolved",
+      });
+    }
     if (telnetOpen) {
       const upserted = upsertIncident(incidents, {
         title: `${device.name} exposes Telnet`,
@@ -473,6 +913,21 @@ const actPhase = async (devices: Device[]): Promise<{
       });
       incidents = upserted.next;
       incidentsOpened += upserted.opened ? 1 : 0;
+
+      stateStore.upsertDeviceFindingByDedupe({
+        deviceId: device.id,
+        dedupeKey: `telnet:${device.id}`,
+        findingType: "security_exposure",
+        severity: "critical",
+        title: `${device.name} exposes Telnet`,
+        summary: `Port 23 is open on ${device.name} (${device.ip}), which is insecure for management traffic.`,
+        evidenceJson: {
+          incidentKey: `telnet:${device.id}`,
+          port: 23,
+          open: true,
+        },
+        status: "open",
+      });
 
       const recommendation = ensureRecommendation(recommendations, {
         title: `Disable Telnet on ${device.name}`,
@@ -552,6 +1007,12 @@ const actPhase = async (devices: Device[]): Promise<{
       recommendationsAdded += recommendation.added ? 1 : 0;
       credentialOnboardingRecommendations += recommendation.added ? 1 : 0;
     }
+
+    const contractEvaluation = await evaluateServiceContractsForDevice(device, incidents, recommendations);
+    incidents = contractEvaluation.incidents;
+    recommendations = contractEvaluation.recommendations;
+    incidentsOpened += contractEvaluation.incidentsOpened;
+    recommendationsAdded += contractEvaluation.recommendationsAdded;
   }
 
   recommendations = dedupeRecommendations(recommendations);
@@ -592,7 +1053,65 @@ const actPhase = async (devices: Device[]): Promise<{
         const runKey = `${device.id}:${playbook.family}`;
         if (activeRunKeys.has(runKey)) continue;
 
-        const policyResult = evaluatePolicy(playbook.actionClass, device, policyRules, maintenanceWindows);
+        const missingCredentialProtocols = getMissingCredentialProtocolsForPlaybook(device, playbook);
+        if (missingCredentialProtocols.length > 0) {
+          const finding = stateStore.upsertDeviceFindingByDedupe({
+            deviceId: device.id,
+            dedupeKey: `missing-credentials:${playbook.family}:${missingCredentialProtocols.sort().join(",")}`,
+            findingType: "missing_credentials",
+            severity: "warning",
+            title: `${device.name} missing credentials for ${playbook.family}`,
+            summary: `Steward cannot execute "${playbook.name}" until credentials are provided for: ${missingCredentialProtocols.join(", ")}.`,
+            evidenceJson: {
+              incidentId: incident.id,
+              playbookId: playbook.id,
+              missingCredentialProtocols,
+            },
+            status: "open",
+          });
+
+          const recommendation = ensureRecommendation(recommendations, {
+            title: `Provide ${missingCredentialProtocols.join(", ")} credentials for ${device.name}`,
+            rationale: `Remediation playbook "${playbook.name}" is blocked by missing credentials.`,
+            impact: "Enables automated diagnosis and recovery actions for this device.",
+            priority: "high",
+            relatedDeviceIds: [device.id],
+          });
+          recommendations = recommendation.next;
+          recommendationsAdded += recommendation.added ? 1 : 0;
+
+          void stateStore.addAction({
+            actor: "steward",
+            kind: "diagnose",
+            message: `Blocked playbook due to missing credentials: ${playbook.name} on ${device.name}`,
+            context: {
+              deviceId: device.id,
+              incidentId: incident.id,
+              playbookId: playbook.id,
+              missingCredentialProtocols,
+              findingId: finding.id,
+            },
+          });
+
+          continue;
+        }
+
+        const lane = "A" as const;
+        const recentFailures = countRecentFamilyFailures(device.id, playbook.family);
+        const quarantineActive = isFamilyQuarantined(device.id, playbook.family);
+        const policyResult = evaluatePolicy(
+          playbook.actionClass,
+          device,
+          policyRules,
+          maintenanceWindows,
+          {
+            blastRadius: playbook.blastRadius,
+            criticality: criticalityForActionClass(playbook.actionClass),
+            lane,
+            recentFailures,
+            quarantineActive,
+          },
+        );
 
         if (policyResult.decision === "DENY") {
           void stateStore.addAction({
@@ -604,29 +1123,13 @@ const actPhase = async (devices: Device[]): Promise<{
           continue;
         }
 
-        // Build the PlaybookRun
-        const toRunStep = (s: Omit<PlaybookStep, "status" | "output" | "startedAt" | "completedAt">): PlaybookStep => ({
-          ...s,
-          status: "pending",
-        });
-
-        const run: PlaybookRun = {
-          id: randomUUID(),
-          playbookId: playbook.id,
-          family: playbook.family,
-          name: playbook.name,
+        const run: PlaybookRun = buildPlaybookRun(playbook, {
           deviceId: device.id,
           incidentId: incident.id,
-          actionClass: playbook.actionClass,
-          status: policyResult.decision === "ALLOW_AUTO" ? "approved" : "pending_approval",
           policyEvaluation: policyResult,
-          steps: playbook.steps.map(toRunStep),
-          verificationSteps: playbook.verificationSteps.map(toRunStep),
-          rollbackSteps: playbook.rollbackSteps.map(toRunStep),
-          evidence: { logs: [] },
-          createdAt: new Date().toISOString(),
-          failureCount: 0,
-        };
+          initialStatus: policyResult.decision === "ALLOW_AUTO" ? "approved" : "pending_approval",
+          lane,
+        });
 
         if (policyResult.decision === "REQUIRE_APPROVAL") {
           createApproval(run, device);
@@ -670,10 +1173,23 @@ const actPhase = async (devices: Device[]): Promise<{
       message: `Playbook "${run.name}" on ${device.name}: ${result.status}`,
       context: { playbookRunId: result.id, status: result.status },
     });
+
+    if (run.policyEvaluation.inputs.lane === "B" && result.status === "completed") {
+      const promotion = ensureRecommendation(recommendations, {
+        title: `Promote adaptive run "${run.family}" to deterministic adapter playbook`,
+        rationale: "A Lane B Plan IR run completed successfully and is eligible for deterministic codification.",
+        impact: "Improves repeatability and expands Lane A autonomous coverage.",
+        priority: "medium",
+        relatedDeviceIds: [device.id],
+      });
+      recommendations = promotion.next;
+      recommendationsAdded += promotion.added ? 1 : 0;
+    }
   }
 
   // Expire stale approvals
   expireStale();
+  await stateStore.setRecommendations(recommendations.slice(0, 400));
 
   return {
     incidentsOpened,
@@ -692,26 +1208,20 @@ const learnPhase = async (devices: Device[]): Promise<void> => {
       latencyMs: await measureLatency(device.ip),
     })),
   );
+  const state = await stateStore.getState();
+  const existingByDevice = new Map(state.baselines.map((baseline) => [baseline.deviceId, baseline]));
+  const baselineUpdates: DeviceBaseline[] = [];
 
-  await stateStore.updateState(async (state) => {
-    for (const result of latencyResults) {
-      if (result.latencyMs === undefined) {
-        continue;
-      }
-
-      const idx = state.baselines.findIndex((baseline) => baseline.deviceId === result.deviceId);
-      const baseline = buildBaseline(state.baselines[idx], result.latencyMs);
-      baseline.deviceId = result.deviceId;
-
-      if (idx === -1) {
-        state.baselines.push(baseline);
-      } else {
-        state.baselines[idx] = baseline;
-      }
+  for (const result of latencyResults) {
+    if (result.latencyMs === undefined) {
+      continue;
     }
+    const baseline = buildBaseline(existingByDevice.get(result.deviceId), result.latencyMs);
+    baseline.deviceId = result.deviceId;
+    baselineUpdates.push(baseline);
+  }
 
-    return state;
-  });
+  stateStore.upsertBaselines(baselineUpdates);
 };
 
 let loopHandle: NodeJS.Timeout | undefined;
@@ -735,8 +1245,8 @@ export const runStewardCycle = async (
 
   loopRunning = true;
 
-  // Ensure plugins are loaded before running any phase
-  await pluginRegistry.initialize();
+  // Ensure adapters are loaded before running any phase.
+  await adapterRegistry.initialize();
 
   const runRecord: AgentRunRecord = {
     id: randomUUID(),
@@ -750,9 +1260,10 @@ export const runStewardCycle = async (
 
   try {
     const discover = await discoverPhase(trigger);
-    await understandPhase(discover.devices, discover.deepScan);
-    const act = await actPhase(discover.devices);
-    await learnPhase(discover.devices);
+    const actPromise = actPhase(discover.devices);
+    const understandPromise = understandPhase(discover.devices, discover.deepScan);
+    const learnPromise = learnPhase(discover.devices);
+    const [act] = await Promise.all([actPromise, understandPromise, learnPromise]);
 
     const summary: StewardCycleSummary = {
       discovered: discover.discovered,
@@ -812,6 +1323,7 @@ export const runStewardCycle = async (
 };
 
 export const ensureStewardLoop = (): void => {
+  ensureDigestScheduler();
   const intervalMs = stateStore.getRuntimeSettings().agentIntervalMs;
   if (loopHandle && currentIntervalMs === intervalMs) {
     return;
@@ -831,6 +1343,7 @@ export const ensureStewardLoop = (): void => {
 };
 
 export const stopStewardLoop = (): void => {
+  stopDigestScheduler();
   if (!loopHandle) {
     return;
   }

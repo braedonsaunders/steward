@@ -1,11 +1,14 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { isAuthorized } from "@/lib/auth/guard";
+import { startDeviceAdoption } from "@/lib/adoption/orchestrator";
+import { getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
 import { stateStore } from "@/lib/state/store";
 
 export const runtime = "nodejs";
 
 const updateDeviceSchema = z.object({
+  name: z.string().trim().min(1).max(128).optional(),
   autonomyTier: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
   tags: z.array(z.string().min(1)).optional(),
   adoptionStatus: z.enum(["discovered", "adopted", "ignored"]).optional(),
@@ -72,6 +75,17 @@ export async function PATCH(
 
   const updates: Record<string, unknown> = {};
 
+  if (payload.data.name !== undefined) {
+    if (getDeviceAdoptionStatus(device) !== "adopted") {
+      return NextResponse.json(
+        { error: "Only adopted devices can be renamed" },
+        { status: 403 },
+      );
+    }
+    device.name = payload.data.name;
+    updates.name = payload.data.name;
+  }
+
   if (payload.data.autonomyTier !== undefined) {
     device.autonomyTier = payload.data.autonomyTier;
     updates.autonomyTier = payload.data.autonomyTier;
@@ -83,6 +97,7 @@ export async function PATCH(
   }
 
   if (payload.data.adoptionStatus !== undefined) {
+    const previousStatus = getDeviceAdoptionStatus(device);
     const existingAdoption =
       typeof device.metadata.adoption === "object" && device.metadata.adoption !== null
         ? (device.metadata.adoption as Record<string, unknown>)
@@ -95,6 +110,10 @@ export async function PATCH(
       },
     };
     updates.adoptionStatus = payload.data.adoptionStatus;
+
+    if (previousStatus !== "adopted" && payload.data.adoptionStatus === "adopted") {
+      updates.adoptionOnboarding = "requested";
+    }
   }
 
   device.lastChangedAt = new Date().toISOString();
@@ -111,6 +130,22 @@ export async function PATCH(
       updates,
     },
   });
+
+  if (updates.adoptionOnboarding === "requested") {
+    try {
+      await startDeviceAdoption(device.id, { triggeredBy: "user" });
+    } catch (error) {
+      await stateStore.addAction({
+        actor: "steward",
+        kind: "diagnose",
+        message: `Failed to start adoption workflow for ${device.name}`,
+        context: {
+          deviceId: device.id,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }
 
   return NextResponse.json({ device });
 }

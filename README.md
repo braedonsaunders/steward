@@ -4,98 +4,83 @@
 
 Steward is an autonomous IT operations agent for real-world small networks: servers, switches, NAS, APs, printers, IoT, Docker hosts, and VMs.
 
-This repository now includes a complete self-hostable v1 foundation with:
+## Current Product Baseline
+
+This repository provides a self-hosted control plane with:
 
 - Persistent agent loop: `discover -> understand -> act -> learn`
-- Structured knowledge graph + state persistence
-- Multi-provider LLM harness (Vercel AI SDK)
-- Providers: OpenAI, Anthropic, Google, OpenRouter
-- Provider OAuth onboarding endpoints (PKCE code flow)
-- Encrypted credentials vault (AES-256-GCM)
-- Device discovery engine (passive + active)
-- Incidents + recommendations pipeline
-- Conversational operations interface
-- Web control plane + API surface
+- SQLite-backed state and audit durability split
+- Dynamic topology graph (devices/services/dependencies)
+- Device discovery (ARP + active scan + mDNS/SSDP + UDP service probes)
+- Incident + recommendation pipeline
+- Policy engine, action classes, approvals, and playbook runtime safety gates
+- Conversational interface with deterministic graph-query handling for dependency/change questions
+- Multi-provider LLM integration (OpenAI, Anthropic, Google, OpenRouter, and others)
+- Encrypted vault for secrets and OAuth tokens
+- RBAC-backed identity surface (local users/sessions, OIDC SSO, LDAP auth)
 
-## Core Architecture
+## Configuration Model (Non-Negotiable)
 
-### 1) Agent Loop
+Steward does **not** use runtime `.env` product configuration.
 
-`src/lib/agent/loop.ts` runs a persistent cycle:
+- Runtime settings are DB-backed (`runtime.*` metadata + versioned settings history)
+- System settings are DB-backed (`system.*` metadata + versioned settings history)
+- API auth token guard is DB-backed (`auth.*` metadata + versioned settings history)
+- Settings support historical `asOf` reads through API
 
-- **Discover**: passive/active network scan
-- **Understand**: protocol negotiation + management surface generation
-- **Act**: incident creation + recommendations + basic remediation decisions
-- **Learn**: baseline updates (latency, history)
+## Persistence Layout
 
-### 2) Knowledge Graph + Memory
+Steward stores local data under `.steward/`:
 
-`src/lib/state/*` stores persistent Steward state in `.steward/state.json`:
+- State DB: `.steward/steward_state.db`
+- Audit DB: `.steward/steward_audit.db`
+- Vault: `.steward/vault.enc.json` + `.steward/vault.key`
 
-- Devices, services, incidents, recommendations, action logs
-- Graph nodes + edges for dependencies and topology memory
-- Agent run history
-- Provider configurations and OAuth state
+## Key API Surface
 
-### 3) Discovery Engine
-
-`src/lib/discovery/*`
-
-- Passive discovery: ARP table sweep
-- Active discovery: nmap if available, otherwise ping sweep
-- Service fingerprint normalization and device classification heuristics
-
-### 4) LLM Provider Harness (Vercel AI SDK)
-
-`src/lib/llm/providers.ts`
-
-- OpenAI via `@ai-sdk/openai`
-- Anthropic via `@ai-sdk/anthropic`
-- Google via `@ai-sdk/google`
-- OpenRouter via OpenAI-compatible provider with custom base URL
-
-### 5) OAuth Provider Onboarding
-
-- Start flow: `GET /api/providers/oauth/start?provider=<provider>`
-- Callback: `GET /api/providers/oauth/callback/[provider]`
-
-Supports PKCE and stores resulting tokens in encrypted vault.
-
-### 6) Security Model
-
-`src/lib/security/vault.ts`
-
-- Vault encryption: AES-256-GCM
-- Key derivation: `scrypt` from passphrase
-- Secrets never returned by APIs
-- Optional API guard via `STEWARD_UI_TOKEN`
-
-## Control Plane UI
-
-The main UI (`/`) includes:
-
-- Live inventory and status cards
-- Incident feed
-- Recommendation feed
-- Agent run controls
-- Device onboarding form
-- Provider model/API key config
-- OAuth connect links per provider
-- Vault init/unlock/lock actions
-- Conversational Steward interface
-
-## API Surface
+Core:
 
 - `GET /api/health`
 - `GET /api/state`
+- `POST /api/agent/run`
+- `POST /api/chat`
+
+Settings:
+
+- `GET/POST /api/settings/runtime`
+- `GET/POST /api/settings/system`
+- `GET/POST /api/settings/auth-token`
+- `GET /api/settings/history?domain=runtime|system|auth`
+
+Access and Identity:
+
+- `GET /api/auth/me`
+- `POST /api/auth/bootstrap`
+- `POST /api/auth/login`
+- `POST /api/auth/logout`
+- `GET/POST /api/auth/settings`
+- `POST /api/auth/ldap/test`
+- `GET /api/auth/oidc/start`
+- `GET /api/auth/oidc/callback`
+- `GET/POST/PATCH/DELETE /api/auth/users`
+
+Inventory and Ops:
+
 - `GET/POST /api/devices`
 - `GET/PATCH /api/incidents`
 - `GET/PATCH /api/recommendations`
-- `POST /api/agent/run`
-- `POST /api/chat`
+- `GET /api/approvals`
+- `POST /api/approvals/[id]`
+- `GET/POST /api/playbooks/runs`
+- `GET /api/audit-events` (JSON and JSONL)
+- `GET/POST /api/digest`
+
+Providers and Vault:
+
 - `GET/POST /api/providers`
-- `GET /api/providers/oauth/start`
-- `GET /api/providers/oauth/callback/[provider]`
+- `GET /api/providers/models`
+- OAuth start/callback routes under `/api/providers/oauth/*`
+- `GET /api/providers/status`
 - `GET/POST /api/vault`
 
 ## Local Development
@@ -106,38 +91,42 @@ The main UI (`/`) includes:
 npm install
 ```
 
-2. Copy env template:
-
-```bash
-cp .env.example .env.local
-```
-
-3. Start:
+2. Start development server:
 
 ```bash
 npm run dev
 ```
 
-4. Open [http://localhost:3010](http://localhost:3010)
+3. Open [http://localhost:3010](http://localhost:3010)
+4. Open [http://localhost:3010/access](http://localhost:3010/access) for account bootstrap/login and RBAC auth settings.
 
-## Environment Variables
+Provider credentials, OAuth tokens, runtime settings, and auth token guard are configured from the UI/API and persisted to SQLite/vault.
 
-See `.env.example` for full list.
+## API Guard Token
 
-Minimum recommended:
+By default, API calls are open on local instance until configured.
 
-- `STEWARD_MASTER_PASSPHRASE=<strong passphrase>`
-- At least one provider credential:
-  - `OPENAI_API_KEY`
-  - `ANTHROPIC_API_KEY`
-  - `GOOGLE_GENERATIVE_AI_API_KEY`
-  - `OPENROUTER_API_KEY`
+To enable token guard:
 
-Optional:
+```bash
+curl -X POST http://localhost:3010/api/settings/auth-token \
+  -H 'content-type: application/json' \
+  -d '{"token":"replace-with-strong-token-value"}'
+```
 
-- `STEWARD_UI_TOKEN` to protect APIs/UI calls
-- `STEWARD_DEFAULT_PROVIDER`
-- Provider OAuth client credentials
+Then send:
+
+- `Authorization: Bearer <token>`
+- or `x-steward-token: <token>`
+
+To clear:
+
+```bash
+curl -X POST http://localhost:3010/api/settings/auth-token \
+  -H 'content-type: application/json' \
+  -H 'Authorization: Bearer <token>' \
+  -d '{"token":null}'
+```
 
 ## Docker
 
@@ -145,7 +134,7 @@ Build and run:
 
 ```bash
 docker build -t steward .
-docker run --rm -p 3000:3000 --env-file .env.local -v $(pwd)/.steward:/app/.steward steward
+docker run --rm -p 3000:3000 -v $(pwd)/.steward:/app/.steward steward
 ```
 
 ## Production Launch Options
@@ -165,21 +154,7 @@ chmod +x ./scripts/run-prod.sh
 ./scripts/run-prod.sh
 ```
 
-Both scripts build the production bundle and start the app on port `3010` by default.
-
-Optional custom port:
-
-- PowerShell: `./scripts/run-prod.ps1 -Port 4000`
-- Bash: `./scripts/run-prod.sh 4000`
-
-Stop helpers:
-
-- PowerShell: `./scripts/stop-prod.ps1`
-- Bash: `./scripts/stop-prod.sh`
-
-### PM2 (background process manager)
-
-Install PM2 and run Steward as a persistent process:
+### PM2
 
 ```bash
 npm i -g pm2
@@ -189,7 +164,7 @@ pm2 start ecosystem.config.cjs
 pm2 save
 ```
 
-Useful PM2 commands:
+Useful commands:
 
 - `pm2 status`
 - `pm2 logs steward`
@@ -203,9 +178,3 @@ docker compose up -d --build
 ```
 
 App URL: [http://localhost:3010](http://localhost:3010)
-
-## Current Scope Notes
-
-This is a full working foundation and includes real orchestration paths, encrypted secret handling, and live provider routing.
-
-Some protocol/deep-remediation modules are currently heuristic-first (for safe default behavior) and intended to be expanded with device-specific adapters (UniFi/Synology/Proxmox/IPMI/SNMPv3 profile packs, etc.).

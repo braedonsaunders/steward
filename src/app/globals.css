@@ -79,7 +79,7 @@
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
-  --font-sans: var(--font-display);
+  --font-sans: var(--font-ui);
   --font-mono: var(--font-mono);
 }
 
@@ -100,9 +100,19 @@ body {
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-display), "Segoe UI", sans-serif;
+  font-family: var(--font-ui), "Segoe UI", sans-serif;
 }
 
 a {
   color: inherit;
+}
+
+.steward-sidebar-font {
+  font-family: var(--font-heading), "Segoe UI", sans-serif;
+  letter-spacing: -0.01em;
+}
+
+.steward-heading-font {
+  font-family: var(--font-heading), "Segoe UI", sans-serif;
+  letter-spacing: -0.015em;
 }

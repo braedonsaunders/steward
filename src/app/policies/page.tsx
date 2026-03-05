@@ -10,8 +10,6 @@ import {
 } from "lucide-react";
 import { useSteward } from "@/lib/hooks/use-steward";
 import type {
-  ActionClass,
-  AutonomyTier,
   MaintenanceWindow,
   PolicyDecision,
   PolicyRule,
@@ -306,7 +304,7 @@ export default function PoliciesPage() {
       {/* Header */}
       <div className="flex items-center gap-3">
         <Shield className="h-6 w-6 text-muted-foreground" />
-        <h1 className="text-2xl font-semibold tracking-tight">
+        <h1 className="text-2xl font-semibold tracking-tight steward-heading-font">
           Policy Management
         </h1>
       </div>

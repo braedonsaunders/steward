@@ -1,5 +1,6 @@
 "use client";
 
+import { motion, useReducedMotion } from "framer-motion";
 import {
   AlertTriangle,
   Clock,
@@ -19,7 +20,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { cn } from "@/lib/utils";
+import { fadeUpItemVariants, staggerContainerVariants } from "@/lib/motion";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -83,16 +84,23 @@ export interface DigestViewProps {
 }
 
 export function DigestView({ digest }: DigestViewProps) {
+  const reduceMotion = useReducedMotion();
+
   return (
-    <div className="space-y-6">
+    <motion.div
+      className="space-y-6"
+      variants={reduceMotion ? undefined : staggerContainerVariants}
+      initial={reduceMotion ? undefined : "initial"}
+      animate={reduceMotion ? undefined : "animate"}
+    >
       {/* Period */}
-      <p className="text-sm text-muted-foreground">
+      <motion.p className="text-sm text-muted-foreground" variants={reduceMotion ? undefined : fadeUpItemVariants}>
         Period: {formatDate(digest.periodStart)} &mdash;{" "}
         {formatDate(digest.periodEnd)}
-      </p>
+      </motion.p>
 
       {/* Stats row */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <motion.div className="grid grid-cols-2 gap-3 sm:grid-cols-4" variants={reduceMotion ? undefined : fadeUpItemVariants}>
         <Card>
           <CardContent className="flex items-center gap-3 p-4">
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/10">
@@ -149,10 +157,11 @@ export function DigestView({ digest }: DigestViewProps) {
             </div>
           </CardContent>
         </Card>
-      </div>
+      </motion.div>
 
       {/* Overnight Incidents */}
-      <Card>
+      <motion.div variants={reduceMotion ? undefined : fadeUpItemVariants}>
+        <Card>
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
             <AlertTriangle className="h-4 w-4" />
@@ -199,10 +208,12 @@ export function DigestView({ digest }: DigestViewProps) {
             </div>
           )}
         </CardContent>
-      </Card>
+        </Card>
+      </motion.div>
 
       {/* New Risks */}
-      <Card>
+      <motion.div variants={reduceMotion ? undefined : fadeUpItemVariants}>
+        <Card>
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
             <Shield className="h-4 w-4" />
@@ -244,10 +255,12 @@ export function DigestView({ digest }: DigestViewProps) {
             </div>
           )}
         </CardContent>
-      </Card>
+        </Card>
+      </motion.div>
 
       {/* Pending Approvals */}
-      <Card>
+      <motion.div variants={reduceMotion ? undefined : fadeUpItemVariants}>
+        <Card>
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
             <Clock className="h-4 w-4" />
@@ -278,10 +291,12 @@ export function DigestView({ digest }: DigestViewProps) {
             </div>
           )}
         </CardContent>
-      </Card>
+        </Card>
+      </motion.div>
 
       {/* Top Recommendations */}
-      <Card>
+      <motion.div variants={reduceMotion ? undefined : fadeUpItemVariants}>
+        <Card>
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
             <Lightbulb className="h-4 w-4" />
@@ -320,7 +335,8 @@ export function DigestView({ digest }: DigestViewProps) {
             </div>
           )}
         </CardContent>
-      </Card>
-    </div>
+        </Card>
+      </motion.div>
+    </motion.div>
   );
 }

@@ -1,8 +1,8 @@
 import type {
   ActionClass,
-  AutonomyTier,
   Device,
   EnvironmentLabel,
+  ExecutionLane,
   MaintenanceWindow,
   PolicyDecision,
   PolicyEvaluation,
@@ -52,7 +52,15 @@ export function isDeviceInMaintenanceWindow(
   });
 }
 
-function matchesRule(rule: PolicyRule, actionClass: ActionClass, device: Device, inWindow: boolean): boolean {
+interface PolicyContext {
+  blastRadius?: "single-service" | "single-device" | "multi-device";
+  criticality?: "low" | "medium" | "high";
+  lane?: ExecutionLane;
+  recentFailures?: number;
+  quarantineActive?: boolean;
+}
+
+function matchesRule(rule: PolicyRule, actionClass: ActionClass, device: Device): boolean {
   if (!rule.enabled) return false;
 
   if (rule.actionClasses && rule.actionClasses.length > 0 && !rule.actionClasses.includes(actionClass)) {
@@ -85,19 +93,76 @@ export function evaluatePolicy(
   device: Device,
   rules: PolicyRule[],
   windows: MaintenanceWindow[],
+  context: PolicyContext = {},
 ): PolicyEvaluation {
   const now = new Date();
   const inWindow = isDeviceInMaintenanceWindow(device.id, windows, now);
   const envLabel: EnvironmentLabel = device.environmentLabel ?? "lab";
+  const blastRadius = context.blastRadius ?? "single-device";
+  const criticality = context.criticality ?? "medium";
+  const lane = context.lane ?? "A";
+  const recentFailures = Math.max(0, context.recentFailures ?? 0);
+  const quarantineActive = context.quarantineActive ?? false;
+
+  if (quarantineActive) {
+    return {
+      decision: "DENY",
+      ruleId: null,
+      reason: "Execution is quarantined due to repeated failures",
+      evaluatedAt: now.toISOString(),
+      inputs: {
+        actionClass,
+        autonomyTier: device.autonomyTier,
+        environmentLabel: envLabel,
+        inMaintenanceWindow: inWindow,
+        deviceId: device.id,
+        blastRadius,
+        criticality,
+        lane,
+        recentFailures,
+        quarantineActive,
+      },
+    };
+  }
+
+  if (recentFailures >= 3) {
+    return {
+      decision: "REQUIRE_APPROVAL",
+      ruleId: null,
+      reason: "Recent failure threshold reached; manual approval required",
+      evaluatedAt: now.toISOString(),
+      inputs: {
+        actionClass,
+        autonomyTier: device.autonomyTier,
+        environmentLabel: envLabel,
+        inMaintenanceWindow: inWindow,
+        deviceId: device.id,
+        blastRadius,
+        criticality,
+        lane,
+        recentFailures,
+        quarantineActive,
+      },
+    };
+  }
 
   const sorted = [...rules].sort((a, b) => a.priority - b.priority);
 
   for (const rule of sorted) {
-    if (matchesRule(rule, actionClass, device, inWindow)) {
+    if (matchesRule(rule, actionClass, device)) {
       // Special case: if a DENY rule applies but we're in a maintenance window,
       // downgrade to REQUIRE_APPROVAL instead of hard deny for Class C/D
       let decision: PolicyDecision = rule.decision;
       if (decision === "DENY" && inWindow && (actionClass === "C" || actionClass === "D")) {
+        decision = "REQUIRE_APPROVAL";
+      }
+
+      // Hard safety overrides for high-risk conditions.
+      if (actionClass === "D" && envLabel === "prod" && !inWindow) {
+        decision = "DENY";
+      } else if (actionClass === "D" && blastRadius === "multi-device") {
+        decision = "REQUIRE_APPROVAL";
+      } else if (criticality === "high" && (actionClass === "C" || actionClass === "D")) {
         decision = "REQUIRE_APPROVAL";
       }
 
@@ -112,6 +177,11 @@ export function evaluatePolicy(
           environmentLabel: envLabel,
           inMaintenanceWindow: inWindow,
           deviceId: device.id,
+          blastRadius,
+          criticality,
+          lane,
+          recentFailures,
+          quarantineActive,
         },
       };
     }
@@ -129,6 +199,11 @@ export function evaluatePolicy(
       environmentLabel: envLabel,
       inMaintenanceWindow: inWindow,
       deviceId: device.id,
+      blastRadius,
+      criticality,
+      lane,
+      recentFailures,
+      quarantineActive,
     },
   };
 }

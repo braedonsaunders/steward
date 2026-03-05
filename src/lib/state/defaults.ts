@@ -3,10 +3,12 @@ import type Database from "better-sqlite3";
 import { PROVIDER_REGISTRY } from "@/lib/llm/registry";
 import type {
   ActionLog,
+  AuthSettings,
   LLMProvider,
   PolicyRule,
   ProviderConfig,
   RuntimeSettings,
+  SystemSettings,
   StewardState,
 } from "@/lib/state/types";
 
@@ -17,7 +19,8 @@ export const defaultProviderConfigs = (): ProviderConfig[] => {
     const base: ProviderConfig = {
       provider: meta.id,
       enabled: meta.id === "openai",
-      model: meta.defaultModel,
+      // Model names must come from the live provider API, not static defaults.
+      model: "",
       baseUrl: meta.defaultBaseUrl,
     };
 
@@ -157,12 +160,66 @@ export const defaultRuntimeSettings = (): RuntimeSettings => ({
   incrementalPortScanHosts: 16,
   deepPortScanHosts: 96,
   llmDiscoveryLimit: 10,
-  incrementalFingerprintTargets: 6,
-  deepFingerprintTargets: 24,
+  incrementalFingerprintTargets: 16,
+  deepFingerprintTargets: 96,
   enableMdnsDiscovery: true,
   enableSsdpDiscovery: true,
   enableSnmpProbe: true,
   ouiUpdateIntervalMs: 7 * 24 * 60 * 60 * 1000,
+  laneBEnabled: false,
+  laneBAllowedEnvironments: ["lab", "dev"],
+  laneBAllowedFamilies: ["service-recovery", "disk-cleanup", "backup-retry"],
+  laneCMutationsInLab: false,
+  laneCMutationsInProd: false,
+  mutationRequireDryRunWhenSupported: true,
+  approvalTtlClassBMs: 2 * 60 * 60 * 1000,
+  approvalTtlClassCMs: 60 * 60 * 1000,
+  approvalTtlClassDMs: 30 * 60 * 1000,
+  quarantineThresholdCount: 3,
+  quarantineThresholdWindowMs: 10 * 60 * 1000,
+});
+
+function resolvedLocalTimezone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone ?? "America/Toronto";
+  } catch {
+    return "America/Toronto";
+  }
+}
+
+export const defaultSystemSettings = (): SystemSettings => ({
+  nodeIdentity: "steward-local",
+  timezone: resolvedLocalTimezone(),
+  digestScheduleEnabled: true,
+  digestHourLocal: 9,
+  digestMinuteLocal: 0,
+  upgradeChannel: "stable",
+});
+
+export const defaultAuthSettings = (): AuthSettings => ({
+  apiTokenEnabled: false,
+  mode: "hybrid",
+  sessionTtlHours: 12,
+  oidc: {
+    enabled: false,
+    issuer: "",
+    clientId: "",
+    scopes: "openid profile email",
+    autoProvision: true,
+    defaultRole: "Operator",
+    clientSecretConfigured: false,
+  },
+  ldap: {
+    enabled: false,
+    url: "",
+    baseDn: "",
+    bindDn: "",
+    userFilter: "(&(objectClass=person)(uid={{username}}))",
+    uidAttribute: "uid",
+    autoProvision: true,
+    defaultRole: "Operator",
+    bindPasswordConfigured: false,
+  },
 });
 
 export const defaultState = (): StewardState => ({
@@ -193,6 +250,8 @@ export const defaultState = (): StewardState => ({
   oauthStates: [],
   agentRuns: [],
   runtimeSettings: defaultRuntimeSettings(),
+  systemSettings: defaultSystemSettings(),
+  authSettings: defaultAuthSettings(),
   policyRules: defaultPolicyRules(),
   maintenanceWindows: [],
   playbookRuns: [],
@@ -305,6 +364,76 @@ export function ensureDefaults(db: Database.Database): void {
     ensureMeta.run("runtime.enableSsdpDiscovery", String(runtimeDefaults.enableSsdpDiscovery));
     ensureMeta.run("runtime.enableSnmpProbe", String(runtimeDefaults.enableSnmpProbe));
     ensureMeta.run("runtime.ouiUpdateIntervalMs", String(runtimeDefaults.ouiUpdateIntervalMs));
+    ensureMeta.run("runtime.laneBEnabled", String(runtimeDefaults.laneBEnabled));
+    ensureMeta.run("runtime.laneBAllowedEnvironments", JSON.stringify(runtimeDefaults.laneBAllowedEnvironments));
+    ensureMeta.run("runtime.laneBAllowedFamilies", JSON.stringify(runtimeDefaults.laneBAllowedFamilies));
+    ensureMeta.run("runtime.laneCMutationsInLab", String(runtimeDefaults.laneCMutationsInLab));
+    ensureMeta.run("runtime.laneCMutationsInProd", String(runtimeDefaults.laneCMutationsInProd));
+    ensureMeta.run("runtime.mutationRequireDryRunWhenSupported", String(runtimeDefaults.mutationRequireDryRunWhenSupported));
+    ensureMeta.run("runtime.approvalTtlClassBMs", String(runtimeDefaults.approvalTtlClassBMs));
+    ensureMeta.run("runtime.approvalTtlClassCMs", String(runtimeDefaults.approvalTtlClassCMs));
+    ensureMeta.run("runtime.approvalTtlClassDMs", String(runtimeDefaults.approvalTtlClassDMs));
+    ensureMeta.run("runtime.quarantineThresholdCount", String(runtimeDefaults.quarantineThresholdCount));
+    ensureMeta.run("runtime.quarantineThresholdWindowMs", String(runtimeDefaults.quarantineThresholdWindowMs));
+
+    // System settings domain
+    const systemDefaults = defaultSystemSettings();
+    ensureMeta.run("system.nodeIdentity", systemDefaults.nodeIdentity);
+    ensureMeta.run("system.timezone", systemDefaults.timezone);
+    ensureMeta.run("system.digestScheduleEnabled", String(systemDefaults.digestScheduleEnabled));
+    ensureMeta.run("system.digestHourLocal", String(systemDefaults.digestHourLocal));
+    ensureMeta.run("system.digestMinuteLocal", String(systemDefaults.digestMinuteLocal));
+    ensureMeta.run("system.upgradeChannel", systemDefaults.upgradeChannel);
+
+    // Auth settings domain
+    const authDefaults = defaultAuthSettings();
+    ensureMeta.run("auth.apiTokenEnabled", String(authDefaults.apiTokenEnabled));
+    ensureMeta.run("auth.mode", authDefaults.mode);
+    ensureMeta.run("auth.sessionTtlHours", String(authDefaults.sessionTtlHours));
+    ensureMeta.run("auth.oidc.enabled", String(authDefaults.oidc.enabled));
+    ensureMeta.run("auth.oidc.issuer", authDefaults.oidc.issuer);
+    ensureMeta.run("auth.oidc.clientId", authDefaults.oidc.clientId);
+    ensureMeta.run("auth.oidc.scopes", authDefaults.oidc.scopes);
+    ensureMeta.run("auth.oidc.autoProvision", String(authDefaults.oidc.autoProvision));
+    ensureMeta.run("auth.oidc.defaultRole", authDefaults.oidc.defaultRole);
+    ensureMeta.run("auth.oidc.clientSecretConfigured", String(authDefaults.oidc.clientSecretConfigured));
+    ensureMeta.run("auth.ldap.enabled", String(authDefaults.ldap.enabled));
+    ensureMeta.run("auth.ldap.url", authDefaults.ldap.url);
+    ensureMeta.run("auth.ldap.baseDn", authDefaults.ldap.baseDn);
+    ensureMeta.run("auth.ldap.bindDn", authDefaults.ldap.bindDn);
+    ensureMeta.run("auth.ldap.userFilter", authDefaults.ldap.userFilter);
+    ensureMeta.run("auth.ldap.uidAttribute", authDefaults.ldap.uidAttribute);
+    ensureMeta.run("auth.ldap.autoProvision", String(authDefaults.ldap.autoProvision));
+    ensureMeta.run("auth.ldap.defaultRole", authDefaults.ldap.defaultRole);
+    ensureMeta.run("auth.ldap.bindPasswordConfigured", String(authDefaults.ldap.bindPasswordConfigured));
+
+    // Settings history seed per domain (versioned + effective_from)
+    const historyCountStmt = db.prepare(
+      "SELECT COUNT(*) as cnt FROM settings_history WHERE domain = ?",
+    );
+    const insertHistoryStmt = db.prepare(`
+      INSERT INTO settings_history (id, domain, version, effectiveFrom, payload, actor, createdAt)
+      VALUES (@id, @domain, @version, @effectiveFrom, @payload, @actor, @createdAt)
+    `);
+    const historyCreatedAt = new Date().toISOString();
+    const seedDomain = (domain: "runtime" | "system" | "auth", payload: Record<string, unknown>) => {
+      const existing = historyCountStmt.get(domain) as { cnt: number } | undefined;
+      if ((existing?.cnt ?? 0) > 0) {
+        return;
+      }
+      insertHistoryStmt.run({
+        id: randomUUID(),
+        domain,
+        version: 1,
+        effectiveFrom: historyCreatedAt,
+        payload: JSON.stringify(payload),
+        actor: "steward",
+        createdAt: historyCreatedAt,
+      });
+    };
+    seedDomain("runtime", runtimeDefaults as unknown as Record<string, unknown>);
+    seedDomain("system", systemDefaults as unknown as Record<string, unknown>);
+    seedDomain("auth", authDefaults as unknown as Record<string, unknown>);
 
     // Default site graph node
     const existingSiteNode = db

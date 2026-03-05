@@ -4,6 +4,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { isAuthorized } from "@/lib/auth/guard";
 import { buildAssistantContext } from "@/lib/assistant/context";
+import { tryHandleDeviceChatAction } from "@/lib/assistant/device-actions";
+import { tryExecuteGraphQuery } from "@/lib/assistant/graph-query";
 import { buildStewardSystemPrompt } from "@/lib/assistant/prompt";
 import { getDefaultProvider } from "@/lib/llm/config";
 import { buildLanguageModel } from "@/lib/llm/providers";
@@ -58,6 +60,107 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    const graphQuery = await tryExecuteGraphQuery(payload.data.input, attachedDevice);
+    if (graphQuery.handled && graphQuery.response) {
+      if (sessionId) {
+        stateStore.addChatMessage({
+          id: randomUUID(),
+          sessionId,
+          role: "assistant",
+          content: graphQuery.response,
+          provider: "custom",
+          error: false,
+          createdAt: new Date().toISOString(),
+        });
+      }
+
+      await stateStore.addAction({
+        actor: "user",
+        kind: "diagnose",
+        message: "Graph query handled deterministically",
+        context: {
+          sessionId,
+          ...graphQuery.metadata,
+        },
+      });
+
+      if (payload.data.stream) {
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode(`${JSON.stringify({ type: "start", provider: "graph" })}\n`));
+            controller.enqueue(
+              encoder.encode(
+                `${JSON.stringify({ type: "finish", provider: "graph", text: graphQuery.response, reasoning: "" })}\n`,
+              ),
+            );
+            controller.close();
+          },
+        });
+        return new Response(stream, {
+          headers: {
+            "content-type": "application/x-ndjson; charset=utf-8",
+            "cache-control": "no-cache, no-transform",
+            connection: "keep-alive",
+          },
+        });
+      }
+
+      return NextResponse.json({
+        provider: "graph",
+        response: graphQuery.response,
+      });
+    }
+
+    const deviceAction = await tryHandleDeviceChatAction({
+      input: payload.data.input,
+      provider,
+      model: payload.data.model,
+      attachedDevice,
+      sessionId: sessionId ?? undefined,
+    });
+    if (deviceAction.handled && deviceAction.response) {
+      if (sessionId) {
+        stateStore.addChatMessage({
+          id: randomUUID(),
+          sessionId,
+          role: "assistant",
+          content: deviceAction.response,
+          provider: "custom",
+          error: false,
+          createdAt: new Date().toISOString(),
+        });
+      }
+
+      if (payload.data.stream) {
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode(`${JSON.stringify({ type: "start", provider: "steward-action" })}\n`));
+            controller.enqueue(
+              encoder.encode(
+                `${JSON.stringify({ type: "finish", provider: "steward-action", text: deviceAction.response, reasoning: "" })}\n`,
+              ),
+            );
+            controller.close();
+          },
+        });
+        return new Response(stream, {
+          headers: {
+            "content-type": "application/x-ndjson; charset=utf-8",
+            "cache-control": "no-cache, no-transform",
+            connection: "keep-alive",
+          },
+        });
+      }
+
+      return NextResponse.json({
+        provider: "steward-action",
+        response: deviceAction.response,
+        metadata: deviceAction.metadata ?? {},
+      });
+    }
+
     const context = await buildAssistantContext();
     const model = await buildLanguageModel(provider, payload.data.model);
     const systemPrompt = attachedDevice
@@ -71,7 +174,7 @@ export async function POST(request: NextRequest) {
       // Include up to last 20 messages for context (excluding the one we just added)
       const relevant = history.slice(-21, -1);
       for (const msg of relevant) {
-        if (!msg.error) {
+        if (!msg.error && msg.content.trim().length > 0) {
           messages.push({ role: msg.role, content: msg.content });
         }
       }
@@ -109,6 +212,10 @@ export async function POST(request: NextRequest) {
                 reasoningText += part.text;
                 send({ type: "reasoning-delta", text: part.text });
               }
+            }
+
+            if (assistantText.trim().length === 0) {
+              throw new Error("No output generated. Check the stream for errors.");
             }
 
             if (sessionId) {
@@ -182,6 +289,10 @@ export async function POST(request: NextRequest) {
       temperature: 0.2,
       maxOutputTokens: 600,
     });
+
+    if (result.text.trim().length === 0) {
+      throw new Error("No output generated. Check the stream for errors.");
+    }
 
     // Persist the assistant response
     if (sessionId) {

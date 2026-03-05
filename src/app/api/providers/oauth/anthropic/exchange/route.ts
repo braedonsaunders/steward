@@ -3,6 +3,7 @@ import { z } from "zod";
 import { isAuthorized } from "@/lib/auth/guard";
 import { exchangeAnthropicCode } from "@/lib/auth/oauth";
 import { getProviderConfig } from "@/lib/llm/config";
+import { listProviderModelsFromApi, normalizeProviderModel } from "@/lib/llm/models";
 import { getProviderMeta } from "@/lib/llm/registry";
 import { ensureVaultReadyForProviders } from "@/lib/security/vault-gate";
 import { vault } from "@/lib/security/vault";
@@ -76,13 +77,26 @@ export async function POST(request: NextRequest) {
       await vault.setSecret("llm.oauth.anthropic.expires_at", String(expiresAt));
     }
 
-    // Persist provider config so the provider is enabled
+    // Persist provider config only with a model that is returned by
+    // Anthropic's live provider API.
     const meta = getProviderMeta("anthropic");
     const existingConfig = await getProviderConfig("anthropic");
+    const preferredModel = normalizeProviderModel(
+      "anthropic",
+      existingConfig?.model ?? meta?.defaultModel ?? "claude-sonnet-4-20250514",
+    );
+    const providerModels = await listProviderModelsFromApi("anthropic", { forceRefresh: true });
+    const persistedModel = preferredModel && providerModels.includes(preferredModel)
+      ? preferredModel
+      : providerModels[0];
+    if (!persistedModel) {
+      throw new Error("Anthropic model list from provider API was empty.");
+    }
+
     await stateStore.setProviderConfig({
       provider: "anthropic",
       enabled: true,
-      model: existingConfig?.model ?? meta?.defaultModel ?? "claude-sonnet-4-20250514",
+      model: persistedModel,
       oauthTokenSecret: "llm.oauth.anthropic.access_token",
     });
 

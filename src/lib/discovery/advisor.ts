@@ -1,6 +1,9 @@
 import { generateText } from "ai";
 import { getDefaultProvider } from "@/lib/llm/config";
 import { buildLanguageModel } from "@/lib/llm/providers";
+import { llmHealthController } from "@/lib/llm/health";
+import { applyPromptFirewall } from "@/lib/llm/prompt-firewall";
+import { stateStore } from "@/lib/state/store";
 import type { Device } from "@/lib/state/types";
 
 interface DeviceAdvice {
@@ -63,8 +66,20 @@ export const generateDiscoveryAdvice = async (devices: Device[]): Promise<Device
     return [];
   }
 
+  const runtime = stateStore.getRuntimeSettings();
+  if (!runtime.laneBEnabled) {
+    return [];
+  }
+
+  let providerForHealth = "default";
+
   try {
     const provider = await getDefaultProvider();
+    providerForHealth = provider;
+    if (!llmHealthController.laneBAllowed(provider)) {
+      return [];
+    }
+
     const model = await buildLanguageModel(provider);
 
     const compactDevices = devices.map((device) => ({
@@ -81,6 +96,9 @@ export const generateDiscoveryAdvice = async (devices: Device[]): Promise<Device
       })),
     }));
 
+    const rawTelemetry = JSON.stringify(compactDevices);
+    const firewall = applyPromptFirewall(rawTelemetry);
+
     const result = await generateText({
       model,
       temperature: 0,
@@ -93,10 +111,15 @@ export const generateDiscoveryAdvice = async (devices: Device[]): Promise<Device
         "reason (short string), role (optional string), requiredCredentials (array of strings).",
         "requiredCredentials should reference protocols like ssh, winrm, snmp, api, web-admin.",
         "If confidence is below 0.5, set shouldManage=false.",
+        firewall.tainted
+          ? `Telemetry was sanitized by prompt firewall. Reasons: ${firewall.reasons.join(", ")}`
+          : "Telemetry passed prompt firewall.",
         "Devices:",
-        JSON.stringify(compactDevices),
+        firewall.sanitized,
       ].join("\n"),
     });
+
+    llmHealthController.reportSuccess(provider);
 
     const parsed = extractJsonArray(result.text);
     if (!parsed) {
@@ -104,7 +127,9 @@ export const generateDiscoveryAdvice = async (devices: Device[]): Promise<Device
     }
 
     return parsed.map(toAdvice).filter((item): item is DeviceAdvice => Boolean(item));
-  } catch {
+  } catch (error) {
+    void error;
+    llmHealthController.reportFailure(providerForHealth);
     return [];
   }
 };

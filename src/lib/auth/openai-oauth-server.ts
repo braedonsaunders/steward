@@ -7,6 +7,7 @@ import {
   extractOpenAIAccountIdFromTokens,
 } from "@/lib/auth/oauth";
 import { getProviderConfig } from "@/lib/llm/config";
+import { listProviderModelsFromApi, normalizeProviderModel } from "@/lib/llm/models";
 import { getProviderMeta } from "@/lib/llm/registry";
 import { ensureVaultReadyForProviders } from "@/lib/security/vault-gate";
 import { vault } from "@/lib/security/vault";
@@ -147,12 +148,23 @@ export async function startOpenAIOAuthFlow(): Promise<string> {
           // Persist provider config
           const meta = getProviderMeta("openai");
           const existingConfig = await getProviderConfig("openai");
+          const preferredModel = normalizeProviderModel(
+            "openai",
+            gotApiKey
+              ? (existingConfig?.model ?? meta?.defaultModel ?? "gpt-4o-mini")
+              : "gpt-5.3-codex",
+          );
+          const providerModels = await listProviderModelsFromApi("openai", { forceRefresh: true });
+          const persistedModel = preferredModel && providerModels.includes(preferredModel)
+            ? preferredModel
+            : providerModels[0];
+          if (!persistedModel) {
+            throw new Error("OpenAI model list from provider API was empty.");
+          }
           await stateStore.setProviderConfig({
             provider: "openai",
             enabled: true,
-            model: gotApiKey
-              ? (existingConfig?.model ?? meta?.defaultModel ?? "gpt-4o-mini")
-              : "gpt-5.3-codex",
+            model: persistedModel,
             // Only set oauthTokenSecret if we're using the OAuth token path
             oauthTokenSecret: gotApiKey ? undefined : "llm.oauth.openai.access_token",
           });

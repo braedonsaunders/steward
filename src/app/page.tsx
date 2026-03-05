@@ -5,7 +5,6 @@ import Link from "next/link";
 import {
   Server,
   Wifi,
-  WifiOff,
   AlertTriangle,
   Lightbulb,
   Play,
@@ -137,7 +136,7 @@ export default function DashboardPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+          <h1 className="text-2xl font-semibold tracking-tight steward-heading-font">Dashboard</h1>
           <p className="text-sm text-muted-foreground">
             Network operations overview
           </p>

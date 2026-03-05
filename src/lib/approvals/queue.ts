@@ -1,16 +1,29 @@
 import { stateStore } from "@/lib/state/store";
 import type { Device, PlaybookRun } from "@/lib/state/types";
 
-const DEFAULT_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours
+function ttlForRun(run: PlaybookRun): number {
+  const runtime = stateStore.getRuntimeSettings();
+  switch (run.actionClass) {
+    case "B":
+      return runtime.approvalTtlClassBMs;
+    case "C":
+      return runtime.approvalTtlClassCMs;
+    case "D":
+      return runtime.approvalTtlClassDMs;
+    default:
+      return runtime.approvalTtlClassBMs;
+  }
+}
 
 /**
  * Create a pending approval for a playbook run.
  */
-export function createApproval(run: PlaybookRun, _device: Device): PlaybookRun {
+export function createApproval(run: PlaybookRun, device: Device): PlaybookRun {
+  const ttlMs = ttlForRun(run);
   const updated: PlaybookRun = {
     ...run,
     status: "pending_approval",
-    expiresAt: new Date(Date.now() + DEFAULT_TTL_MS).toISOString(),
+    expiresAt: new Date(Date.now() + ttlMs).toISOString(),
   };
 
   stateStore.upsertPlaybookRun(updated);
@@ -19,7 +32,12 @@ export function createApproval(run: PlaybookRun, _device: Device): PlaybookRun {
     actor: "steward",
     kind: "approval",
     message: `Approval requested: "${run.name}" on device ${run.deviceId}`,
-    context: { playbookRunId: run.id, actionClass: run.actionClass },
+    context: {
+      playbookRunId: run.id,
+      actionClass: run.actionClass,
+      deviceName: device.name,
+      ttlMs,
+    },
   });
 
   return updated;
@@ -92,6 +110,40 @@ export function expireStale(): number {
 
   for (const run of pending) {
     if (run.expiresAt && new Date(run.expiresAt).getTime() < now) {
+      const escalationAlreadySent = Boolean(
+        run.evidence.preSnapshot
+        && typeof run.evidence.preSnapshot.approvalEscalatedAt === "string",
+      );
+
+      if (!escalationAlreadySent) {
+        const escalationTtlMs = Math.min(30 * 60 * 1000, Math.max(5 * 60 * 1000, ttlForRun(run) / 2));
+        const escalated: PlaybookRun = {
+          ...run,
+          expiresAt: new Date(now + escalationTtlMs).toISOString(),
+          evidence: {
+            ...run.evidence,
+            preSnapshot: {
+              ...(run.evidence.preSnapshot ?? {}),
+              approvalEscalatedAt: new Date().toISOString(),
+            },
+            logs: [
+              ...run.evidence.logs,
+              `Approval escalated with additional TTL ${Math.round(escalationTtlMs / 1000)}s`,
+            ],
+          },
+        };
+
+        stateStore.upsertPlaybookRun(escalated);
+
+        void stateStore.addAction({
+          actor: "steward",
+          kind: "approval",
+          message: `Approval escalated: "${run.name}" on device ${run.deviceId}`,
+          context: { playbookRunId: run.id, escalationTtlMs },
+        });
+        continue;
+      }
+
       const updated: PlaybookRun = {
         ...run,
         status: "denied",

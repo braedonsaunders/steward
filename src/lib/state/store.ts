@@ -1,20 +1,36 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import {
+  getAuditDb,
+  getAuditDbPath,
   getDb,
   getDataDir as dbGetDataDir,
   getDbPath,
+  recoverCorruptAuditDatabase,
   recoverCorruptDatabase,
 } from "@/lib/state/db";
-import { defaultRuntimeSettings, ensureDefaults } from "@/lib/state/defaults";
+import {
+  defaultAuthSettings,
+  defaultRuntimeSettings,
+  defaultSystemSettings,
+  ensureDefaults,
+} from "@/lib/state/defaults";
 import type {
   ActionLog,
+  AdoptionQuestion,
+  AdoptionRun,
   AgentRunRecord,
+  AuthSettings,
   ChatMessage,
   ChatSession,
   DailyDigest,
   Device,
+  DeviceAdapterBinding,
   DeviceBaseline,
+  DeviceCredential,
+  DeviceFinding,
+  DiscoveryObservation,
+  DiscoveryObservationInput,
   GraphEdge,
   GraphNode,
   Incident,
@@ -25,7 +41,10 @@ import type {
   ProviderConfig,
   Recommendation,
   RuntimeSettings,
+  ServiceContract,
+  SettingsHistoryEntry,
   StewardState,
+  SystemSettings,
 } from "@/lib/state/types";
 
 /* ---------- Row <-> Domain helpers ---------- */
@@ -201,6 +220,9 @@ function maintenanceWindowFromRow(row: Record<string, unknown>): MaintenanceWind
 }
 
 function playbookRunFromRow(row: Record<string, unknown>): PlaybookRun {
+  const policyEvaluationRaw = JSON.parse(row.policyEvaluation as string) as Partial<PlaybookRun["policyEvaluation"]>;
+  const policyInputsRaw = (policyEvaluationRaw.inputs ?? {}) as Partial<PlaybookRun["policyEvaluation"]["inputs"]>;
+
   return {
     id: row.id as string,
     playbookId: row.playbookId as string,
@@ -210,7 +232,25 @@ function playbookRunFromRow(row: Record<string, unknown>): PlaybookRun {
     incidentId: (row.incidentId as string) ?? undefined,
     actionClass: row.actionClass as PlaybookRun["actionClass"],
     status: row.status as PlaybookRun["status"],
-    policyEvaluation: JSON.parse(row.policyEvaluation as string) as PlaybookRun["policyEvaluation"],
+    policyEvaluation: {
+      decision: (policyEvaluationRaw.decision as PlaybookRun["policyEvaluation"]["decision"]) ?? "REQUIRE_APPROVAL",
+      ruleId: policyEvaluationRaw.ruleId ?? null,
+      reason: String(policyEvaluationRaw.reason ?? "Policy evaluation unavailable"),
+      evaluatedAt: String(policyEvaluationRaw.evaluatedAt ?? row.createdAt ?? new Date().toISOString()),
+      inputs: {
+        actionClass: (policyInputsRaw.actionClass as PlaybookRun["policyEvaluation"]["inputs"]["actionClass"])
+          ?? (row.actionClass as PlaybookRun["actionClass"]),
+        autonomyTier: (policyInputsRaw.autonomyTier as PlaybookRun["policyEvaluation"]["inputs"]["autonomyTier"]) ?? 1,
+        environmentLabel: (policyInputsRaw.environmentLabel as PlaybookRun["policyEvaluation"]["inputs"]["environmentLabel"]) ?? "lab",
+        inMaintenanceWindow: Boolean(policyInputsRaw.inMaintenanceWindow),
+        deviceId: String(policyInputsRaw.deviceId ?? row.deviceId),
+        blastRadius: (policyInputsRaw.blastRadius as PlaybookRun["policyEvaluation"]["inputs"]["blastRadius"]) ?? "single-device",
+        criticality: (policyInputsRaw.criticality as PlaybookRun["policyEvaluation"]["inputs"]["criticality"]) ?? "medium",
+        lane: (policyInputsRaw.lane as PlaybookRun["policyEvaluation"]["inputs"]["lane"]) ?? "A",
+        recentFailures: Number(policyInputsRaw.recentFailures ?? 0),
+        quarantineActive: Boolean(policyInputsRaw.quarantineActive),
+      },
+    },
     steps: JSON.parse(row.steps as string) as PlaybookRun["steps"],
     verificationSteps: JSON.parse(row.verificationSteps as string) as PlaybookRun["verificationSteps"],
     rollbackSteps: JSON.parse(row.rollbackSteps as string) as PlaybookRun["rollbackSteps"],
@@ -239,6 +279,123 @@ function dailyDigestFromRow(row: Record<string, unknown>): DailyDigest {
   };
 }
 
+function discoveryObservationFromRow(row: Record<string, unknown>): DiscoveryObservation {
+  return {
+    id: row.id as string,
+    ip: row.ip as string,
+    deviceId: row.deviceId ? String(row.deviceId) : undefined,
+    source: row.source as DiscoveryObservation["source"],
+    evidenceType: row.evidenceType as DiscoveryObservation["evidenceType"],
+    confidence: Number(row.confidence),
+    observedAt: String(row.observedAt),
+    expiresAt: String(row.expiresAt),
+    details: JSON.parse(String(row.details ?? "{}")) as Record<string, unknown>,
+  };
+}
+
+function adoptionRunFromRow(row: Record<string, unknown>): AdoptionRun {
+  return {
+    id: String(row.id),
+    deviceId: String(row.deviceId),
+    status: row.status as AdoptionRun["status"],
+    stage: row.stage as AdoptionRun["stage"],
+    profileJson: JSON.parse(String(row.profileJson ?? "{}")) as Record<string, unknown>,
+    summary: row.summary ? String(row.summary) : undefined,
+    createdAt: String(row.createdAt),
+    updatedAt: String(row.updatedAt),
+  };
+}
+
+function adoptionQuestionFromRow(row: Record<string, unknown>): AdoptionQuestion {
+  return {
+    id: String(row.id),
+    runId: String(row.runId),
+    deviceId: String(row.deviceId),
+    questionKey: String(row.questionKey),
+    prompt: String(row.prompt),
+    options: JSON.parse(String(row.optionsJson ?? "[]")) as AdoptionQuestion["options"],
+    required: Boolean(row.required),
+    answerJson: row.answerJson ? JSON.parse(String(row.answerJson)) as Record<string, unknown> : undefined,
+    answeredAt: row.answeredAt ? String(row.answeredAt) : undefined,
+    createdAt: String(row.createdAt),
+    updatedAt: String(row.updatedAt),
+  };
+}
+
+function deviceCredentialFromRow(row: Record<string, unknown>): DeviceCredential {
+  return {
+    id: String(row.id),
+    deviceId: String(row.deviceId),
+    protocol: String(row.protocol),
+    adapterId: row.adapterId ? String(row.adapterId) : undefined,
+    vaultSecretRef: String(row.vaultSecretRef),
+    accountLabel: row.accountLabel ? String(row.accountLabel) : undefined,
+    scopeJson: JSON.parse(String(row.scopeJson ?? "{}")) as Record<string, unknown>,
+    status: row.status as DeviceCredential["status"],
+    lastValidatedAt: row.lastValidatedAt ? String(row.lastValidatedAt) : undefined,
+    createdAt: String(row.createdAt),
+    updatedAt: String(row.updatedAt),
+  };
+}
+
+function deviceAdapterBindingFromRow(row: Record<string, unknown>): DeviceAdapterBinding {
+  return {
+    id: String(row.id),
+    deviceId: String(row.deviceId),
+    adapterId: String(row.adapterId),
+    protocol: String(row.protocol),
+    score: Number(row.score ?? 0),
+    selected: Boolean(row.selected),
+    reason: String(row.reason ?? ""),
+    configJson: JSON.parse(String(row.configJson ?? "{}")) as Record<string, unknown>,
+    createdAt: String(row.createdAt),
+    updatedAt: String(row.updatedAt),
+  };
+}
+
+function serviceContractFromRow(row: Record<string, unknown>): ServiceContract {
+  return {
+    id: String(row.id),
+    deviceId: String(row.deviceId),
+    serviceKey: String(row.serviceKey),
+    displayName: String(row.displayName),
+    criticality: row.criticality as ServiceContract["criticality"],
+    desiredState: row.desiredState as ServiceContract["desiredState"],
+    checkIntervalSec: Number(row.checkIntervalSec ?? 60),
+    policyJson: JSON.parse(String(row.policyJson ?? "{}")) as Record<string, unknown>,
+    createdAt: String(row.createdAt),
+    updatedAt: String(row.updatedAt),
+  };
+}
+
+function deviceFindingFromRow(row: Record<string, unknown>): DeviceFinding {
+  return {
+    id: String(row.id),
+    deviceId: String(row.deviceId),
+    dedupeKey: String(row.dedupeKey),
+    findingType: String(row.findingType),
+    severity: row.severity as DeviceFinding["severity"],
+    title: String(row.title),
+    summary: String(row.summary),
+    evidenceJson: JSON.parse(String(row.evidenceJson ?? "{}")) as Record<string, unknown>,
+    status: row.status as DeviceFinding["status"],
+    firstSeenAt: String(row.firstSeenAt),
+    lastSeenAt: String(row.lastSeenAt),
+  };
+}
+
+function settingsHistoryFromRow<T = Record<string, unknown>>(row: Record<string, unknown>): SettingsHistoryEntry<T> {
+  return {
+    id: String(row.id),
+    domain: row.domain as SettingsHistoryEntry<T>["domain"],
+    version: Number(row.version),
+    effectiveFrom: String(row.effectiveFrom),
+    payload: JSON.parse(String(row.payload ?? "{}")) as T,
+    actor: row.actor as SettingsHistoryEntry<T>["actor"],
+    createdAt: String(row.createdAt),
+  };
+}
+
 /* ---------- StateStore ---------- */
 
 class StateStore {
@@ -248,6 +405,26 @@ class StateStore {
     if (this.initialized) return;
     const db = getDb();
     ensureDefaults(db);
+    const auditDb = getAuditDb();
+    const row = auditDb.prepare("SELECT COUNT(*) as cnt FROM audit_events").get() as { cnt: number };
+    if (row.cnt === 0) {
+      const init = {
+        id: randomUUID(),
+        at: new Date().toISOString(),
+        actor: "steward",
+        kind: "config",
+        message: "Steward audit ledger initialized",
+        context: "{}",
+      };
+      auditDb.prepare(`
+        INSERT INTO audit_events (id, at, actor, kind, message, context, idempotencyKey, createdAt)
+        VALUES (@id, @at, @actor, @kind, @message, @context, @idempotencyKey, @createdAt)
+      `).run({
+        ...init,
+        idempotencyKey: init.id,
+        createdAt: init.at,
+      });
+    }
     this.initialized = true;
   }
 
@@ -269,6 +446,31 @@ class StateStore {
     }
   }
 
+  private withAuditDbRecovery<T>(context: string, operation: (db: Database.Database) => T): T {
+    const run = () => operation(getAuditDb());
+
+    try {
+      return run();
+    } catch (error) {
+      if (!recoverCorruptAuditDatabase(error, context)) {
+        throw error;
+      }
+      return run();
+    }
+  }
+
+  private readRecentAuditEvents(limit = 2_000): ActionLog[] {
+    return this.withAuditDbRecovery("StateStore.readRecentAuditEvents", (auditDb) => {
+      const rows = auditDb.prepare(`
+        SELECT id, at, actor, kind, message, context
+        FROM audit_events
+        ORDER BY at DESC, id DESC
+        LIMIT ?
+      `).all(limit) as Record<string, unknown>[];
+      return rows.map(actionFromRow);
+    });
+  }
+
   private getVersion(db: Database.Database): number {
     const row = db.prepare("SELECT value FROM metadata WHERE key = 'version'").get() as { value: string } | undefined;
     return row ? Number(row.value) : 1;
@@ -279,37 +481,346 @@ class StateStore {
     return row?.value ?? new Date().toISOString();
   }
 
-  private readRuntimeSettings(db: Database.Database): RuntimeSettings {
+  private isValidTimezone(value: string): boolean {
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: value }).format(new Date());
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private coerceRuntimeSettings(raw: Partial<Record<keyof RuntimeSettings, unknown>>): RuntimeSettings {
     const defaults = defaultRuntimeSettings();
-    const rows = db.prepare("SELECT key, value FROM metadata WHERE key LIKE 'runtime.%'").all() as Array<{ key: string; value: string }>;
-    const map = new Map(rows.map((row) => [row.key, row.value]));
-
-    const parseNum = (key: string, fallback: number): number => {
-      const value = Number(map.get(key));
-      return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+    const asPositiveInt = (value: unknown, fallback: number): number => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
     };
-
-    const parseBool = (key: string, fallback: boolean): boolean => {
-      const raw = map.get(key);
-      if (raw === undefined) return fallback;
-      return raw === "true" || raw === "1";
+    const asBool = (value: unknown, fallback: boolean): boolean => {
+      if (typeof value === "boolean") return value;
+      if (value === "true" || value === "1") return true;
+      if (value === "false" || value === "0") return false;
+      return fallback;
+    };
+    const asStringArray = (value: unknown, fallback: string[]): string[] => {
+      if (Array.isArray(value)) {
+        return value.map((item) => String(item));
+      }
+      if (typeof value === "string") {
+        try {
+          const parsed = JSON.parse(value);
+          if (Array.isArray(parsed)) {
+            return parsed.map((item) => String(item));
+          }
+        } catch {
+          return fallback;
+        }
+      }
+      return fallback;
     };
 
     return {
-      agentIntervalMs: parseNum("runtime.agentIntervalMs", defaults.agentIntervalMs),
-      deepScanIntervalMs: parseNum("runtime.deepScanIntervalMs", defaults.deepScanIntervalMs),
-      incrementalActiveTargets: parseNum("runtime.incrementalActiveTargets", defaults.incrementalActiveTargets),
-      deepActiveTargets: parseNum("runtime.deepActiveTargets", defaults.deepActiveTargets),
-      incrementalPortScanHosts: parseNum("runtime.incrementalPortScanHosts", defaults.incrementalPortScanHosts),
-      deepPortScanHosts: parseNum("runtime.deepPortScanHosts", defaults.deepPortScanHosts),
-      llmDiscoveryLimit: parseNum("runtime.llmDiscoveryLimit", defaults.llmDiscoveryLimit),
-      incrementalFingerprintTargets: parseNum("runtime.incrementalFingerprintTargets", defaults.incrementalFingerprintTargets),
-      deepFingerprintTargets: parseNum("runtime.deepFingerprintTargets", defaults.deepFingerprintTargets),
-      enableMdnsDiscovery: parseBool("runtime.enableMdnsDiscovery", defaults.enableMdnsDiscovery),
-      enableSsdpDiscovery: parseBool("runtime.enableSsdpDiscovery", defaults.enableSsdpDiscovery),
-      enableSnmpProbe: parseBool("runtime.enableSnmpProbe", defaults.enableSnmpProbe),
-      ouiUpdateIntervalMs: parseNum("runtime.ouiUpdateIntervalMs", defaults.ouiUpdateIntervalMs),
+      agentIntervalMs: asPositiveInt(raw.agentIntervalMs, defaults.agentIntervalMs),
+      deepScanIntervalMs: asPositiveInt(raw.deepScanIntervalMs, defaults.deepScanIntervalMs),
+      incrementalActiveTargets: asPositiveInt(raw.incrementalActiveTargets, defaults.incrementalActiveTargets),
+      deepActiveTargets: asPositiveInt(raw.deepActiveTargets, defaults.deepActiveTargets),
+      incrementalPortScanHosts: asPositiveInt(raw.incrementalPortScanHosts, defaults.incrementalPortScanHosts),
+      deepPortScanHosts: asPositiveInt(raw.deepPortScanHosts, defaults.deepPortScanHosts),
+      llmDiscoveryLimit: asPositiveInt(raw.llmDiscoveryLimit, defaults.llmDiscoveryLimit),
+      incrementalFingerprintTargets: Math.max(
+        defaults.incrementalFingerprintTargets,
+        asPositiveInt(raw.incrementalFingerprintTargets, defaults.incrementalFingerprintTargets),
+      ),
+      deepFingerprintTargets: Math.max(
+        defaults.deepFingerprintTargets,
+        asPositiveInt(raw.deepFingerprintTargets, defaults.deepFingerprintTargets),
+      ),
+      enableMdnsDiscovery: asBool(raw.enableMdnsDiscovery, defaults.enableMdnsDiscovery),
+      enableSsdpDiscovery: asBool(raw.enableSsdpDiscovery, defaults.enableSsdpDiscovery),
+      enableSnmpProbe: asBool(raw.enableSnmpProbe, defaults.enableSnmpProbe),
+      ouiUpdateIntervalMs: asPositiveInt(raw.ouiUpdateIntervalMs, defaults.ouiUpdateIntervalMs),
+      laneBEnabled: asBool(raw.laneBEnabled, defaults.laneBEnabled),
+      laneBAllowedEnvironments: asStringArray(
+        raw.laneBAllowedEnvironments,
+        defaults.laneBAllowedEnvironments,
+      ) as RuntimeSettings["laneBAllowedEnvironments"],
+      laneBAllowedFamilies: asStringArray(raw.laneBAllowedFamilies, defaults.laneBAllowedFamilies),
+      laneCMutationsInLab: asBool(raw.laneCMutationsInLab, defaults.laneCMutationsInLab),
+      laneCMutationsInProd: asBool(raw.laneCMutationsInProd, defaults.laneCMutationsInProd),
+      mutationRequireDryRunWhenSupported: asBool(
+        raw.mutationRequireDryRunWhenSupported,
+        defaults.mutationRequireDryRunWhenSupported,
+      ),
+      approvalTtlClassBMs: asPositiveInt(raw.approvalTtlClassBMs, defaults.approvalTtlClassBMs),
+      approvalTtlClassCMs: asPositiveInt(raw.approvalTtlClassCMs, defaults.approvalTtlClassCMs),
+      approvalTtlClassDMs: asPositiveInt(raw.approvalTtlClassDMs, defaults.approvalTtlClassDMs),
+      quarantineThresholdCount: asPositiveInt(raw.quarantineThresholdCount, defaults.quarantineThresholdCount),
+      quarantineThresholdWindowMs: asPositiveInt(
+        raw.quarantineThresholdWindowMs,
+        defaults.quarantineThresholdWindowMs,
+      ),
     };
+  }
+
+  private coerceSystemSettings(raw: Partial<Record<keyof SystemSettings, unknown>>): SystemSettings {
+    const defaults = defaultSystemSettings();
+    const parseBool = (value: unknown, fallback: boolean): boolean => {
+      if (typeof value === "boolean") return value;
+      if (value === "true" || value === "1") return true;
+      if (value === "false" || value === "0") return false;
+      return fallback;
+    };
+    const parseBoundedInt = (value: unknown, fallback: number, min: number, max: number): number => {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return fallback;
+      return Math.min(max, Math.max(min, Math.floor(parsed)));
+    };
+
+    const timezoneCandidate =
+      typeof raw.timezone === "string" && raw.timezone.trim().length > 0
+        ? raw.timezone.trim()
+        : defaults.timezone;
+    const timezone = this.isValidTimezone(timezoneCandidate) ? timezoneCandidate : defaults.timezone;
+
+    const nodeIdentity =
+      typeof raw.nodeIdentity === "string" && raw.nodeIdentity.trim().length > 0
+        ? raw.nodeIdentity.trim()
+        : defaults.nodeIdentity;
+
+    const upgradeChannel = raw.upgradeChannel === "preview" ? "preview" : "stable";
+
+    return {
+      nodeIdentity,
+      timezone,
+      digestScheduleEnabled: parseBool(raw.digestScheduleEnabled, defaults.digestScheduleEnabled),
+      digestHourLocal: parseBoundedInt(raw.digestHourLocal, defaults.digestHourLocal, 0, 23),
+      digestMinuteLocal: parseBoundedInt(raw.digestMinuteLocal, defaults.digestMinuteLocal, 0, 59),
+      upgradeChannel,
+    };
+  }
+
+  private coerceAuthSettings(raw: Partial<Record<keyof AuthSettings, unknown>>): AuthSettings {
+    const defaults = defaultAuthSettings();
+
+    const parseBool = (value: unknown, fallback: boolean): boolean => {
+      if (typeof value === "boolean") return value;
+      if (value === "true" || value === "1") return true;
+      if (value === "false" || value === "0") return false;
+      return fallback;
+    };
+
+    const parseString = (value: unknown, fallback: string): string => {
+      return typeof value === "string" ? value : fallback;
+    };
+
+    const parsePositiveInt = (value: unknown, fallback: number): number => {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+      return Math.floor(parsed);
+    };
+
+    const parseMode = (value: unknown): AuthSettings["mode"] => {
+      if (value === "open" || value === "token" || value === "session" || value === "hybrid") {
+        return value;
+      }
+      return defaults.mode;
+    };
+
+    const parseRole = (value: unknown, fallback: AuthSettings["oidc"]["defaultRole"]): AuthSettings["oidc"]["defaultRole"] => {
+      if (
+        value === "Owner"
+        || value === "Admin"
+        || value === "Operator"
+        || value === "Auditor"
+        || value === "ReadOnly"
+      ) {
+        return value;
+      }
+      return fallback;
+    };
+
+    const oidcRaw = (raw.oidc && typeof raw.oidc === "object")
+      ? raw.oidc as Partial<AuthSettings["oidc"]>
+      : {};
+    const ldapRaw = (raw.ldap && typeof raw.ldap === "object")
+      ? raw.ldap as Partial<AuthSettings["ldap"]>
+      : {};
+
+    return {
+      apiTokenEnabled: parseBool(raw.apiTokenEnabled, defaults.apiTokenEnabled),
+      mode: parseMode(raw.mode),
+      sessionTtlHours: Math.min(24 * 30, parsePositiveInt(raw.sessionTtlHours, defaults.sessionTtlHours)),
+      oidc: {
+        enabled: parseBool(oidcRaw.enabled, defaults.oidc.enabled),
+        issuer: parseString(oidcRaw.issuer, defaults.oidc.issuer),
+        clientId: parseString(oidcRaw.clientId, defaults.oidc.clientId),
+        scopes: parseString(oidcRaw.scopes, defaults.oidc.scopes),
+        autoProvision: parseBool(oidcRaw.autoProvision, defaults.oidc.autoProvision),
+        defaultRole: parseRole(oidcRaw.defaultRole, defaults.oidc.defaultRole),
+        clientSecretConfigured: parseBool(oidcRaw.clientSecretConfigured, defaults.oidc.clientSecretConfigured),
+      },
+      ldap: {
+        enabled: parseBool(ldapRaw.enabled, defaults.ldap.enabled),
+        url: parseString(ldapRaw.url, defaults.ldap.url),
+        baseDn: parseString(ldapRaw.baseDn, defaults.ldap.baseDn),
+        bindDn: parseString(ldapRaw.bindDn, defaults.ldap.bindDn),
+        userFilter: parseString(ldapRaw.userFilter, defaults.ldap.userFilter),
+        uidAttribute: parseString(ldapRaw.uidAttribute, defaults.ldap.uidAttribute),
+        autoProvision: parseBool(ldapRaw.autoProvision, defaults.ldap.autoProvision),
+        defaultRole: parseRole(ldapRaw.defaultRole, defaults.ldap.defaultRole),
+        bindPasswordConfigured: parseBool(
+          ldapRaw.bindPasswordConfigured,
+          defaults.ldap.bindPasswordConfigured,
+        ),
+      },
+    };
+  }
+
+  private readSettingFromMetadata(db: Database.Database, key: string): string | undefined {
+    const row = db.prepare("SELECT value FROM metadata WHERE key = ?").get(key) as { value: string } | undefined;
+    return row?.value;
+  }
+
+  private getLatestSettingsHistoryEntry<T = Record<string, unknown>>(
+    db: Database.Database,
+    domain: SettingsHistoryEntry<T>["domain"],
+    asOf?: string,
+  ): SettingsHistoryEntry<T> | null {
+    const target = asOf ?? new Date().toISOString();
+    const row = db.prepare(`
+      SELECT id, domain, version, effectiveFrom, payload, actor, createdAt
+      FROM settings_history
+      WHERE domain = ?
+        AND effectiveFrom <= ?
+      ORDER BY effectiveFrom DESC, version DESC
+      LIMIT 1
+    `).get(domain, target) as Record<string, unknown> | undefined;
+    return row ? settingsHistoryFromRow<T>(row) : null;
+  }
+
+  private appendSettingsHistory<T extends Record<string, unknown>>(
+    db: Database.Database,
+    domain: SettingsHistoryEntry<T>["domain"],
+    payload: T,
+    actor: SettingsHistoryEntry["actor"] = "user",
+    effectiveFrom?: string,
+  ): SettingsHistoryEntry<T> {
+    const createdAt = new Date().toISOString();
+    const nextVersionRow = db.prepare(
+      "SELECT COALESCE(MAX(version), 0) + 1 as nextVersion FROM settings_history WHERE domain = ?",
+    ).get(domain) as { nextVersion: number };
+
+    const entry: SettingsHistoryEntry<T> = {
+      id: randomUUID(),
+      domain,
+      version: Number(nextVersionRow.nextVersion),
+      effectiveFrom: effectiveFrom ?? createdAt,
+      payload,
+      actor,
+      createdAt,
+    };
+
+    db.prepare(`
+      INSERT INTO settings_history (id, domain, version, effectiveFrom, payload, actor, createdAt)
+      VALUES (@id, @domain, @version, @effectiveFrom, @payload, @actor, @createdAt)
+    `).run({
+      id: entry.id,
+      domain: entry.domain,
+      version: entry.version,
+      effectiveFrom: entry.effectiveFrom,
+      payload: JSON.stringify(entry.payload),
+      actor: entry.actor,
+      createdAt: entry.createdAt,
+    });
+
+    return entry;
+  }
+
+  private readRuntimeSettings(db: Database.Database, asOf?: string): RuntimeSettings {
+    const snapshot = this.getLatestSettingsHistoryEntry<RuntimeSettings>(db, "runtime", asOf);
+    if (snapshot) {
+      return this.coerceRuntimeSettings(snapshot.payload);
+    }
+
+    const rows = db.prepare("SELECT key, value FROM metadata WHERE key LIKE 'runtime.%'").all() as Array<{ key: string; value: string }>;
+    const map = new Map(rows.map((row) => [row.key, row.value]));
+    return this.coerceRuntimeSettings({
+      agentIntervalMs: map.get("runtime.agentIntervalMs"),
+      deepScanIntervalMs: map.get("runtime.deepScanIntervalMs"),
+      incrementalActiveTargets: map.get("runtime.incrementalActiveTargets"),
+      deepActiveTargets: map.get("runtime.deepActiveTargets"),
+      incrementalPortScanHosts: map.get("runtime.incrementalPortScanHosts"),
+      deepPortScanHosts: map.get("runtime.deepPortScanHosts"),
+      llmDiscoveryLimit: map.get("runtime.llmDiscoveryLimit"),
+      incrementalFingerprintTargets: map.get("runtime.incrementalFingerprintTargets"),
+      deepFingerprintTargets: map.get("runtime.deepFingerprintTargets"),
+      enableMdnsDiscovery: map.get("runtime.enableMdnsDiscovery"),
+      enableSsdpDiscovery: map.get("runtime.enableSsdpDiscovery"),
+      enableSnmpProbe: map.get("runtime.enableSnmpProbe"),
+      ouiUpdateIntervalMs: map.get("runtime.ouiUpdateIntervalMs"),
+      laneBEnabled: map.get("runtime.laneBEnabled"),
+      laneBAllowedEnvironments: map.get("runtime.laneBAllowedEnvironments"),
+      laneBAllowedFamilies: map.get("runtime.laneBAllowedFamilies"),
+      laneCMutationsInLab: map.get("runtime.laneCMutationsInLab"),
+      laneCMutationsInProd: map.get("runtime.laneCMutationsInProd"),
+      mutationRequireDryRunWhenSupported: map.get("runtime.mutationRequireDryRunWhenSupported"),
+      approvalTtlClassBMs: map.get("runtime.approvalTtlClassBMs"),
+      approvalTtlClassCMs: map.get("runtime.approvalTtlClassCMs"),
+      approvalTtlClassDMs: map.get("runtime.approvalTtlClassDMs"),
+      quarantineThresholdCount: map.get("runtime.quarantineThresholdCount"),
+      quarantineThresholdWindowMs: map.get("runtime.quarantineThresholdWindowMs"),
+    });
+  }
+
+  private readSystemSettings(db: Database.Database, asOf?: string): SystemSettings {
+    const snapshot = this.getLatestSettingsHistoryEntry<SystemSettings>(db, "system", asOf);
+    if (snapshot) {
+      return this.coerceSystemSettings(snapshot.payload);
+    }
+
+    return this.coerceSystemSettings({
+      nodeIdentity: this.readSettingFromMetadata(db, "system.nodeIdentity"),
+      timezone: this.readSettingFromMetadata(db, "system.timezone"),
+      digestScheduleEnabled: this.readSettingFromMetadata(db, "system.digestScheduleEnabled"),
+      digestHourLocal: this.readSettingFromMetadata(db, "system.digestHourLocal"),
+      digestMinuteLocal: this.readSettingFromMetadata(db, "system.digestMinuteLocal"),
+      upgradeChannel: this.readSettingFromMetadata(db, "system.upgradeChannel") as SystemSettings["upgradeChannel"] | undefined,
+    });
+  }
+
+  private readAuthSettings(db: Database.Database, asOf?: string): AuthSettings {
+    const snapshot = this.getLatestSettingsHistoryEntry<AuthSettings>(db, "auth", asOf);
+    if (snapshot) {
+      return this.coerceAuthSettings(snapshot.payload);
+    }
+
+    const hash = this.readSettingFromMetadata(db, "auth.apiTokenHash");
+    const enabledRaw = this.readSettingFromMetadata(db, "auth.apiTokenEnabled");
+    return this.coerceAuthSettings({
+      apiTokenEnabled: Boolean(hash) || enabledRaw === "true" || enabledRaw === "1",
+      mode: this.readSettingFromMetadata(db, "auth.mode"),
+      sessionTtlHours: this.readSettingFromMetadata(db, "auth.sessionTtlHours"),
+      oidc: {
+        enabled: this.readSettingFromMetadata(db, "auth.oidc.enabled"),
+        issuer: this.readSettingFromMetadata(db, "auth.oidc.issuer"),
+        clientId: this.readSettingFromMetadata(db, "auth.oidc.clientId"),
+        scopes: this.readSettingFromMetadata(db, "auth.oidc.scopes"),
+        autoProvision: this.readSettingFromMetadata(db, "auth.oidc.autoProvision"),
+        defaultRole: this.readSettingFromMetadata(db, "auth.oidc.defaultRole"),
+        clientSecretConfigured: this.readSettingFromMetadata(db, "auth.oidc.clientSecretConfigured"),
+      },
+      ldap: {
+        enabled: this.readSettingFromMetadata(db, "auth.ldap.enabled"),
+        url: this.readSettingFromMetadata(db, "auth.ldap.url"),
+        baseDn: this.readSettingFromMetadata(db, "auth.ldap.baseDn"),
+        bindDn: this.readSettingFromMetadata(db, "auth.ldap.bindDn"),
+        userFilter: this.readSettingFromMetadata(db, "auth.ldap.userFilter"),
+        uidAttribute: this.readSettingFromMetadata(db, "auth.ldap.uidAttribute"),
+        autoProvision: this.readSettingFromMetadata(db, "auth.ldap.autoProvision"),
+        defaultRole: this.readSettingFromMetadata(db, "auth.ldap.defaultRole"),
+        bindPasswordConfigured: this.readSettingFromMetadata(db, "auth.ldap.bindPasswordConfigured"),
+      },
+    });
   }
 
   getState(): Promise<StewardState> {
@@ -318,13 +829,15 @@ class StateStore {
       const baselines = (db.prepare("SELECT * FROM device_baselines").all() as Record<string, unknown>[]).map(baselineFromRow);
       const incidents = (db.prepare("SELECT * FROM incidents").all() as Record<string, unknown>[]).map(incidentFromRow);
       const recommendations = (db.prepare("SELECT * FROM recommendations").all() as Record<string, unknown>[]).map(recommendationFromRow);
-      const actions = (db.prepare("SELECT * FROM actions ORDER BY at DESC").all() as Record<string, unknown>[]).map(actionFromRow);
+      const actions = this.readRecentAuditEvents(2_000);
       const graphNodes = (db.prepare("SELECT * FROM graph_nodes").all() as Record<string, unknown>[]).map(graphNodeFromRow);
       const graphEdges = (db.prepare('SELECT id, "from", "to", type, properties, createdAt, updatedAt FROM graph_edges').all() as Record<string, unknown>[]).map(graphEdgeFromRow);
       const providerConfigs = (db.prepare("SELECT * FROM provider_configs").all() as Record<string, unknown>[]).map(providerConfigFromRow);
       const oauthStates = (db.prepare("SELECT * FROM oauth_states").all() as Record<string, unknown>[]).map(oauthStateFromRow);
       const agentRuns = (db.prepare("SELECT * FROM agent_runs ORDER BY startedAt DESC").all() as Record<string, unknown>[]).map(agentRunFromRow);
       const runtimeSettings = this.readRuntimeSettings(db);
+      const systemSettings = this.readSystemSettings(db);
+      const authSettings = this.readAuthSettings(db);
       const policyRules = (db.prepare("SELECT * FROM policy_rules ORDER BY priority ASC").all() as Record<string, unknown>[]).map(policyRuleFromRow);
       const maintenanceWindows = (db.prepare("SELECT * FROM maintenance_windows").all() as Record<string, unknown>[]).map(maintenanceWindowFromRow);
       const playbookRuns = (db.prepare("SELECT * FROM playbook_runs ORDER BY createdAt DESC").all() as Record<string, unknown>[]).map(playbookRunFromRow);
@@ -343,6 +856,8 @@ class StateStore {
         oauthStates,
         agentRuns,
         runtimeSettings,
+        systemSettings,
+        authSettings,
         policyRules,
         maintenanceWindows,
         playbookRuns,
@@ -381,15 +896,71 @@ class StateStore {
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.enableSsdpDiscovery', ?)").run(state.runtimeSettings.enableSsdpDiscovery ? "true" : "false");
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.enableSnmpProbe', ?)").run(state.runtimeSettings.enableSnmpProbe ? "true" : "false");
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.ouiUpdateIntervalMs', ?)").run(String(state.runtimeSettings.ouiUpdateIntervalMs));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.laneBEnabled', ?)").run(state.runtimeSettings.laneBEnabled ? "true" : "false");
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.laneBAllowedEnvironments', ?)").run(JSON.stringify(state.runtimeSettings.laneBAllowedEnvironments));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.laneBAllowedFamilies', ?)").run(JSON.stringify(state.runtimeSettings.laneBAllowedFamilies));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.laneCMutationsInLab', ?)").run(state.runtimeSettings.laneCMutationsInLab ? "true" : "false");
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.laneCMutationsInProd', ?)").run(state.runtimeSettings.laneCMutationsInProd ? "true" : "false");
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.mutationRequireDryRunWhenSupported', ?)").run(state.runtimeSettings.mutationRequireDryRunWhenSupported ? "true" : "false");
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.approvalTtlClassBMs', ?)").run(String(state.runtimeSettings.approvalTtlClassBMs));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.approvalTtlClassCMs', ?)").run(String(state.runtimeSettings.approvalTtlClassCMs));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.approvalTtlClassDMs', ?)").run(String(state.runtimeSettings.approvalTtlClassDMs));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.quarantineThresholdCount', ?)").run(String(state.runtimeSettings.quarantineThresholdCount));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.quarantineThresholdWindowMs', ?)").run(String(state.runtimeSettings.quarantineThresholdWindowMs));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('system.nodeIdentity', ?)").run(state.systemSettings.nodeIdentity);
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('system.timezone', ?)").run(state.systemSettings.timezone);
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('system.digestScheduleEnabled', ?)").run(String(state.systemSettings.digestScheduleEnabled));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('system.digestHourLocal', ?)").run(String(state.systemSettings.digestHourLocal));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('system.digestMinuteLocal', ?)").run(String(state.systemSettings.digestMinuteLocal));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('system.upgradeChannel', ?)").run(state.systemSettings.upgradeChannel);
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth.apiTokenEnabled', ?)").run(String(state.authSettings.apiTokenEnabled));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth.mode', ?)").run(state.authSettings.mode);
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth.sessionTtlHours', ?)").run(String(state.authSettings.sessionTtlHours));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth.oidc.enabled', ?)").run(String(state.authSettings.oidc.enabled));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth.oidc.issuer', ?)").run(state.authSettings.oidc.issuer);
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth.oidc.clientId', ?)").run(state.authSettings.oidc.clientId);
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth.oidc.scopes', ?)").run(state.authSettings.oidc.scopes);
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth.oidc.autoProvision', ?)").run(String(state.authSettings.oidc.autoProvision));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth.oidc.defaultRole', ?)").run(state.authSettings.oidc.defaultRole);
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth.oidc.clientSecretConfigured', ?)").run(String(state.authSettings.oidc.clientSecretConfigured));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth.ldap.enabled', ?)").run(String(state.authSettings.ldap.enabled));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth.ldap.url', ?)").run(state.authSettings.ldap.url);
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth.ldap.baseDn', ?)").run(state.authSettings.ldap.baseDn);
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth.ldap.bindDn', ?)").run(state.authSettings.ldap.bindDn);
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth.ldap.userFilter', ?)").run(state.authSettings.ldap.userFilter);
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth.ldap.uidAttribute', ?)").run(state.authSettings.ldap.uidAttribute);
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth.ldap.autoProvision', ?)").run(String(state.authSettings.ldap.autoProvision));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth.ldap.defaultRole', ?)").run(state.authSettings.ldap.defaultRole);
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth.ldap.bindPasswordConfigured', ?)").run(String(state.authSettings.ldap.bindPasswordConfigured));
 
-      // Devices
-      db.prepare("DELETE FROM devices").run();
-      const insertDevice = db.prepare(`
+      // Devices (upsert + delete stale; avoid full-table delete to preserve FK-linked child rows)
+      const upsertDevice = db.prepare(`
         INSERT INTO devices (id, name, ip, mac, hostname, vendor, os, role, type, status, autonomyTier, tags, protocols, services, firstSeenAt, lastSeenAt, lastChangedAt, metadata, secondaryIps)
         VALUES (@id, @name, @ip, @mac, @hostname, @vendor, @os, @role, @type, @status, @autonomyTier, @tags, @protocols, @services, @firstSeenAt, @lastSeenAt, @lastChangedAt, @metadata, @secondaryIps)
+        ON CONFLICT(id) DO UPDATE SET
+          name = excluded.name,
+          ip = excluded.ip,
+          mac = excluded.mac,
+          hostname = excluded.hostname,
+          vendor = excluded.vendor,
+          os = excluded.os,
+          role = excluded.role,
+          type = excluded.type,
+          status = excluded.status,
+          autonomyTier = excluded.autonomyTier,
+          tags = excluded.tags,
+          protocols = excluded.protocols,
+          services = excluded.services,
+          firstSeenAt = excluded.firstSeenAt,
+          lastSeenAt = excluded.lastSeenAt,
+          lastChangedAt = excluded.lastChangedAt,
+          metadata = excluded.metadata,
+          secondaryIps = excluded.secondaryIps
       `);
+      const nextDeviceIds = new Set<string>();
       for (const d of state.devices) {
-        insertDevice.run({
+        nextDeviceIds.add(d.id);
+        upsertDevice.run({
           id: d.id, name: d.name, ip: d.ip, mac: d.mac ?? null, hostname: d.hostname ?? null,
           vendor: d.vendor ?? null, os: d.os ?? null, role: d.role ?? null, type: d.type,
           status: d.status, autonomyTier: d.autonomyTier, tags: JSON.stringify(d.tags),
@@ -397,6 +968,12 @@ class StateStore {
           firstSeenAt: d.firstSeenAt, lastSeenAt: d.lastSeenAt, lastChangedAt: d.lastChangedAt,
           metadata: JSON.stringify(d.metadata), secondaryIps: JSON.stringify(d.secondaryIps ?? []),
         });
+      }
+      if (nextDeviceIds.size === 0) {
+        db.prepare("DELETE FROM devices").run();
+      } else {
+        const placeholders = Array.from(nextDeviceIds).map(() => "?").join(",");
+        db.prepare(`DELETE FROM devices WHERE id NOT IN (${placeholders})`).run(...Array.from(nextDeviceIds));
       }
 
       // Baselines
@@ -438,19 +1015,6 @@ class StateStore {
           id: r.id, title: r.title, rationale: r.rationale, impact: r.impact,
           priority: r.priority, relatedDeviceIds: JSON.stringify(r.relatedDeviceIds),
           createdAt: r.createdAt, dismissed: r.dismissed ? 1 : 0,
-        });
-      }
-
-      // Actions
-      db.prepare("DELETE FROM actions").run();
-      const insertAction = db.prepare(`
-        INSERT INTO actions (id, at, actor, kind, message, context)
-        VALUES (@id, @at, @actor, @kind, @message, @context)
-      `);
-      for (const a of state.actions) {
-        insertAction.run({
-          id: a.id, at: a.at, actor: a.actor, kind: a.kind,
-          message: a.message, context: JSON.stringify(a.context),
         });
       }
 
@@ -600,26 +1164,43 @@ class StateStore {
   }
 
   async addAction(log: Omit<ActionLog, "id" | "at">): Promise<void> {
-    this.withDbRecovery("StateStore.addAction", (db) => {
+    this.withAuditDbRecovery("StateStore.addAction", (auditDb) => {
       const entry: ActionLog = {
         id: randomUUID(),
         at: new Date().toISOString(),
         ...log,
       };
 
-      const tx = db.transaction(() => {
-        db.prepare(`
-          INSERT INTO actions (id, at, actor, kind, message, context)
-          VALUES (@id, @at, @actor, @kind, @message, @context)
+      const tx = auditDb.transaction(() => {
+        auditDb.prepare(`
+          INSERT INTO audit_events (id, at, actor, kind, message, context, idempotencyKey, createdAt)
+          VALUES (@id, @at, @actor, @kind, @message, @context, @idempotencyKey, @createdAt)
         `).run({
           id: entry.id, at: entry.at, actor: entry.actor, kind: entry.kind,
-          message: entry.message, context: JSON.stringify(entry.context),
+          message: entry.message,
+          context: JSON.stringify(entry.context),
+          idempotencyKey: entry.id,
+          createdAt: entry.at,
         });
 
-        // Keep max 2000 rows (delete oldest beyond limit)
-        db.prepare(`
-          DELETE FROM actions WHERE id NOT IN (
-            SELECT id FROM actions ORDER BY at DESC LIMIT 2000
+        // Durable queue for replay guarantees.
+        auditDb.prepare(`
+          INSERT OR IGNORE INTO durable_jobs (id, kind, payload, status, attempts, idempotencyKey, runAfter, createdAt, updatedAt, lastError)
+          VALUES (@id, @kind, @payload, 'completed', 1, @idempotencyKey, @runAfter, @createdAt, @updatedAt, NULL)
+        `).run({
+          id: `job:${entry.id}`,
+          kind: "action_log",
+          payload: JSON.stringify(entry),
+          idempotencyKey: entry.id,
+          runAfter: entry.at,
+          createdAt: entry.at,
+          updatedAt: entry.at,
+        });
+
+        // Keep max 20k rows (delete oldest beyond limit)
+        auditDb.prepare(`
+          DELETE FROM audit_events WHERE id NOT IN (
+            SELECT id FROM audit_events ORDER BY at DESC LIMIT 20000
           )
         `).run();
       });
@@ -631,8 +1212,27 @@ class StateStore {
   async upsertDevice(device: Device): Promise<Device> {
     this.withDbRecovery("StateStore.upsertDevice", (db) => {
       db.prepare(`
-        INSERT OR REPLACE INTO devices (id, name, ip, secondaryIps, mac, hostname, vendor, os, role, type, status, autonomyTier, tags, protocols, services, firstSeenAt, lastSeenAt, lastChangedAt, metadata)
+        INSERT INTO devices (id, name, ip, secondaryIps, mac, hostname, vendor, os, role, type, status, autonomyTier, tags, protocols, services, firstSeenAt, lastSeenAt, lastChangedAt, metadata)
         VALUES (@id, @name, @ip, @secondaryIps, @mac, @hostname, @vendor, @os, @role, @type, @status, @autonomyTier, @tags, @protocols, @services, @firstSeenAt, @lastSeenAt, @lastChangedAt, @metadata)
+        ON CONFLICT(id) DO UPDATE SET
+          name = excluded.name,
+          ip = excluded.ip,
+          secondaryIps = excluded.secondaryIps,
+          mac = excluded.mac,
+          hostname = excluded.hostname,
+          vendor = excluded.vendor,
+          os = excluded.os,
+          role = excluded.role,
+          type = excluded.type,
+          status = excluded.status,
+          autonomyTier = excluded.autonomyTier,
+          tags = excluded.tags,
+          protocols = excluded.protocols,
+          services = excluded.services,
+          firstSeenAt = excluded.firstSeenAt,
+          lastSeenAt = excluded.lastSeenAt,
+          lastChangedAt = excluded.lastChangedAt,
+          metadata = excluded.metadata
       `).run({
         id: device.id, name: device.name, ip: device.ip,
         secondaryIps: JSON.stringify(device.secondaryIps ?? []),
@@ -692,6 +1292,24 @@ class StateStore {
       });
 
       tx();
+    });
+  }
+
+  upsertBaselines(baselines: DeviceBaseline[]): void {
+    if (baselines.length === 0) {
+      return;
+    }
+    this.withDbRecovery("StateStore.upsertBaselines", (db) => {
+      const insert = db.prepare(`
+        INSERT OR REPLACE INTO device_baselines (deviceId, avgLatencyMs, maxLatencyMs, minLatencyMs, samples, lastUpdatedAt)
+        VALUES (@deviceId, @avgLatencyMs, @maxLatencyMs, @minLatencyMs, @samples, @lastUpdatedAt)
+      `);
+      const tx = db.transaction((items: DeviceBaseline[]) => {
+        for (const item of items) {
+          insert.run(item);
+        }
+      });
+      tx(baselines);
     });
   }
 
@@ -787,29 +1405,290 @@ class StateStore {
     });
   }
 
-  getRuntimeSettings(): RuntimeSettings {
-    return this.withDbRecovery("StateStore.getRuntimeSettings", (db) => this.readRuntimeSettings(db));
+  getRuntimeSettings(asOf?: string): RuntimeSettings {
+    return this.withDbRecovery("StateStore.getRuntimeSettings", (db) => this.readRuntimeSettings(db, asOf));
   }
 
-  setRuntimeSettings(settings: RuntimeSettings): void {
+  getSystemSettings(asOf?: string): SystemSettings {
+    return this.withDbRecovery("StateStore.getSystemSettings", (db) => this.readSystemSettings(db, asOf));
+  }
+
+  getAuthSettings(asOf?: string): AuthSettings {
+    return this.withDbRecovery("StateStore.getAuthSettings", (db) => this.readAuthSettings(db, asOf));
+  }
+
+  getApiTokenHash(): string | null {
+    return this.withDbRecovery("StateStore.getApiTokenHash", (db) => {
+      const row = db.prepare("SELECT value FROM metadata WHERE key = 'auth.apiTokenHash'").get() as { value: string } | undefined;
+      return row?.value ?? null;
+    });
+  }
+
+  getSettingsHistory(
+    domain: SettingsHistoryEntry["domain"],
+    limit = 100,
+  ): SettingsHistoryEntry[] {
+    return this.withDbRecovery("StateStore.getSettingsHistory", (db) => {
+      const rows = db.prepare(`
+        SELECT id, domain, version, effectiveFrom, payload, actor, createdAt
+        FROM settings_history
+        WHERE domain = ?
+        ORDER BY version DESC
+        LIMIT ?
+      `).all(domain, Math.max(1, Math.min(500, limit))) as Record<string, unknown>[];
+      return rows.map((row) => settingsHistoryFromRow(row));
+    });
+  }
+
+  setRuntimeSettings(
+    settings: RuntimeSettings,
+    options?: { actor?: SettingsHistoryEntry["actor"]; effectiveFrom?: string },
+  ): void {
     this.withDbRecovery("StateStore.setRuntimeSettings", (db) => {
       const write = db.transaction(() => {
+        const normalized = this.coerceRuntimeSettings(settings);
         const put = db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)");
-        put.run("runtime.agentIntervalMs", String(settings.agentIntervalMs));
-        put.run("runtime.deepScanIntervalMs", String(settings.deepScanIntervalMs));
-        put.run("runtime.incrementalActiveTargets", String(settings.incrementalActiveTargets));
-        put.run("runtime.deepActiveTargets", String(settings.deepActiveTargets));
-        put.run("runtime.incrementalPortScanHosts", String(settings.incrementalPortScanHosts));
-        put.run("runtime.deepPortScanHosts", String(settings.deepPortScanHosts));
-        put.run("runtime.llmDiscoveryLimit", String(settings.llmDiscoveryLimit));
-        put.run("runtime.incrementalFingerprintTargets", String(settings.incrementalFingerprintTargets));
-        put.run("runtime.deepFingerprintTargets", String(settings.deepFingerprintTargets));
-        put.run("runtime.enableMdnsDiscovery", String(settings.enableMdnsDiscovery));
-        put.run("runtime.enableSsdpDiscovery", String(settings.enableSsdpDiscovery));
-        put.run("runtime.enableSnmpProbe", String(settings.enableSnmpProbe));
-        put.run("runtime.ouiUpdateIntervalMs", String(settings.ouiUpdateIntervalMs));
+        put.run("runtime.agentIntervalMs", String(normalized.agentIntervalMs));
+        put.run("runtime.deepScanIntervalMs", String(normalized.deepScanIntervalMs));
+        put.run("runtime.incrementalActiveTargets", String(normalized.incrementalActiveTargets));
+        put.run("runtime.deepActiveTargets", String(normalized.deepActiveTargets));
+        put.run("runtime.incrementalPortScanHosts", String(normalized.incrementalPortScanHosts));
+        put.run("runtime.deepPortScanHosts", String(normalized.deepPortScanHosts));
+        put.run("runtime.llmDiscoveryLimit", String(normalized.llmDiscoveryLimit));
+        put.run("runtime.incrementalFingerprintTargets", String(normalized.incrementalFingerprintTargets));
+        put.run("runtime.deepFingerprintTargets", String(normalized.deepFingerprintTargets));
+        put.run("runtime.enableMdnsDiscovery", String(normalized.enableMdnsDiscovery));
+        put.run("runtime.enableSsdpDiscovery", String(normalized.enableSsdpDiscovery));
+        put.run("runtime.enableSnmpProbe", String(normalized.enableSnmpProbe));
+        put.run("runtime.ouiUpdateIntervalMs", String(normalized.ouiUpdateIntervalMs));
+        put.run("runtime.laneBEnabled", String(normalized.laneBEnabled));
+        put.run("runtime.laneBAllowedEnvironments", JSON.stringify(normalized.laneBAllowedEnvironments));
+        put.run("runtime.laneBAllowedFamilies", JSON.stringify(normalized.laneBAllowedFamilies));
+        put.run("runtime.laneCMutationsInLab", String(normalized.laneCMutationsInLab));
+        put.run("runtime.laneCMutationsInProd", String(normalized.laneCMutationsInProd));
+        put.run("runtime.mutationRequireDryRunWhenSupported", String(normalized.mutationRequireDryRunWhenSupported));
+        put.run("runtime.approvalTtlClassBMs", String(normalized.approvalTtlClassBMs));
+        put.run("runtime.approvalTtlClassCMs", String(normalized.approvalTtlClassCMs));
+        put.run("runtime.approvalTtlClassDMs", String(normalized.approvalTtlClassDMs));
+        put.run("runtime.quarantineThresholdCount", String(normalized.quarantineThresholdCount));
+        put.run("runtime.quarantineThresholdWindowMs", String(normalized.quarantineThresholdWindowMs));
+        this.appendSettingsHistory(
+          db,
+          "runtime",
+          normalized as unknown as Record<string, unknown>,
+          options?.actor ?? "user",
+          options?.effectiveFrom,
+        );
       });
       write();
+    });
+  }
+
+  setSystemSettings(
+    settings: SystemSettings,
+    options?: { actor?: SettingsHistoryEntry["actor"]; effectiveFrom?: string },
+  ): void {
+    this.withDbRecovery("StateStore.setSystemSettings", (db) => {
+      const write = db.transaction(() => {
+        const normalized = this.coerceSystemSettings(settings);
+        const put = db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)");
+        put.run("system.nodeIdentity", normalized.nodeIdentity);
+        put.run("system.timezone", normalized.timezone);
+        put.run("system.digestScheduleEnabled", String(normalized.digestScheduleEnabled));
+        put.run("system.digestHourLocal", String(normalized.digestHourLocal));
+        put.run("system.digestMinuteLocal", String(normalized.digestMinuteLocal));
+        put.run("system.upgradeChannel", normalized.upgradeChannel);
+        this.appendSettingsHistory(
+          db,
+          "system",
+          normalized as unknown as Record<string, unknown>,
+          options?.actor ?? "user",
+          options?.effectiveFrom,
+        );
+      });
+      write();
+    });
+  }
+
+  setApiTokenHash(
+    hash: string | null,
+    options?: { actor?: SettingsHistoryEntry["actor"]; effectiveFrom?: string },
+  ): void {
+    this.withDbRecovery("StateStore.setApiTokenHash", (db) => {
+      const write = db.transaction(() => {
+        if (hash) {
+          db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth.apiTokenHash', ?)").run(hash);
+          db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth.apiTokenEnabled', 'true')").run();
+        } else {
+          db.prepare("DELETE FROM metadata WHERE key = 'auth.apiTokenHash'").run();
+          db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('auth.apiTokenEnabled', 'false')").run();
+        }
+        const current = this.readAuthSettings(db);
+        const authSettings: AuthSettings = {
+          ...current,
+          apiTokenEnabled: Boolean(hash),
+        };
+        this.appendSettingsHistory(
+          db,
+          "auth",
+          authSettings as unknown as Record<string, unknown>,
+          options?.actor ?? "user",
+          options?.effectiveFrom,
+        );
+      });
+      write();
+    });
+  }
+
+  setAuthSettings(
+    settings: AuthSettings,
+    options?: { actor?: SettingsHistoryEntry["actor"]; effectiveFrom?: string },
+  ): void {
+    this.withDbRecovery("StateStore.setAuthSettings", (db) => {
+      const write = db.transaction(() => {
+        const normalized = this.coerceAuthSettings(settings);
+        const put = db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)");
+        put.run("auth.apiTokenEnabled", String(normalized.apiTokenEnabled));
+        put.run("auth.mode", normalized.mode);
+        put.run("auth.sessionTtlHours", String(normalized.sessionTtlHours));
+        put.run("auth.oidc.enabled", String(normalized.oidc.enabled));
+        put.run("auth.oidc.issuer", normalized.oidc.issuer);
+        put.run("auth.oidc.clientId", normalized.oidc.clientId);
+        put.run("auth.oidc.scopes", normalized.oidc.scopes);
+        put.run("auth.oidc.autoProvision", String(normalized.oidc.autoProvision));
+        put.run("auth.oidc.defaultRole", normalized.oidc.defaultRole);
+        put.run("auth.oidc.clientSecretConfigured", String(normalized.oidc.clientSecretConfigured));
+        put.run("auth.ldap.enabled", String(normalized.ldap.enabled));
+        put.run("auth.ldap.url", normalized.ldap.url);
+        put.run("auth.ldap.baseDn", normalized.ldap.baseDn);
+        put.run("auth.ldap.bindDn", normalized.ldap.bindDn);
+        put.run("auth.ldap.userFilter", normalized.ldap.userFilter);
+        put.run("auth.ldap.uidAttribute", normalized.ldap.uidAttribute);
+        put.run("auth.ldap.autoProvision", String(normalized.ldap.autoProvision));
+        put.run("auth.ldap.defaultRole", normalized.ldap.defaultRole);
+        put.run("auth.ldap.bindPasswordConfigured", String(normalized.ldap.bindPasswordConfigured));
+        this.appendSettingsHistory(
+          db,
+          "auth",
+          normalized as unknown as Record<string, unknown>,
+          options?.actor ?? "user",
+          options?.effectiveFrom,
+        );
+      });
+      write();
+    });
+  }
+
+  addDiscoveryObservations(observations: DiscoveryObservationInput[]): void {
+    if (observations.length === 0) {
+      return;
+    }
+
+    this.withDbRecovery("StateStore.addDiscoveryObservations", (db) => {
+      const insert = db.prepare(`
+        INSERT INTO discovery_observations (id, ip, deviceId, source, evidenceType, confidence, observedAt, expiresAt, details)
+        VALUES (@id, @ip, @deviceId, @source, @evidenceType, @confidence, @observedAt, @expiresAt, @details)
+      `);
+
+      const tx = db.transaction((batch: DiscoveryObservationInput[]) => {
+        for (const item of batch) {
+          const observedAt = item.observedAt || new Date().toISOString();
+          const observedAtMs = Date.parse(observedAt);
+          const expiresAt = item.expiresAt
+            ?? new Date(
+              (Number.isFinite(observedAtMs) ? observedAtMs : Date.now()) + Math.max(1, item.ttlMs ?? 15 * 60_000),
+            ).toISOString();
+
+          insert.run({
+            id: randomUUID(),
+            ip: item.ip,
+            deviceId: null,
+            source: item.source,
+            evidenceType: item.evidenceType,
+            confidence: Math.max(0, Math.min(1, item.confidence)),
+            observedAt,
+            expiresAt,
+            details: JSON.stringify(item.details ?? {}),
+          });
+        }
+      });
+
+      tx(observations);
+    });
+  }
+
+  getRecentDiscoveryObservationsByIp(
+    ips: string[],
+    options?: { sinceAt?: string; limitPerIp?: number },
+  ): Map<string, DiscoveryObservation[]> {
+    return this.withDbRecovery("StateStore.getRecentDiscoveryObservationsByIp", (db) => {
+      const deduped = Array.from(new Set(ips.filter((ip) => ip.trim().length > 0)));
+      if (deduped.length === 0) {
+        return new Map();
+      }
+
+      const sinceAt = options?.sinceAt ?? new Date(Date.now() - 30 * 60_000).toISOString();
+      const limitPerIp = Math.max(1, Math.min(100, options?.limitPerIp ?? 25));
+
+      const placeholders = deduped.map((_, idx) => `@ip${idx}`).join(",");
+      const params: Record<string, unknown> = { sinceAt };
+      deduped.forEach((ip, idx) => { params[`ip${idx}`] = ip; });
+
+      const rows = db.prepare(`
+        SELECT id, ip, deviceId, source, evidenceType, confidence, observedAt, expiresAt, details
+        FROM discovery_observations
+        WHERE ip IN (${placeholders}) AND observedAt >= @sinceAt
+        ORDER BY observedAt DESC
+      `).all(params) as Record<string, unknown>[];
+
+      const grouped = new Map<string, DiscoveryObservation[]>();
+      for (const row of rows) {
+        const observation = discoveryObservationFromRow(row);
+        const existing = grouped.get(observation.ip) ?? [];
+        if (existing.length < limitPerIp) {
+          existing.push(observation);
+          grouped.set(observation.ip, existing);
+        }
+      }
+
+      return grouped;
+    });
+  }
+
+  attachRecentObservationsToDevice(ip: string, deviceId: string, sinceAt?: string): void {
+    this.withDbRecovery("StateStore.attachRecentObservationsToDevice", (db) => {
+      const cutoff = sinceAt ?? new Date(Date.now() - 2 * 60 * 60_000).toISOString();
+      db.prepare(`
+        UPDATE discovery_observations
+        SET deviceId = @deviceId
+        WHERE ip = @ip
+          AND observedAt >= @sinceAt
+          AND (deviceId IS NULL OR deviceId = '')
+      `).run({
+        ip,
+        deviceId,
+        sinceAt: cutoff,
+      });
+    });
+  }
+
+  pruneExpiredDiscoveryObservations(maxRows = 50_000): number {
+    return this.withDbRecovery("StateStore.pruneExpiredDiscoveryObservations", (db) => {
+      const nowIso = new Date().toISOString();
+      const tx = db.transaction(() => {
+        const expired = db.prepare("DELETE FROM discovery_observations WHERE expiresAt < ?").run(nowIso);
+        db.prepare(`
+          DELETE FROM discovery_observations
+          WHERE id NOT IN (
+            SELECT id
+            FROM discovery_observations
+            ORDER BY observedAt DESC
+            LIMIT ?
+          )
+        `).run(maxRows);
+        return expired.changes;
+      });
+      return tx();
     });
   }
 
@@ -821,7 +1700,7 @@ class StateStore {
     sinceAt?: string;
     untilAt?: string;
   }): { events: ActionLog[]; nextCursor: { at: string; id: string } | null } {
-    return this.withDbRecovery("StateStore.getAuditEventsPage", (db) => {
+    return this.withAuditDbRecovery("StateStore.getAuditEventsPage", (auditDb) => {
       const limit = Math.max(1, Math.min(500, options?.limit ?? 100));
       const params: Record<string, unknown> = { limit: limit + 1 };
       const conditions: string[] = [];
@@ -848,13 +1727,13 @@ class StateStore {
         params.cursorId = options.cursor.id;
       }
 
-      let query = "SELECT id, at, actor, kind, message, context FROM actions";
+      let query = "SELECT id, at, actor, kind, message, context FROM audit_events";
       if (conditions.length > 0) {
         query += ` WHERE ${conditions.join(" AND ")}`;
       }
       query += " ORDER BY at DESC, id DESC LIMIT @limit";
 
-      const rows = db.prepare(query).all(params) as Record<string, unknown>[];
+      const rows = auditDb.prepare(query).all(params) as Record<string, unknown>[];
       const hasMore = rows.length > limit;
       const visibleRows = hasMore ? rows.slice(0, limit) : rows;
       const events = visibleRows.map(actionFromRow);
@@ -868,6 +1747,88 @@ class StateStore {
         events,
         nextCursor: { at: tail.at, id: tail.id },
       };
+    });
+  }
+
+  enqueueDurableJob(kind: string, payload: Record<string, unknown>, idempotencyKey: string, runAfter?: string): void {
+    this.withAuditDbRecovery("StateStore.enqueueDurableJob", (auditDb) => {
+      const now = new Date().toISOString();
+      auditDb.prepare(`
+        INSERT OR IGNORE INTO durable_jobs (id, kind, payload, status, attempts, idempotencyKey, runAfter, createdAt, updatedAt, lastError)
+        VALUES (@id, @kind, @payload, 'pending', 0, @idempotencyKey, @runAfter, @createdAt, @updatedAt, NULL)
+      `).run({
+        id: `job:${randomUUID()}`,
+        kind,
+        payload: JSON.stringify(payload),
+        idempotencyKey,
+        runAfter: runAfter ?? now,
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+  }
+
+  claimDurableJobs(limit = 100): Array<{
+    id: string;
+    kind: string;
+    payload: Record<string, unknown>;
+    attempts: number;
+    idempotencyKey?: string;
+  }> {
+    return this.withAuditDbRecovery("StateStore.claimDurableJobs", (auditDb) => {
+      const now = new Date().toISOString();
+      const rows = auditDb.prepare(`
+        SELECT id, kind, payload, attempts, idempotencyKey
+        FROM durable_jobs
+        WHERE status = 'pending' AND runAfter <= ?
+        ORDER BY createdAt ASC
+        LIMIT ?
+      `).all(now, Math.max(1, Math.min(500, limit))) as Array<Record<string, unknown>>;
+
+      const tx = auditDb.transaction((jobIds: string[]) => {
+        for (const id of jobIds) {
+          auditDb.prepare(`
+            UPDATE durable_jobs
+            SET status = 'processing', attempts = attempts + 1, updatedAt = ?
+            WHERE id = ?
+          `).run(now, id);
+        }
+      });
+      tx(rows.map((row) => String(row.id)));
+
+      return rows.map((row) => ({
+        id: String(row.id),
+        kind: String(row.kind),
+        payload: JSON.parse(String(row.payload ?? "{}")) as Record<string, unknown>,
+        attempts: Number(row.attempts ?? 0),
+        idempotencyKey: row.idempotencyKey ? String(row.idempotencyKey) : undefined,
+      }));
+    });
+  }
+
+  completeDurableJob(id: string): void {
+    this.withAuditDbRecovery("StateStore.completeDurableJob", (auditDb) => {
+      auditDb.prepare(`
+        UPDATE durable_jobs
+        SET status = 'completed', updatedAt = ?
+        WHERE id = ?
+      `).run(new Date().toISOString(), id);
+    });
+  }
+
+  failDurableJob(id: string, errorMessage: string, retryAfterMs = 60_000): void {
+    this.withAuditDbRecovery("StateStore.failDurableJob", (auditDb) => {
+      const now = Date.now();
+      auditDb.prepare(`
+        UPDATE durable_jobs
+        SET status = 'pending', lastError = ?, runAfter = ?, updatedAt = ?
+        WHERE id = ?
+      `).run(
+        errorMessage,
+        new Date(now + Math.max(1_000, retryAfterMs)).toISOString(),
+        new Date(now).toISOString(),
+        id,
+      );
     });
   }
 
@@ -1163,12 +2124,406 @@ class StateStore {
     });
   }
 
+  /* ---------- Device Adoption ---------- */
+
+  getLatestAdoptionRun(deviceId: string): AdoptionRun | null {
+    return this.withDbRecovery("StateStore.getLatestAdoptionRun", (db) => {
+      const row = db.prepare(
+        "SELECT * FROM adoption_runs WHERE deviceId = ? ORDER BY updatedAt DESC LIMIT 1",
+      ).get(deviceId) as Record<string, unknown> | undefined;
+      return row ? adoptionRunFromRow(row) : null;
+    });
+  }
+
+  getAdoptionRunById(id: string): AdoptionRun | null {
+    return this.withDbRecovery("StateStore.getAdoptionRunById", (db) => {
+      const row = db.prepare("SELECT * FROM adoption_runs WHERE id = ? LIMIT 1").get(id) as Record<string, unknown> | undefined;
+      return row ? adoptionRunFromRow(row) : null;
+    });
+  }
+
+  upsertAdoptionRun(run: AdoptionRun): AdoptionRun {
+    return this.withDbRecovery("StateStore.upsertAdoptionRun", (db) => {
+      db.prepare(`
+        INSERT INTO adoption_runs (id, deviceId, status, stage, profileJson, summary, createdAt, updatedAt)
+        VALUES (@id, @deviceId, @status, @stage, @profileJson, @summary, @createdAt, @updatedAt)
+        ON CONFLICT(id) DO UPDATE SET
+          deviceId = excluded.deviceId,
+          status = excluded.status,
+          stage = excluded.stage,
+          profileJson = excluded.profileJson,
+          summary = excluded.summary,
+          createdAt = excluded.createdAt,
+          updatedAt = excluded.updatedAt
+      `).run({
+        id: run.id,
+        deviceId: run.deviceId,
+        status: run.status,
+        stage: run.stage,
+        profileJson: JSON.stringify(run.profileJson ?? {}),
+        summary: run.summary ?? null,
+        createdAt: run.createdAt,
+        updatedAt: run.updatedAt,
+      });
+      return run;
+    });
+  }
+
+  getAdoptionQuestions(
+    deviceId: string,
+    options?: { runId?: string; unresolvedOnly?: boolean },
+  ): AdoptionQuestion[] {
+    return this.withDbRecovery("StateStore.getAdoptionQuestions", (db) => {
+      const conditions = ["deviceId = @deviceId"];
+      const params: Record<string, unknown> = { deviceId };
+
+      if (options?.runId) {
+        conditions.push("runId = @runId");
+        params.runId = options.runId;
+      }
+      if (options?.unresolvedOnly) {
+        conditions.push("answerJson IS NULL");
+      }
+
+      const rows = db.prepare(`
+        SELECT * FROM adoption_questions
+        WHERE ${conditions.join(" AND ")}
+        ORDER BY required DESC, createdAt ASC
+      `).all(params) as Record<string, unknown>[];
+
+      return rows.map(adoptionQuestionFromRow);
+    });
+  }
+
+  deleteAdoptionQuestionsForRun(runId: string): void {
+    this.withDbRecovery("StateStore.deleteAdoptionQuestionsForRun", (db) => {
+      db.prepare("DELETE FROM adoption_questions WHERE runId = ?").run(runId);
+    });
+  }
+
+  upsertAdoptionQuestion(question: AdoptionQuestion): AdoptionQuestion {
+    return this.withDbRecovery("StateStore.upsertAdoptionQuestion", (db) => {
+      db.prepare(`
+        INSERT OR REPLACE INTO adoption_questions (
+          id, runId, deviceId, questionKey, prompt, optionsJson, required, answerJson, answeredAt, createdAt, updatedAt
+        )
+        VALUES (
+          @id, @runId, @deviceId, @questionKey, @prompt, @optionsJson, @required, @answerJson, @answeredAt, @createdAt, @updatedAt
+        )
+      `).run({
+        id: question.id,
+        runId: question.runId,
+        deviceId: question.deviceId,
+        questionKey: question.questionKey,
+        prompt: question.prompt,
+        optionsJson: JSON.stringify(question.options ?? []),
+        required: question.required ? 1 : 0,
+        answerJson: question.answerJson ? JSON.stringify(question.answerJson) : null,
+        answeredAt: question.answeredAt ?? null,
+        createdAt: question.createdAt,
+        updatedAt: question.updatedAt,
+      });
+      return question;
+    });
+  }
+
+  answerAdoptionQuestion(questionId: string, answerJson: Record<string, unknown>): AdoptionQuestion | null {
+    return this.withDbRecovery("StateStore.answerAdoptionQuestion", (db) => {
+      const existing = db.prepare("SELECT * FROM adoption_questions WHERE id = ?").get(questionId) as Record<string, unknown> | undefined;
+      if (!existing) {
+        return null;
+      }
+
+      const now = new Date().toISOString();
+      db.prepare(`
+        UPDATE adoption_questions
+        SET answerJson = @answerJson,
+            answeredAt = @answeredAt,
+            updatedAt = @updatedAt
+        WHERE id = @id
+      `).run({
+        id: questionId,
+        answerJson: JSON.stringify(answerJson),
+        answeredAt: now,
+        updatedAt: now,
+      });
+
+      const updated = db.prepare("SELECT * FROM adoption_questions WHERE id = ?").get(questionId) as Record<string, unknown>;
+      return adoptionQuestionFromRow(updated);
+    });
+  }
+
+  /* ---------- Device Credentials ---------- */
+
+  getDeviceCredentials(deviceId: string): DeviceCredential[] {
+    return this.withDbRecovery("StateStore.getDeviceCredentials", (db) => {
+      const rows = db.prepare(`
+        SELECT * FROM device_credentials
+        WHERE deviceId = ?
+        ORDER BY updatedAt DESC
+      `).all(deviceId) as Record<string, unknown>[];
+      return rows.map(deviceCredentialFromRow);
+    });
+  }
+
+  getDeviceCredentialById(id: string): DeviceCredential | null {
+    return this.withDbRecovery("StateStore.getDeviceCredentialById", (db) => {
+      const row = db.prepare("SELECT * FROM device_credentials WHERE id = ? LIMIT 1").get(id) as Record<string, unknown> | undefined;
+      return row ? deviceCredentialFromRow(row) : null;
+    });
+  }
+
+  upsertDeviceCredential(credential: DeviceCredential): DeviceCredential {
+    return this.withDbRecovery("StateStore.upsertDeviceCredential", (db) => {
+      db.prepare(`
+        INSERT OR REPLACE INTO device_credentials (
+          id, deviceId, protocol, adapterId, vaultSecretRef, accountLabel, scopeJson, status, lastValidatedAt, createdAt, updatedAt
+        )
+        VALUES (
+          @id, @deviceId, @protocol, @adapterId, @vaultSecretRef, @accountLabel, @scopeJson, @status, @lastValidatedAt, @createdAt, @updatedAt
+        )
+      `).run({
+        id: credential.id,
+        deviceId: credential.deviceId,
+        protocol: credential.protocol,
+        adapterId: credential.adapterId ?? null,
+        vaultSecretRef: credential.vaultSecretRef,
+        accountLabel: credential.accountLabel ?? null,
+        scopeJson: JSON.stringify(credential.scopeJson ?? {}),
+        status: credential.status,
+        lastValidatedAt: credential.lastValidatedAt ?? null,
+        createdAt: credential.createdAt,
+        updatedAt: credential.updatedAt,
+      });
+      return credential;
+    });
+  }
+
+  getValidatedCredentialProtocols(deviceId: string): string[] {
+    return this.withDbRecovery("StateStore.getValidatedCredentialProtocols", (db) => {
+      const rows = db.prepare(`
+        SELECT DISTINCT protocol
+        FROM device_credentials
+        WHERE deviceId = ?
+          AND status IN ('provided', 'validated')
+      `).all(deviceId) as Array<{ protocol: string }>;
+      return rows.map((row) => String(row.protocol));
+    });
+  }
+
+  /* ---------- Device Adapter Bindings ---------- */
+
+  getDeviceAdapterBindings(deviceId: string): DeviceAdapterBinding[] {
+    return this.withDbRecovery("StateStore.getDeviceAdapterBindings", (db) => {
+      const rows = db.prepare(`
+        SELECT * FROM device_adapter_bindings
+        WHERE deviceId = ?
+        ORDER BY selected DESC, score DESC, updatedAt DESC
+      `).all(deviceId) as Record<string, unknown>[];
+      return rows.map(deviceAdapterBindingFromRow);
+    });
+  }
+
+  upsertDeviceAdapterBinding(binding: DeviceAdapterBinding): DeviceAdapterBinding {
+    return this.withDbRecovery("StateStore.upsertDeviceAdapterBinding", (db) => {
+      db.prepare(`
+        INSERT OR REPLACE INTO device_adapter_bindings (
+          id, deviceId, adapterId, protocol, score, selected, reason, configJson, createdAt, updatedAt
+        )
+        VALUES (
+          @id, @deviceId, @adapterId, @protocol, @score, @selected, @reason, @configJson, @createdAt, @updatedAt
+        )
+      `).run({
+        id: binding.id,
+        deviceId: binding.deviceId,
+        adapterId: binding.adapterId,
+        protocol: binding.protocol,
+        score: binding.score,
+        selected: binding.selected ? 1 : 0,
+        reason: binding.reason,
+        configJson: JSON.stringify(binding.configJson ?? {}),
+        createdAt: binding.createdAt,
+        updatedAt: binding.updatedAt,
+      });
+      return binding;
+    });
+  }
+
+  clearDeviceAdapterBindings(deviceId: string): void {
+    this.withDbRecovery("StateStore.clearDeviceAdapterBindings", (db) => {
+      db.prepare("DELETE FROM device_adapter_bindings WHERE deviceId = ?").run(deviceId);
+    });
+  }
+
+  selectDeviceAdapterBinding(deviceId: string, adapterId: string, protocol: string): void {
+    this.withDbRecovery("StateStore.selectDeviceAdapterBinding", (db) => {
+      const now = new Date().toISOString();
+      const tx = db.transaction(() => {
+        db.prepare(`
+          UPDATE device_adapter_bindings
+          SET selected = 0, updatedAt = ?
+          WHERE deviceId = ? AND protocol = ?
+        `).run(now, deviceId, protocol);
+        db.prepare(`
+          UPDATE device_adapter_bindings
+          SET selected = 1, updatedAt = ?
+          WHERE deviceId = ? AND adapterId = ? AND protocol = ?
+        `).run(now, deviceId, adapterId, protocol);
+      });
+      tx();
+    });
+  }
+
+  /* ---------- Service Contracts ---------- */
+
+  getServiceContracts(deviceId: string): ServiceContract[] {
+    return this.withDbRecovery("StateStore.getServiceContracts", (db) => {
+      const rows = db.prepare(`
+        SELECT * FROM service_contracts
+        WHERE deviceId = ?
+        ORDER BY criticality DESC, updatedAt DESC
+      `).all(deviceId) as Record<string, unknown>[];
+      return rows.map(serviceContractFromRow);
+    });
+  }
+
+  upsertServiceContract(contract: ServiceContract): ServiceContract {
+    return this.withDbRecovery("StateStore.upsertServiceContract", (db) => {
+      db.prepare(`
+        INSERT OR REPLACE INTO service_contracts (
+          id, deviceId, serviceKey, displayName, criticality, desiredState, checkIntervalSec, policyJson, createdAt, updatedAt
+        )
+        VALUES (
+          @id, @deviceId, @serviceKey, @displayName, @criticality, @desiredState, @checkIntervalSec, @policyJson, @createdAt, @updatedAt
+        )
+      `).run({
+        id: contract.id,
+        deviceId: contract.deviceId,
+        serviceKey: contract.serviceKey,
+        displayName: contract.displayName,
+        criticality: contract.criticality,
+        desiredState: contract.desiredState,
+        checkIntervalSec: contract.checkIntervalSec,
+        policyJson: JSON.stringify(contract.policyJson ?? {}),
+        createdAt: contract.createdAt,
+        updatedAt: contract.updatedAt,
+      });
+      return contract;
+    });
+  }
+
+  clearServiceContracts(deviceId: string): void {
+    this.withDbRecovery("StateStore.clearServiceContracts", (db) => {
+      db.prepare("DELETE FROM service_contracts WHERE deviceId = ?").run(deviceId);
+    });
+  }
+
+  /* ---------- Device Findings ---------- */
+
+  getDeviceFindings(deviceId: string, status?: DeviceFinding["status"]): DeviceFinding[] {
+    return this.withDbRecovery("StateStore.getDeviceFindings", (db) => {
+      const params: Record<string, unknown> = { deviceId };
+      let query = "SELECT * FROM device_findings WHERE deviceId = @deviceId";
+      if (status) {
+        query += " AND status = @status";
+        params.status = status;
+      }
+      query += " ORDER BY lastSeenAt DESC";
+      const rows = db.prepare(query).all(params) as Record<string, unknown>[];
+      return rows.map(deviceFindingFromRow);
+    });
+  }
+
+  upsertDeviceFinding(finding: DeviceFinding): DeviceFinding {
+    return this.withDbRecovery("StateStore.upsertDeviceFinding", (db) => {
+      db.prepare(`
+        INSERT OR REPLACE INTO device_findings (
+          id, deviceId, dedupeKey, findingType, severity, title, summary, evidenceJson, status, firstSeenAt, lastSeenAt
+        )
+        VALUES (
+          @id, @deviceId, @dedupeKey, @findingType, @severity, @title, @summary, @evidenceJson, @status, @firstSeenAt, @lastSeenAt
+        )
+      `).run({
+        id: finding.id,
+        deviceId: finding.deviceId,
+        dedupeKey: finding.dedupeKey,
+        findingType: finding.findingType,
+        severity: finding.severity,
+        title: finding.title,
+        summary: finding.summary,
+        evidenceJson: JSON.stringify(finding.evidenceJson ?? {}),
+        status: finding.status,
+        firstSeenAt: finding.firstSeenAt,
+        lastSeenAt: finding.lastSeenAt,
+      });
+      return finding;
+    });
+  }
+
+  upsertDeviceFindingByDedupe(
+    finding: Omit<DeviceFinding, "id" | "firstSeenAt" | "lastSeenAt"> & {
+      id?: string;
+      firstSeenAt?: string;
+      lastSeenAt?: string;
+    },
+  ): DeviceFinding {
+    return this.withDbRecovery("StateStore.upsertDeviceFindingByDedupe", (db) => {
+      const existing = db.prepare(`
+        SELECT * FROM device_findings
+        WHERE deviceId = ? AND dedupeKey = ?
+        LIMIT 1
+      `).get(finding.deviceId, finding.dedupeKey) as Record<string, unknown> | undefined;
+
+      const now = new Date().toISOString();
+      const next: DeviceFinding = {
+        id: existing?.id ? String(existing.id) : (finding.id ?? randomUUID()),
+        deviceId: finding.deviceId,
+        dedupeKey: finding.dedupeKey,
+        findingType: finding.findingType,
+        severity: finding.severity,
+        title: finding.title,
+        summary: finding.summary,
+        evidenceJson: finding.evidenceJson,
+        status: finding.status,
+        firstSeenAt: existing?.firstSeenAt ? String(existing.firstSeenAt) : (finding.firstSeenAt ?? now),
+        lastSeenAt: finding.lastSeenAt ?? now,
+      };
+
+      db.prepare(`
+        INSERT OR REPLACE INTO device_findings (
+          id, deviceId, dedupeKey, findingType, severity, title, summary, evidenceJson, status, firstSeenAt, lastSeenAt
+        )
+        VALUES (
+          @id, @deviceId, @dedupeKey, @findingType, @severity, @title, @summary, @evidenceJson, @status, @firstSeenAt, @lastSeenAt
+        )
+      `).run({
+        id: next.id,
+        deviceId: next.deviceId,
+        dedupeKey: next.dedupeKey,
+        findingType: next.findingType,
+        severity: next.severity,
+        title: next.title,
+        summary: next.summary,
+        evidenceJson: JSON.stringify(next.evidenceJson ?? {}),
+        status: next.status,
+        firstSeenAt: next.firstSeenAt,
+        lastSeenAt: next.lastSeenAt,
+      });
+
+      return next;
+    });
+  }
+
   getDataDir(): string {
     return dbGetDataDir();
   }
 
   getStateFile(): string {
     return getDbPath();
+  }
+
+  getAuditStateFile(): string {
+    return getAuditDbPath();
   }
 }
 

@@ -12,6 +12,7 @@ import {
   refreshOpenAIToken,
 } from "@/lib/auth/oauth";
 import { getProviderConfig } from "@/lib/llm/config";
+import { normalizeProviderModel } from "@/lib/llm/models";
 import { getProviderMeta } from "@/lib/llm/registry";
 import { vault } from "@/lib/security/vault";
 import type { LLMProvider } from "@/lib/state/types";
@@ -29,12 +30,6 @@ const OPENAI_OAUTH_CODEX_MODELS = new Set([
   "gpt-5.2",
 ]);
 const DEFAULT_OPENAI_OAUTH_MODEL = "gpt-5.3-codex";
-
-// ---------------------------------------------------------------------------
-// Anthropic OAuth constants — same as oneshot opencode-anthropic-auth
-// ---------------------------------------------------------------------------
-const ANTHROPIC_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-const ANTHROPIC_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token";
 
 const resolveCredential = async (provider: LLMProvider): Promise<string | undefined> => {
   const config = await getProviderConfig(provider);
@@ -382,18 +377,20 @@ export const buildLanguageModel = async (
       );
     }
     case "anthropic": {
+      const anthropicModel = normalizeProviderModel("anthropic", model) ?? model;
+
       // Priority 1: Real API key (from manual entry)
       const apiKey = await vault.getSecret("llm.api.anthropic.key");
       if (apiKey) {
         const client = createAnthropic({ apiKey });
-        return client(model);
+        return client(anthropicModel);
       }
 
       // Priority 2: OAuth access token → custom fetch with Bearer + anthropic-beta
       // (exact same pattern as oneshot's opencode-anthropic-auth plugin)
       const anthropicOAuthToken = await vault.getSecret("llm.oauth.anthropic.access_token");
       if (anthropicOAuthToken) {
-        return buildAnthropicOAuth(model);
+        return buildAnthropicOAuth(anthropicModel);
       }
 
       throw new Error(

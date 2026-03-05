@@ -1,4 +1,5 @@
 import { runShell } from "@/lib/utils/shell";
+import { buildObservation } from "@/lib/discovery/evidence";
 import type { DiscoveryCandidate } from "@/lib/discovery/types";
 
 const ARP_LINE = /\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+([0-9a-f:.-]+|\(incomplete\))(?:\s+on\s+(\w+))?/i;
@@ -48,12 +49,29 @@ export const collectPassiveCandidates = async (): Promise<DiscoveryCandidate[]> 
       const macRaw = unixMatch[2];
       const iface = unixMatch[3];
       const mac = macRaw && macRaw !== "(incomplete)" ? macRaw.toLowerCase() : undefined;
+      if (!mac) {
+        continue;
+      }
 
       candidates.push({
         ip,
         mac,
         services: [],
         source: "passive",
+        observations: [
+          buildObservation({
+            ip,
+            source: "passive",
+            evidenceType: "arp_resolved",
+            confidence: 0.9,
+            observedAt: new Date().toISOString(),
+            ttlMs: 20 * 60_000,
+            details: {
+              interface: iface,
+              method: "arp",
+            },
+          }),
+        ],
         metadata: {
           interface: iface,
         },
@@ -69,12 +87,29 @@ export const collectPassiveCandidates = async (): Promise<DiscoveryCandidate[]> 
       }
       const macRaw = windowsMatch[2];
       const mac = macRaw.toLowerCase() !== "incomplete" ? macRaw.toLowerCase().replace(/-/g, ":") : undefined;
+      if (!mac) {
+        continue;
+      }
 
       candidates.push({
         ip,
         mac,
         services: [],
         source: "passive",
+        observations: [
+          buildObservation({
+            ip,
+            source: "passive",
+            evidenceType: "arp_resolved",
+            confidence: 0.9,
+            observedAt: new Date().toISOString(),
+            ttlMs: 20 * 60_000,
+            details: {
+              method: "arp",
+              arpType: windowsMatch[3].toLowerCase(),
+            },
+          }),
+        ],
         metadata: {
           arpType: windowsMatch[3].toLowerCase(),
         },

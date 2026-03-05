@@ -7,6 +7,7 @@ import {
   providerSupportsOAuth,
 } from "@/lib/auth/oauth";
 import { getProviderConfig } from "@/lib/llm/config";
+import { listProviderModelsFromApi, normalizeProviderModel } from "@/lib/llm/models";
 import { getProviderMeta } from "@/lib/llm/registry";
 import { ensureVaultReadyForProviders } from "@/lib/security/vault-gate";
 import { vault } from "@/lib/security/vault";
@@ -132,10 +133,22 @@ export async function GET(
     // Persist provider config so resolveCredential can find the token
     const meta = getProviderMeta(provider);
     const existingConfig = await getProviderConfig(provider);
+    const preferredModel = normalizeProviderModel(
+      provider,
+      existingConfig?.model ?? meta?.defaultModel ?? "",
+    );
+    const providerModels = await listProviderModelsFromApi(provider, { forceRefresh: true });
+    const persistedModel = preferredModel && providerModels.includes(preferredModel)
+      ? preferredModel
+      : providerModels[0];
+    if (!persistedModel) {
+      throw new Error(`${provider} model list from provider API was empty.`);
+    }
+
     await stateStore.setProviderConfig({
       provider,
       enabled: true,
-      model: existingConfig?.model ?? meta?.defaultModel ?? "",
+      model: persistedModel,
       ...(existingConfig?.baseUrl && { baseUrl: existingConfig.baseUrl }),
       oauthTokenSecret: isOpenRouterOAuth(provider)
         ? undefined

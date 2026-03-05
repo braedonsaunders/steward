@@ -30,7 +30,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSteward } from "@/lib/hooks/use-steward";
-import type { Incident, IncidentSeverity, PlaybookRun } from "@/lib/state/types";
+import type { Incident, IncidentSeverity } from "@/lib/state/types";
 import { cn } from "@/lib/utils";
 
 function severityBadgeVariant(
@@ -209,7 +209,7 @@ export default function IncidentDetailPage() {
         <div className="flex items-start gap-3 flex-wrap">
           {severityIcon(incident.severity)}
           <div className="flex-1 min-w-0">
-            <h1 className="text-xl font-semibold tracking-tight md:text-2xl">
+            <h1 className="text-xl font-semibold tracking-tight steward-heading-font md:text-2xl">
               {incident.title}
             </h1>
             <div className="mt-2 flex items-center gap-2 flex-wrap">

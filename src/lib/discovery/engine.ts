@@ -1,11 +1,16 @@
 import { collectActiveCandidates } from "@/lib/discovery/active";
 import { mergeDiscoveryCandidates } from "@/lib/discovery/classify";
+import { buildObservation } from "@/lib/discovery/evidence";
 import { collectPassiveCandidates } from "@/lib/discovery/passive";
-import { fingerprintBatch, applyFingerprintResults } from "@/lib/discovery/fingerprint";
+import {
+  CURRENT_FINGERPRINT_VERSION,
+  applyFingerprintResults,
+  fingerprintBatch,
+} from "@/lib/discovery/fingerprint";
 import { discoverMulticast } from "@/lib/discovery/multicast";
 import { updateOuiDatabase } from "@/lib/discovery/oui";
 import dns from "node:dns/promises";
-import { pluginRegistry } from "@/lib/plugins/registry";
+import { adapterRegistry } from "@/lib/adapters/registry";
 import { stateStore } from "@/lib/state/store";
 import { runShell } from "@/lib/utils/shell";
 import type { DiscoveryCandidate, DiscoverySnapshot } from "@/lib/discovery/types";
@@ -13,6 +18,11 @@ import type { DiscoveryCandidate, DiscoverySnapshot } from "@/lib/discovery/type
 interface DiscoveryRunOptions {
   forceDeepScan?: boolean;
 }
+
+const normalizeCandidate = (candidate: DiscoveryCandidate): DiscoveryCandidate => ({
+  ...candidate,
+  observations: Array.isArray(candidate.observations) ? candidate.observations : [],
+});
 
 const isEligibleManagedIp = (ip: string): boolean => {
   const octets = ip.split(".").map((value) => Number(value));
@@ -33,6 +43,15 @@ let activeTargetCursor = 0;
 let hostnameCursor = 0;
 let fingerprintCursor = 0;
 let lastOuiUpdateAt = 0;
+
+const HTTP_PORTS = new Set([80, 443, 8080, 8443, 8000, 9000, 5000, 5001, 7443, 9443]);
+const SSH_PORTS = new Set([22, 2222]);
+const SNMP_PORTS = new Set([161]);
+const DNS_PORTS = new Set([53]);
+const WINRM_PORTS = new Set([5985, 5986]);
+const MQTT_PORTS = new Set([1883, 8883]);
+const SMB_PORTS = new Set([445]);
+const NETBIOS_PORTS = new Set([137, 139]);
 
 const reverseHostname = async (ip: string): Promise<string | undefined> => {
   try {
@@ -103,6 +122,21 @@ const enrichHostnames = async (
     return {
       ...candidate,
       hostname,
+      observations: [
+        ...candidate.observations,
+        buildObservation({
+          ip: candidate.ip,
+          source: "active",
+          evidenceType: "dns_ptr",
+          confidence: 0.4,
+          observedAt: new Date().toISOString(),
+          ttlMs: 12 * 60 * 60_000,
+          details: {
+            hostname,
+            via: "reverse-dns",
+          },
+        }),
+      ],
       metadata: {
         ...candidate.metadata,
         hostnameSource: "reverse-dns",
@@ -117,19 +151,60 @@ const selectFingerprintTargets = (
   candidates: DiscoveryCandidate[],
   deepScan: boolean,
   maxTargets: number,
+  forceRefresh = false,
 ): DiscoveryCandidate[] => {
+  const nowMs = Date.now();
+
+  const hasCoverageGaps = (candidate: DiscoveryCandidate): boolean => {
+    const fp = candidate.metadata.fingerprint as Record<string, unknown> | undefined;
+    const version = Number(fp?.fingerprintVersion ?? 0);
+    if (!Number.isFinite(version) || version < CURRENT_FINGERPRINT_VERSION) {
+      return true;
+    }
+
+    const ports = new Set(candidate.services.map((service) => service.port));
+    if ([...SSH_PORTS].some((port) => ports.has(port)) && !fp?.sshBanner) return true;
+    if ([...SNMP_PORTS].some((port) => ports.has(port)) && !fp?.snmpSysDescr) return true;
+    if ([...DNS_PORTS].some((port) => ports.has(port)) && !fp?.dnsService) return true;
+    if ([...WINRM_PORTS].some((port) => ports.has(port)) && !fp?.winrm) return true;
+    if ([...MQTT_PORTS].some((port) => ports.has(port)) && !fp?.mqtt) return true;
+    if ([...SMB_PORTS].some((port) => ports.has(port)) && !fp?.smbDialect) return true;
+    if ([...NETBIOS_PORTS].some((port) => ports.has(port)) && !fp?.netbiosName) return true;
+
+    if ([...HTTP_PORTS].some((port) => ports.has(port))) {
+      const hasRichWebEvidence = candidate.services.some((service) =>
+        HTTP_PORTS.has(service.port) && (service.httpInfo || service.tlsCert || service.banner));
+      if (!hasRichWebEvidence) return true;
+    }
+
+    return false;
+  };
+
   // Only fingerprint candidates with at least one open service port
   const eligible = candidates.filter((c) => {
-    if (c.services.length === 0) return false;
+    if (c.services.length === 0) {
+      if (!forceRefresh) {
+        return false;
+      }
+      return true;
+    }
+
+    const fp = c.metadata.fingerprint as Record<string, unknown> | undefined;
+    const missingCoverage = hasCoverageGaps(c);
+    if (forceRefresh || missingCoverage) {
+      if (!fp?.lastFingerprintedAt) return true;
+      const ageMs = nowMs - new Date(String(fp.lastFingerprintedAt)).getTime();
+      const refreshCooldown = forceRefresh ? 0 : 5 * 60_000;
+      return !Number.isFinite(ageMs) || ageMs >= refreshCooldown;
+    }
 
     // Check cooldown: skip if recently fingerprinted
-    const fp = c.metadata.fingerprint as Record<string, unknown> | undefined;
     if (fp?.lastFingerprintedAt) {
-      const ageMs = Date.now() - new Date(fp.lastFingerprintedAt as string).getTime();
+      const ageMs = nowMs - new Date(String(fp.lastFingerprintedAt)).getTime();
       // Shorter cooldown for unknown/low-confidence devices
       const isUnknown = !c.typeHint || c.typeHint === "unknown";
       const cooldown = isUnknown ? 10 * 60_000 : 60 * 60_000;
-      if (ageMs < cooldown) return false;
+      if (Number.isFinite(ageMs) && ageMs < cooldown) return false;
     }
 
     return true;
@@ -161,8 +236,9 @@ export const runDiscovery = async (options: DiscoveryRunOptions = {}): Promise<D
   const settings = stateStore.getRuntimeSettings();
 
   const now = Date.now();
+  const manualScan = options.forceDeepScan === true;
   const deepScan =
-    options.forceDeepScan === true ||
+    manualScan ||
     lastDeepScanAt === 0 ||
     now - lastDeepScanAt >= settings.deepScanIntervalMs;
 
@@ -175,7 +251,9 @@ export const runDiscovery = async (options: DiscoveryRunOptions = {}): Promise<D
   /* ── Phase 1: Network Presence ────────────────────────────────────── */
 
   const passiveRaw = await collectPassiveCandidates();
-  const passive = passiveRaw.filter((candidate) => isEligibleManagedIp(candidate.ip));
+  const passive = passiveRaw
+    .map(normalizeCandidate)
+    .filter((candidate) => isEligibleManagedIp(candidate.ip));
 
   // Multicast discovery (mDNS + SSDP)
   let multicastCandidates: DiscoveryCandidate[] = [];
@@ -185,7 +263,9 @@ export const runDiscovery = async (options: DiscoveryRunOptions = {}): Promise<D
         enableMdns: settings.enableMdnsDiscovery,
         enableSsdp: settings.enableSsdpDiscovery,
       });
-      multicastCandidates = multicastRaw.filter((c) => isEligibleManagedIp(c.ip));
+      multicastCandidates = multicastRaw
+        .map(normalizeCandidate)
+        .filter((c) => isEligibleManagedIp(c.ip));
     } catch (err) {
       console.error("[discovery] Multicast discovery failed:", err);
     }
@@ -200,7 +280,9 @@ export const runDiscovery = async (options: DiscoveryRunOptions = {}): Promise<D
     maxTargets: deepScan ? settings.deepActiveTargets : settings.incrementalActiveTargets,
     maxPortScanHosts: deepScan ? settings.deepPortScanHosts : settings.incrementalPortScanHosts,
   });
-  const active = activeRaw.filter((candidate) => isEligibleManagedIp(candidate.ip));
+  const active = activeRaw
+    .map(normalizeCandidate)
+    .filter((candidate) => isEligibleManagedIp(candidate.ip));
 
   if (deepScan) {
     lastDeepScanAt = now;
@@ -209,25 +291,29 @@ export const runDiscovery = async (options: DiscoveryRunOptions = {}): Promise<D
   const span = Math.max(1, deepScan ? settings.deepActiveTargets : settings.incrementalActiveTargets);
   activeTargetCursor = (activeTargetCursor + span) % 1024;
 
-  // Plugin discovery sources
+  // Adapter discovery sources
   const knownIps = [...new Set([...passive.map((c) => c.ip), ...multicastCandidates.map((c) => c.ip), ...active.map((c) => c.ip)])];
-  const pluginCandidatesRaw = await pluginRegistry.runPluginDiscovery(knownIps);
-  const pluginCandidates = pluginCandidatesRaw.filter((candidate) => isEligibleManagedIp(candidate.ip));
+  const adapterCandidatesRaw = await adapterRegistry.runAdapterDiscovery(knownIps);
+  const adapterCandidates = adapterCandidatesRaw
+    .map(normalizeCandidate)
+    .filter((candidate) => isEligibleManagedIp(candidate.ip));
 
   /* ── Phase 3+4: Merge, Fingerprint, Enrich ────────────────────────── */
 
-  const allCandidates = [...passive, ...multicastCandidates, ...active, ...pluginCandidates];
+  const allCandidates = [...passive, ...multicastCandidates, ...active, ...adapterCandidates];
   let merged = mergeDiscoveryCandidates(allCandidates);
 
   // Service fingerprinting (incremental batch)
-  const maxFpTargets = deepScan ? settings.deepFingerprintTargets : settings.incrementalFingerprintTargets;
-  const fpTargets = selectFingerprintTargets(merged, deepScan, maxFpTargets);
+  const configuredMax = deepScan ? settings.deepFingerprintTargets : settings.incrementalFingerprintTargets;
+  const maxFpTargets = manualScan ? Math.max(configuredMax, merged.length) : configuredMax;
+  const fpTargets = selectFingerprintTargets(merged, deepScan, maxFpTargets, manualScan);
   if (fpTargets.length > 0) {
     try {
       const fpResults = await fingerprintBatch(fpTargets, {
         maxConcurrency: deepScan ? 8 : 3,
         timeoutMs: 3_000,
         enableSnmp: settings.enableSnmpProbe,
+        aggressive: deepScan,
       });
       merged = applyFingerprintResults(merged, fpResults);
     } catch (err) {
@@ -238,9 +324,9 @@ export const runDiscovery = async (options: DiscoveryRunOptions = {}): Promise<D
   // Hostname enrichment
   merged = await enrichHostnames(merged, deepScan);
 
-  // Plugin enrichment
+  // Adapter enrichment
   merged = await Promise.all(
-    merged.map((candidate) => pluginRegistry.enrichCandidate(candidate)),
+    merged.map(async (candidate) => normalizeCandidate(await adapterRegistry.enrichCandidate(candidate))),
   );
 
   /* ── Phase 5: Classification (happens in candidateToDevice, called by loop.ts) ── */

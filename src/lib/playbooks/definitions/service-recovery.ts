@@ -1,5 +1,17 @@
 import type { PlaybookDefinition } from "@/lib/state/types";
 
+const readSafety = {
+  dryRunSupported: false,
+  requiresConfirmedRevert: false,
+  criticality: "low" as const,
+};
+
+const mutateSafety = {
+  dryRunSupported: false,
+  requiresConfirmedRevert: false,
+  criticality: "medium" as const,
+};
+
 export const serviceRecoveryPlaybooks: PlaybookDefinition[] = [
   {
     id: "playbook:service-recovery:systemd",
@@ -17,27 +29,48 @@ export const serviceRecoveryPlaybooks: PlaybookDefinition[] = [
       {
         id: "step:systemd:restart",
         label: "Restart the service",
-        command: "ssh {{host}} 'sudo systemctl restart {{service}}'",
-        protocol: "ssh",
-        timeoutMs: 15_000,
+        operation: {
+          id: "op:systemd:restart",
+          adapterId: "ssh",
+          kind: "service.restart",
+          mode: "mutate",
+          timeoutMs: 15_000,
+          commandTemplate: "ssh {{host}} 'sudo systemctl restart {{service}}'",
+          expectedSemanticTarget: "service:{{service}}",
+          safety: mutateSafety,
+        },
       },
     ],
     verificationSteps: [
       {
         id: "verify:systemd:active",
         label: "Verify service is active",
-        command: "ssh {{host}} 'systemctl is-active {{service}}'",
-        protocol: "ssh",
-        timeoutMs: 10_000,
+        operation: {
+          id: "op:systemd:active-check",
+          adapterId: "ssh",
+          kind: "shell.command",
+          mode: "read",
+          timeoutMs: 10_000,
+          commandTemplate: "ssh {{host}} 'systemctl is-active {{service}}'",
+          expectedSemanticTarget: "service:{{service}}",
+          safety: readSafety,
+        },
       },
     ],
     rollbackSteps: [
       {
         id: "rollback:systemd:stop",
         label: "Stop the service if restart caused issues",
-        command: "ssh {{host}} 'sudo systemctl stop {{service}}'",
-        protocol: "ssh",
-        timeoutMs: 10_000,
+        operation: {
+          id: "op:systemd:stop",
+          adapterId: "ssh",
+          kind: "service.stop",
+          mode: "mutate",
+          timeoutMs: 10_000,
+          commandTemplate: "ssh {{host}} 'sudo systemctl stop {{service}}'",
+          expectedSemanticTarget: "service:{{service}}",
+          safety: mutateSafety,
+        },
       },
     ],
   },
@@ -57,27 +90,48 @@ export const serviceRecoveryPlaybooks: PlaybookDefinition[] = [
       {
         id: "step:docker:restart",
         label: "Restart the container",
-        command: "ssh {{host}} 'docker restart {{container}}'",
-        protocol: "docker",
-        timeoutMs: 20_000,
+        operation: {
+          id: "op:docker:restart",
+          adapterId: "docker",
+          kind: "container.restart",
+          mode: "mutate",
+          timeoutMs: 20_000,
+          commandTemplate: "ssh {{host}} 'docker restart {{container}}'",
+          expectedSemanticTarget: "container:{{container}}",
+          safety: mutateSafety,
+        },
       },
     ],
     verificationSteps: [
       {
         id: "verify:docker:running",
         label: "Verify container is running",
-        command: "ssh {{host}} 'docker inspect -f {{\"{{.State.Running}}\"}} {{container}}'",
-        protocol: "docker",
-        timeoutMs: 10_000,
+        operation: {
+          id: "op:docker:running-check",
+          adapterId: "docker",
+          kind: "shell.command",
+          mode: "read",
+          timeoutMs: 10_000,
+          commandTemplate: "ssh {{host}} 'docker inspect -f {{\"{{.State.Running}}\"}} {{container}}'",
+          expectedSemanticTarget: "container:{{container}}",
+          safety: readSafety,
+        },
       },
     ],
     rollbackSteps: [
       {
         id: "rollback:docker:stop",
         label: "Stop the container",
-        command: "ssh {{host}} 'docker stop {{container}}'",
-        protocol: "docker",
-        timeoutMs: 10_000,
+        operation: {
+          id: "op:docker:stop",
+          adapterId: "docker",
+          kind: "container.stop",
+          mode: "mutate",
+          timeoutMs: 10_000,
+          commandTemplate: "ssh {{host}} 'docker stop {{container}}'",
+          expectedSemanticTarget: "container:{{container}}",
+          safety: mutateSafety,
+        },
       },
     ],
   },
@@ -96,27 +150,48 @@ export const serviceRecoveryPlaybooks: PlaybookDefinition[] = [
       {
         id: "step:win:restart",
         label: "Restart the service",
-        command: "Invoke-Command -ComputerName {{host}} -ScriptBlock { Restart-Service -Name '{{service}}' -Force }",
-        protocol: "winrm",
-        timeoutMs: 20_000,
+        operation: {
+          id: "op:windows:service-restart",
+          adapterId: "winrm",
+          kind: "service.restart",
+          mode: "mutate",
+          timeoutMs: 20_000,
+          commandTemplate: "Invoke-Command -ComputerName {{host}} -ScriptBlock { Restart-Service -Name '{{service}}' -Force }",
+          expectedSemanticTarget: "service:{{service}}",
+          safety: mutateSafety,
+        },
       },
     ],
     verificationSteps: [
       {
         id: "verify:win:running",
         label: "Verify service is running",
-        command: "Invoke-Command -ComputerName {{host}} -ScriptBlock { (Get-Service -Name '{{service}}').Status }",
-        protocol: "winrm",
-        timeoutMs: 10_000,
+        operation: {
+          id: "op:windows:service-running-check",
+          adapterId: "winrm",
+          kind: "shell.command",
+          mode: "read",
+          timeoutMs: 10_000,
+          commandTemplate: "Invoke-Command -ComputerName {{host}} -ScriptBlock { (Get-Service -Name '{{service}}').Status }",
+          expectedSemanticTarget: "service:{{service}}",
+          safety: readSafety,
+        },
       },
     ],
     rollbackSteps: [
       {
         id: "rollback:win:stop",
         label: "Stop the service",
-        command: "Invoke-Command -ComputerName {{host}} -ScriptBlock { Stop-Service -Name '{{service}}' -Force }",
-        protocol: "winrm",
-        timeoutMs: 10_000,
+        operation: {
+          id: "op:windows:service-stop",
+          adapterId: "winrm",
+          kind: "service.stop",
+          mode: "mutate",
+          timeoutMs: 10_000,
+          commandTemplate: "Invoke-Command -ComputerName {{host}} -ScriptBlock { Stop-Service -Name '{{service}}' -Force }",
+          expectedSemanticTarget: "service:{{service}}",
+          safety: mutateSafety,
+        },
       },
     ],
   },

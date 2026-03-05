@@ -464,7 +464,7 @@ export default function TopologyPage() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Network className="h-6 w-6 text-muted-foreground" />
-          <h1 className="text-2xl font-semibold tracking-tight">
+          <h1 className="text-2xl font-semibold tracking-tight steward-heading-font">
             Network Topology
           </h1>
           <div className="flex gap-2">

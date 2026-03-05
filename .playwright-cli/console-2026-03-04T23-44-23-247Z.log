@@ -1,0 +1,50 @@
+[    2231ms] [ERROR] A tree hydrated but some attributes of the server rendered HTML didn't match the client properties. This won't be patched up. This can happen if a SSR-ed Client Component used:
+
+- A server/client branch `if (typeof window !== 'undefined')`.
+- Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.
+- Date formatting in a user's locale which doesn't match the server.
+- External changing data without sending a snapshot of it along with the HTML.
+- Invalid HTML tag nesting.
+
+It can also happen if the client has a browser extension installed which messes with the HTML before React loaded.
+
+%s%s https://react.dev/link/hydration-mismatch 
+
+  ...
+    <LoadingBoundary name="chat/" loading={null}>
+      <HTTPAccessFallbackBoundary notFound={undefined} forbidden={undefined} unauthorized={undefined}>
+        <RedirectBoundary>
+          <RedirectErrorBoundary router={{...}}>
+            <InnerLayoutRouter url="/chat" tree={[...]} params={{}} cacheNode={{rsc:<Fragment>, ...}} segmentPath={[...]} ...>
+              <SegmentViewNode type="page" pagePath="chat/page.tsx">
+                <SegmentTrieNode>
+                <ClientPageRoot Component={function ChatPage} serverProvidedParams={{...}}>
+                  <ChatPage params={Promise} searchParams={Promise}>
+                    <div className="relative f...">
+                      <div>
+                      <button>
+                      <div className="flex min-w...">
+                        <div>
+                        <div>
+                        <div className="shrink-0 b...">
+                          <div className="flex items...">
+                            <Textarea ref={{current:null}} value="" onChange={function onChange} ...>
+                              <textarea
+                                data-slot="textarea"
+                                className="flex field-sizing-content w-full rounded-md border border-input bg-transpar..."
+                                ref={{current:null}}
+                                value=""
+                                onChange={function onChange}
+                                onKeyDown={function handleKeyDown}
+                                placeholder="Ask Steward anything about your environment..."
+                                rows={1}
+                                disabled={true}
+-                               style={{caret-color:"transparent"}}
+                              >
+                            ...
+                          ...
+              ...
+            ...
+ @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[    2363ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:3010/api/digest:0
+[   17550ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:3010/api/digest:0

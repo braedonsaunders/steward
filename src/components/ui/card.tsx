@@ -1,14 +1,48 @@
-import * as React from "react";
-import { cn } from "@/lib/utils";
+"use client";
 
-const Card = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
-  ({ className, ...props }, ref) => (
-    <div
-      ref={ref}
-      className={cn("rounded-xl border bg-card text-card-foreground shadow-sm", className)}
-      {...props}
-    />
-  ),
+import * as React from "react";
+import { motion, useReducedMotion } from "framer-motion";
+import { cn } from "@/lib/utils";
+import { quickSpring } from "@/lib/motion";
+
+interface CardProps
+  extends Omit<
+    React.HTMLAttributes<HTMLDivElement>,
+    | "onAnimationStart"
+    | "onAnimationEnd"
+    | "onAnimationIteration"
+    | "onDrag"
+    | "onDragStart"
+    | "onDragEnd"
+  > {
+  interactive?: boolean;
+}
+
+const Card = React.forwardRef<HTMLDivElement, CardProps>(
+  ({ className, interactive = true, ...props }, ref) => {
+    const reduceMotion = useReducedMotion();
+
+    return (
+      <motion.div
+        ref={ref}
+        className={cn(
+          "rounded-xl border bg-card text-card-foreground shadow-sm transition-[transform,border-color,box-shadow]",
+          className,
+        )}
+        whileHover={
+          reduceMotion || !interactive
+            ? undefined
+            : {
+                y: -2,
+                scale: 1.002,
+                borderColor: "var(--ring)",
+              }
+        }
+        transition={quickSpring}
+        {...props}
+      />
+    );
+  },
 );
 Card.displayName = "Card";
 

@@ -1,5 +1,5 @@
 import type { Device } from "@/lib/state/types";
-import { pluginRegistry } from "@/lib/plugins/registry";
+import { adapterRegistry } from "@/lib/adapters/registry";
 
 export interface ManagementCapability {
   id: string;
@@ -99,8 +99,8 @@ export const buildManagementSurface = (device: Device): DeviceManagementSurface 
     });
   }
 
-  // Plugin capabilities
-  capabilities.push(...pluginRegistry.getPluginCapabilities(device));
+  // Adapter capabilities
+  capabilities.push(...adapterRegistry.getAdapterCapabilities(device));
 
   const preferredProtocol = capabilities[0]?.protocol;
 

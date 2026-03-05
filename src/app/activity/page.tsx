@@ -322,7 +322,7 @@ export default function ActivityPage() {
     <div className="flex h-full min-h-0 flex-col gap-4">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Activity</h1>
+        <h1 className="text-2xl font-semibold tracking-tight steward-heading-font">Activity</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Audit trail of actions and agent cycle history.
         </p>

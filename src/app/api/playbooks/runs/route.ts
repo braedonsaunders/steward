@@ -2,14 +2,19 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { isAuthorized } from "@/lib/auth/guard";
 import { stateStore } from "@/lib/state/store";
 import { getPlaybookById } from "@/lib/playbooks/registry";
 import { evaluatePolicy } from "@/lib/policy/engine";
 import { createApproval } from "@/lib/approvals/queue";
-import type { PlaybookRun, PlaybookStep } from "@/lib/state/types";
+import { getMissingCredentialProtocolsForPlaybook } from "@/lib/adoption/playbook-credentials";
+import {
+  buildPlaybookRun,
+  countRecentFamilyFailures,
+  criticalityForActionClass,
+  isFamilyQuarantined,
+} from "@/lib/playbooks/factory";
 
 const TriggerSchema = z.object({
   playbookId: z.string().min(1),
@@ -52,9 +57,29 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Device not found" }, { status: 404 });
   }
 
+  const missingCredentials = getMissingCredentialProtocolsForPlaybook(device, playbook);
+  if (missingCredentials.length > 0) {
+    return NextResponse.json(
+      {
+        error: `Missing validated credentials for protocols: ${missingCredentials.join(", ")}`,
+        missingCredentials,
+      },
+      { status: 400 },
+    );
+  }
+
   const rules = stateStore.getPolicyRules();
   const windows = stateStore.getMaintenanceWindows();
-  const policyResult = evaluatePolicy(playbook.actionClass, device, rules, windows);
+  const lane = "A" as const;
+  const recentFailures = countRecentFamilyFailures(device.id, playbook.family);
+  const quarantineActive = isFamilyQuarantined(device.id, playbook.family);
+  const policyResult = evaluatePolicy(playbook.actionClass, device, rules, windows, {
+    blastRadius: playbook.blastRadius,
+    criticality: criticalityForActionClass(playbook.actionClass),
+    lane,
+    recentFailures,
+    quarantineActive,
+  });
 
   if (policyResult.decision === "DENY") {
     return NextResponse.json(
@@ -63,28 +88,13 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const toRunStep = (s: Omit<PlaybookStep, "status" | "output" | "startedAt" | "completedAt">): PlaybookStep => ({
-    ...s,
-    status: "pending",
-  });
-
-  const run: PlaybookRun = {
-    id: randomUUID(),
-    playbookId: playbook.id,
-    family: playbook.family,
-    name: playbook.name,
+  const run = buildPlaybookRun(playbook, {
     deviceId: device.id,
     incidentId: parsed.data.incidentId,
-    actionClass: playbook.actionClass,
-    status: policyResult.decision === "ALLOW_AUTO" ? "approved" : "pending_approval",
     policyEvaluation: policyResult,
-    steps: playbook.steps.map(toRunStep),
-    verificationSteps: playbook.verificationSteps.map(toRunStep),
-    rollbackSteps: playbook.rollbackSteps.map(toRunStep),
-    evidence: { logs: [] },
-    createdAt: new Date().toISOString(),
-    failureCount: 0,
-  };
+    initialStatus: policyResult.decision === "ALLOW_AUTO" ? "approved" : "pending_approval",
+    lane,
+  });
 
   if (policyResult.decision === "REQUIRE_APPROVAL") {
     createApproval(run, device);

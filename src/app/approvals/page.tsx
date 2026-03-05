@@ -83,7 +83,7 @@ export default function ApprovalsPage() {
       {/* Header */}
       <div className="flex items-center gap-3">
         <ShieldCheck className="h-6 w-6 text-muted-foreground" />
-        <h1 className="text-2xl font-semibold tracking-tight">
+        <h1 className="text-2xl font-semibold tracking-tight steward-heading-font">
           Pending Approvals
         </h1>
         <Badge

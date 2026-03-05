@@ -1,20 +1,76 @@
 import { randomUUID } from "node:crypto";
 import type { DiscoveryCandidate } from "@/lib/discovery/types";
+import { dedupeObservations } from "@/lib/discovery/evidence";
 import { lookupOuiVendor } from "@/lib/discovery/oui";
-import type { Device, DeviceType } from "@/lib/state/types";
+import type { Device, DeviceStatus, DeviceType, ServiceFingerprint } from "@/lib/state/types";
 
 /* ---------- Helpers ---------- */
 
 const hasAny = (ports: number[], expected: number[]): boolean =>
   expected.some((port) => ports.includes(port));
 
-const AUTO_NAME_PATTERN = /^(server|workstation|router|firewall|switch|access-point|camera|nas|printer|iot|container-host|hypervisor|unknown)-\d+-\d+-\d+-\d+$/;
+const AUTO_NAME_PATTERN = /^(server|workstation|router|firewall|switch|access-point|camera|nas|printer|iot|container-host|hypervisor|unknown|device)-\d+-\d+-\d+-\d+$/;
+const LEGACY_UNKNOWN_NAME_PATTERN = /^unknown-\d+-\d+-\d+-\d+$/;
+const UNKNOWN_SERVICE_NAMES = new Set(["", "unknown", "tcpwrapped", "generic"]);
 
 const normalizeMac = (mac: string): string =>
   mac.toLowerCase().replace(/-/g, ":").trim();
 
 const vendorSlug = (vendor: string): string =>
-  vendor.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+  (vendor
+    .split(/[,(]/)[0]
+    ?.trim()
+    .toLowerCase()
+    .replace(/\b(inc|corp|corporation|co|ltd|limited|company)\b/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "")) || "device";
+
+const isUnknownServiceName = (name: string | undefined): boolean =>
+  !name || UNKNOWN_SERVICE_NAMES.has(name.trim().toLowerCase());
+
+const mergeServiceFingerprint = (
+  incoming: ServiceFingerprint,
+  previous: ServiceFingerprint | undefined,
+): ServiceFingerprint => {
+  const mergedName = !isUnknownServiceName(incoming.name)
+    ? incoming.name
+    : (!isUnknownServiceName(previous?.name) ? (previous?.name as string) : incoming.name);
+
+  return {
+    ...(previous ?? {}),
+    ...incoming,
+    id: previous?.id ?? incoming.id,
+    name: mergedName,
+    secure: incoming.secure || Boolean(previous?.secure),
+    product: incoming.product ?? previous?.product,
+    version: incoming.version ?? previous?.version,
+    banner: incoming.banner ?? previous?.banner,
+    tlsCert: incoming.tlsCert ?? previous?.tlsCert,
+    httpInfo: incoming.httpInfo ?? previous?.httpInfo,
+    lastSeenAt: incoming.lastSeenAt,
+  };
+};
+
+const mergeServiceSets = (
+  current: ServiceFingerprint[],
+  previous: ServiceFingerprint[] = [],
+): ServiceFingerprint[] => {
+  if (current.length === 0) {
+    const now = new Date().toISOString();
+    return previous.map((service) => ({ ...service, lastSeenAt: now })).sort((a, b) => a.port - b.port);
+  }
+
+  const byKey = new Map<string, ServiceFingerprint>();
+  for (const service of previous) {
+    byKey.set(`${service.transport}:${service.port}`, service);
+  }
+  for (const service of current) {
+    const key = `${service.transport}:${service.port}`;
+    byKey.set(key, mergeServiceFingerprint(service, byKey.get(key)));
+  }
+
+  return Array.from(byKey.values()).sort((a, b) => a.port - b.port);
+};
 
 /* ---------- Classification Signal System ---------- */
 
@@ -103,7 +159,7 @@ function signalsFromHostname(hostname: string | undefined): ClassificationSignal
   const signals: ClassificationSignal[] = [];
   const h = hostname.toLowerCase();
 
-  if (/^(iphone|ipad|macbook|imac|mac-?pro|mac-?mini)-?/.test(h)) {
+  if (/(^|[-_.\s])(iphone|ipad|macbook|imac|mac-?pro|mac-?mini)([-_.\s]|$)/.test(h)) {
     signals.push({ source: "hostname", type: "workstation", weight: 60, reason: `Apple device hostname: ${hostname}` });
   }
   if (/^(desktop|laptop|pc)-/i.test(h) || h.includes("workstation")) {
@@ -317,6 +373,143 @@ function signalsFromBanners(metadata: Record<string, unknown>): ClassificationSi
   return signals;
 }
 
+function signalsFromFingerprintArtifacts(
+  metadata: Record<string, unknown>,
+  context: { ip: string; ports: number[] },
+): ClassificationSignal[] {
+  const fp = metadata.fingerprint as Record<string, unknown> | undefined;
+  if (!fp) return [];
+  const signals: ClassificationSignal[] = [];
+
+  const winrm = fp.winrm as { secure?: boolean } | undefined;
+  if (winrm) {
+    signals.push({
+      source: "fingerprint",
+      type: "server",
+      weight: 75,
+      reason: `WinRM endpoint${winrm.secure ? " (TLS)" : ""} detected`,
+    });
+  }
+
+  const mqtt = fp.mqtt as { returnCode?: number } | undefined;
+  if (mqtt) {
+    signals.push({
+      source: "fingerprint",
+      type: "iot",
+      weight: 78,
+      reason: "MQTT broker handshake (CONNACK) succeeded",
+    });
+  }
+
+  const smbDialect = fp.smbDialect as string | undefined;
+  if (smbDialect) {
+    signals.push({
+      source: "fingerprint",
+      type: "server",
+      weight: 55,
+      reason: `SMB negotiated (${smbDialect})`,
+    });
+  }
+
+  const netbiosName = fp.netbiosName as string | undefined;
+  if (netbiosName) {
+    const lower = netbiosName.toLowerCase();
+    if (/(nas|diskstation|storage|backup)/i.test(netbiosName)) {
+      signals.push({ source: "fingerprint", type: "nas", weight: 70, reason: `NetBIOS name: ${netbiosName}` });
+    } else if (/(printer|hp|epson|canon|brother)/i.test(netbiosName)) {
+      signals.push({ source: "fingerprint", type: "printer", weight: 72, reason: `NetBIOS name: ${netbiosName}` });
+    } else if (/(desktop|laptop|win|pc|mac)/.test(lower)) {
+      signals.push({ source: "fingerprint", type: "workstation", weight: 55, reason: `NetBIOS name: ${netbiosName}` });
+    } else {
+      signals.push({ source: "fingerprint", type: "server", weight: 40, reason: `NetBIOS name: ${netbiosName}` });
+    }
+  }
+
+  const dnsService = fp.dnsService as { port?: number; answers?: number; rcode?: number } | undefined;
+  if (dnsService && (dnsService.answers ?? 0) >= 0 && (dnsService.rcode ?? 99) <= 5) {
+    const hasDnsPort = context.ports.includes(53) || dnsService.port === 53;
+    const gatewayLike = context.ip.endsWith(".1")
+      || context.ip.endsWith(".254")
+      || context.ports.includes(67)
+      || context.ports.includes(68);
+    if (hasDnsPort && gatewayLike) {
+      signals.push({
+        source: "fingerprint",
+        type: "router",
+        weight: dnsService.answers && dnsService.answers > 0 ? 60 : 42,
+        reason: "DNS resolver on a likely gateway address",
+      });
+    } else if (hasDnsPort) {
+      signals.push({
+        source: "fingerprint",
+        type: "server",
+        weight: dnsService.answers && dnsService.answers > 0 ? 38 : 28,
+        reason: "DNS resolver probe responded",
+      });
+    }
+  }
+
+  const hints = Array.isArray(fp.protocolHints) ? fp.protocolHints as Array<Record<string, unknown>> : [];
+  for (const hint of hints.slice(0, 8)) {
+    const protocol = String(hint.protocol ?? "").toLowerCase();
+    if (protocol === "mqtt") {
+      signals.push({ source: "hint", type: "iot", weight: 65, reason: "Protocol hint: MQTT" });
+    } else if (protocol === "ssh") {
+      signals.push({ source: "hint", type: "server", weight: 45, reason: "Protocol hint: SSH" });
+    } else if (protocol === "http" || protocol === "https") {
+      signals.push({ source: "hint", type: "server", weight: 35, reason: `Protocol hint: ${protocol.toUpperCase()}` });
+    } else if (protocol === "smb") {
+      signals.push({ source: "hint", type: "server", weight: 45, reason: "Protocol hint: SMB" });
+    }
+  }
+
+  return signals;
+}
+
+function signalsFromServiceFingerprints(services: ServiceFingerprint[]): ClassificationSignal[] {
+  const signals: ClassificationSignal[] = [];
+
+  for (const service of services) {
+    const name = service.name.toLowerCase();
+    const product = (service.product ?? "").toLowerCase();
+    const banner = (service.banner ?? "").toLowerCase();
+    const combined = `${name} ${product} ${banner}`;
+
+    if (/(jetdirect|ipp|printer)/.test(combined)) {
+      signals.push({ source: "service", type: "printer", weight: 70, reason: `Print stack on port ${service.port}` });
+    }
+    if (/(rtsp|camera|nvr|dvr)/.test(combined)) {
+      signals.push({ source: "service", type: "camera", weight: 68, reason: `Camera stream/control on port ${service.port}` });
+    }
+    if (/(microsoft-ds|smb|cifs|netbios)/.test(combined)) {
+      signals.push({ source: "service", type: "server", weight: 45, reason: `SMB/NetBIOS service on port ${service.port}` });
+    }
+    if (/(mqtt)/.test(combined)) {
+      signals.push({ source: "service", type: "iot", weight: 62, reason: `MQTT service on port ${service.port}` });
+    }
+    if (/(docker|containerd)/.test(combined)) {
+      signals.push({ source: "service", type: "container-host", weight: 78, reason: "Container runtime endpoint exposed" });
+    }
+    if (/(kubernetes|kube-apiserver)/.test(combined)) {
+      signals.push({ source: "service", type: "hypervisor", weight: 72, reason: "Kubernetes API endpoint exposed" });
+    }
+    if (/(synology|diskstation|qnap|truenas|freenas)/.test(combined)) {
+      signals.push({ source: "service", type: "nas", weight: 78, reason: `Storage product fingerprint: ${service.product ?? service.banner ?? service.name}` });
+    }
+    if (/(unifi|ubiquiti|cisco|meraki|aruba|ruckus|mikrotik)/.test(combined)) {
+      signals.push({ source: "service", type: "switch", weight: 55, reason: `Network gear signature: ${service.product ?? service.name}` });
+    }
+    if (/(fortigate|pfsense|opnsense|pan-os|palo alto)/.test(combined)) {
+      signals.push({ source: "service", type: "firewall", weight: 75, reason: `Firewall signature: ${service.product ?? service.name}` });
+    }
+    if (/(windows|microsoft-httpapi|iis|winrm)/.test(combined)) {
+      signals.push({ source: "service", type: "server", weight: 58, reason: `Windows stack signature on port ${service.port}` });
+    }
+  }
+
+  return signals;
+}
+
 function signalsFromHttpServices(services: Array<{ port: number; httpInfo?: { serverHeader?: string; title?: string; poweredBy?: string } }>): ClassificationSignal[] {
   const signals: ClassificationSignal[] = [];
 
@@ -396,9 +589,9 @@ function signalsFromMdns(metadata: Record<string, unknown>): ClassificationSigna
     "_printer._tcp": { type: "printer", weight: 75, reason: "Printer (mDNS)" },
     "_pdl-datastream._tcp": { type: "printer", weight: 70, reason: "PDL printer (mDNS)" },
     "_scanner._tcp": { type: "printer", weight: 60, reason: "Scanner (mDNS)" },
-    "_smb._tcp": { type: "nas", weight: 50, reason: "SMB file share (mDNS)" },
-    "_afpovertcp._tcp": { type: "nas", weight: 50, reason: "AFP file share (mDNS)" },
-    "_nfs._tcp": { type: "nas", weight: 55, reason: "NFS (mDNS)" },
+    "_smb._tcp": { type: "server", weight: 28, reason: "SMB file share (mDNS)" },
+    "_afpovertcp._tcp": { type: "server", weight: 28, reason: "AFP file share (mDNS)" },
+    "_nfs._tcp": { type: "server", weight: 32, reason: "NFS file share (mDNS)" },
     "_homekit._tcp": { type: "iot", weight: 60, reason: "HomeKit device (mDNS)" },
     "_hap._tcp": { type: "iot", weight: 60, reason: "HomeKit accessory (mDNS)" },
     "_hue._tcp": { type: "iot", weight: 65, reason: "Philips Hue (mDNS)" },
@@ -466,6 +659,8 @@ export function classifyDevice(candidate: DiscoveryCandidate): ClassificationRes
   signals.push(...signalsFromVendor(candidate.vendor, ports));
   signals.push(...signalsFromSnmp(candidate.metadata));
   signals.push(...signalsFromBanners(candidate.metadata));
+  signals.push(...signalsFromFingerprintArtifacts(candidate.metadata, { ip: candidate.ip, ports }));
+  signals.push(...signalsFromServiceFingerprints(candidate.services));
   signals.push(...signalsFromHttpServices(candidate.services as never));
   signals.push(...signalsFromTlsServices(candidate.services as never));
   signals.push(...signalsFromMdns(candidate.metadata));
@@ -522,6 +717,48 @@ const inferProtocols = (ports: number[]): string[] => {
   return Array.from(protocols);
 };
 
+const inferFallbackType = (
+  candidate: DiscoveryCandidate,
+  previous?: Device,
+): DeviceType => {
+  if (previous?.type && previous.type !== "unknown") {
+    return previous.type;
+  }
+
+  const ports = candidate.services.map((service) => service.port);
+  if ((ports.includes(53) && (candidate.ip.endsWith(".1") || candidate.ip.endsWith(".254"))) || ports.includes(67)) {
+    return "router";
+  }
+  if (ports.includes(161) && ports.length <= 4) {
+    return "switch";
+  }
+  if (ports.includes(5985) || ports.includes(5986) || (ports.includes(445) && ports.includes(3389))) {
+    return "server";
+  }
+  if (ports.includes(9100) || ports.includes(631)) {
+    return "printer";
+  }
+  if (ports.includes(554) || ports.includes(8554)) {
+    return "camera";
+  }
+  if (ports.includes(2375) || ports.includes(2376)) {
+    return "container-host";
+  }
+  if (ports.includes(1883) || ports.includes(8883)) {
+    return "iot";
+  }
+  if (ports.includes(22) || ports.includes(80) || ports.includes(443)) {
+    return "server";
+  }
+  if (candidate.source === "mdns" || candidate.source === "ssdp") {
+    return "iot";
+  }
+  if (candidate.vendor || candidate.mac) {
+    return "iot";
+  }
+  return "unknown";
+};
+
 /* ---------- MAC-Based Deduplication ---------- */
 
 function selectPrimaryIp(candidates: DiscoveryCandidate[]): DiscoveryCandidate {
@@ -534,16 +771,11 @@ function selectPrimaryIp(candidates: DiscoveryCandidate[]): DiscoveryCandidate {
 
 function mergeGroup(group: DiscoveryCandidate[], primaryIp: string): DiscoveryCandidate {
   const primary = group.find((c) => c.ip === primaryIp)!;
-  const allServices = new Map<string, (typeof primary.services)[number]>();
-
-  for (const candidate of group) {
-    for (const service of candidate.services) {
-      const key = `${service.transport}:${service.port}`;
-      if (!allServices.has(key)) {
-        allServices.set(key, service);
-      }
-    }
-  }
+  const allObservations = group.flatMap((candidate) => candidate.observations);
+  const mergedServices = group.reduce<ServiceFingerprint[]>(
+    (acc, candidate) => mergeServiceSets(candidate.services, acc),
+    [],
+  );
 
   return {
     ...primary,
@@ -553,7 +785,8 @@ function mergeGroup(group: DiscoveryCandidate[], primaryIp: string): DiscoveryCa
     vendor: primary.vendor ?? group.find((c) => c.vendor)?.vendor,
     os: primary.os ?? group.find((c) => c.os)?.os,
     typeHint: primary.typeHint ?? group.find((c) => c.typeHint)?.typeHint,
-    services: Array.from(allServices.values()).sort((a, b) => a.port - b.port),
+    services: mergedServices,
+    observations: dedupeObservations(allObservations),
     metadata: {
       ...Object.assign({}, ...group.map((c) => c.metadata)),
       secondaryIps: group.map((c) => c.ip).filter((ip) => ip !== primaryIp),
@@ -603,7 +836,8 @@ export const mergeDiscoveryCandidates = (
       vendor: existing.vendor ?? candidate.vendor,
       os: existing.os ?? candidate.os,
       typeHint: existing.typeHint ?? candidate.typeHint,
-      services: [...existing.services, ...candidate.services],
+      services: mergeServiceSets(candidate.services, existing.services),
+      observations: dedupeObservations([...existing.observations, ...candidate.observations]),
       metadata: { ...existing.metadata, ...candidate.metadata },
       source: candidate.source,
     });
@@ -611,10 +845,10 @@ export const mergeDiscoveryCandidates = (
 
   // Deduplicate services and apply OUI vendor lookup
   return Array.from(byIp.values()).map((candidate) => {
-    const serviceByKey = new Map<string, (typeof candidate.services)[number]>();
+    const serviceByKey = new Map<string, ServiceFingerprint>();
     for (const service of candidate.services) {
       const key = `${service.transport}:${service.port}`;
-      serviceByKey.set(key, service);
+      serviceByKey.set(key, mergeServiceFingerprint(service, serviceByKey.get(key)));
     }
 
     const vendor = candidate.vendor ?? lookupOuiVendor(candidate.mac);
@@ -623,6 +857,7 @@ export const mergeDiscoveryCandidates = (
       ...candidate,
       vendor,
       services: Array.from(serviceByKey.values()).sort((a, b) => a.port - b.port),
+      observations: dedupeObservations(candidate.observations),
     };
   });
 };
@@ -634,42 +869,70 @@ export const candidateToDevice = (
   previous?: Device,
 ): Device => {
   const now = new Date().toISOString();
-  const ports = candidate.services.map((service) => service.port);
+  const mergedServices = mergeServiceSets(candidate.services, previous?.services ?? []);
+  const ports = mergedServices.map((service) => service.port);
   const protocols = inferProtocols(ports);
 
   const hostname = candidate.hostname ?? previous?.hostname;
   const vendor = candidate.vendor ?? previous?.vendor ?? lookupOuiVendor(candidate.mac ?? previous?.mac);
 
   // Run the scoring classification engine
-  const enrichedCandidate: DiscoveryCandidate = { ...candidate, hostname, vendor };
+  const enrichedCandidate: DiscoveryCandidate = { ...candidate, hostname, vendor, services: mergedServices };
   const classification = classifyDevice(enrichedCandidate);
+  const fallbackType = inferFallbackType(enrichedCandidate, previous);
+  const typeHintSource = String(candidate.metadata.typeHintSource ?? candidate.source ?? "").toLowerCase();
+  const scoredType = classification.type !== "unknown" ? classification.type : undefined;
+  const shouldDeferTypeHint = (typeHintSource === "mdns" || typeHintSource === "ssdp") && Boolean(scoredType);
 
-  // Use typeHint override, scored classification, or preserve previous non-unknown type
+  // Prefer scored classification over multicast-only hints, while preserving explicit adapter hints.
   const finalType =
-    candidate.typeHint ??
-    (classification.type !== "unknown" ? classification.type : undefined) ??
+    (shouldDeferTypeHint ? undefined : candidate.typeHint) ??
+    scoredType ??
     (previous?.type !== "unknown" ? previous?.type : undefined) ??
-    classification.type;
+    fallbackType;
 
   const shouldPreferHostnameName =
     Boolean(hostname) &&
     (!previous?.name || previous.name === previous.hostname || AUTO_NAME_PATTERN.test(previous.name));
 
+  const generatedTypeSlug = finalType === "unknown" ? "device" : finalType;
   const generatedName = vendor
-    ? `${vendorSlug(vendor)}-${finalType}-${candidate.ip.replaceAll(".", "-")}`
-    : `${finalType}-${candidate.ip.replaceAll(".", "-")}`;
+    ? `${vendorSlug(vendor)}-${generatedTypeSlug}-${candidate.ip.replaceAll(".", "-")}`
+    : `${generatedTypeSlug}-${candidate.ip.replaceAll(".", "-")}`;
+
+  const previousName = previous?.name;
+  const shouldRefreshAutoName = Boolean(previousName && AUTO_NAME_PATTERN.test(previousName) && previousName !== generatedName);
+  const shouldRefreshLegacyUnknown = Boolean(previousName && LEGACY_UNKNOWN_NAME_PATTERN.test(previousName));
 
   const nextName = shouldPreferHostnameName
     ? (hostname as string)
-    : (previous?.name ?? candidate.hostname ?? generatedName);
+    : (
+      shouldRefreshAutoName || shouldRefreshLegacyUnknown
+        ? generatedName
+        : (previousName ?? candidate.hostname ?? generatedName)
+    );
 
   // Use mDNS/SSDP friendly name if we have no better name
   const mdnsFriendlyName = candidate.metadata.mdnsFriendlyName as string | undefined;
   const ssdpFriendlyName = candidate.metadata.ssdpFriendlyName as string | undefined;
   const friendlyName = mdnsFriendlyName ?? ssdpFriendlyName;
-  const displayName = (nextName === generatedName && friendlyName) ? friendlyName : nextName;
+  const displayName = (friendlyName && (nextName === generatedName || shouldRefreshAutoName || shouldRefreshLegacyUnknown))
+    ? friendlyName
+    : nextName;
 
   const secondaryIps = (candidate.metadata.secondaryIps as string[] | undefined) ?? previous?.secondaryIps;
+  const discoveryEvidence = candidate.metadata.discoveryEvidence as
+    | {
+        status?: DeviceStatus;
+        confidence?: number;
+        hasPositiveEvidence?: boolean;
+        hasStrongEvidence?: boolean;
+        evidenceTypes?: string[];
+        sourceCounts?: Record<string, number>;
+        observationCount?: number;
+      }
+    | undefined;
+  const nextStatus = discoveryEvidence?.status ?? previous?.status ?? "unknown";
 
   return {
     id: previous?.id ?? randomUUID(),
@@ -682,14 +945,13 @@ export const candidateToDevice = (
     os: classification.os ?? candidate.os ?? previous?.os,
     role: previous?.role,
     type: finalType,
-    status: "online",
+    status: nextStatus,
     autonomyTier: previous?.autonomyTier ?? 1,
     tags: previous?.tags ?? [],
     protocols: Array.from(new Set([...(previous?.protocols ?? []), ...protocols])),
-    services:
-      candidate.services.length > 0
-        ? candidate.services
-        : (previous?.services ?? []).map((service) => ({ ...service, lastSeenAt: now })),
+    services: mergedServices.length > 0
+      ? mergedServices
+      : (previous?.services ?? []).map((service) => ({ ...service, lastSeenAt: now })),
     firstSeenAt: previous?.firstSeenAt ?? now,
     lastSeenAt: now,
     lastChangedAt: now,
@@ -697,6 +959,17 @@ export const candidateToDevice = (
       ...previous?.metadata,
       ...candidate.metadata,
       source: candidate.source,
+      hostname,
+      discovery: {
+        confidence: discoveryEvidence?.confidence ?? 0,
+        hasPositiveEvidence: discoveryEvidence?.hasPositiveEvidence ?? false,
+        hasStrongEvidence: discoveryEvidence?.hasStrongEvidence ?? false,
+        evidenceTypes: discoveryEvidence?.evidenceTypes ?? [],
+        sourceCounts: discoveryEvidence?.sourceCounts ?? {},
+        observationCount: discoveryEvidence?.observationCount ?? 0,
+        status: nextStatus,
+        lastEvaluatedAt: now,
+      },
       classification: {
         confidence: classification.confidence,
         signals: classification.signals.slice(0, 20).map((s) => ({

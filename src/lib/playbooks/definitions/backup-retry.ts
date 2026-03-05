@@ -1,5 +1,17 @@
 import type { PlaybookDefinition } from "@/lib/state/types";
 
+const readSafety = {
+  dryRunSupported: false,
+  requiresConfirmedRevert: false,
+  criticality: "low" as const,
+};
+
+const mutateSafety = {
+  dryRunSupported: false,
+  requiresConfirmedRevert: false,
+  criticality: "medium" as const,
+};
+
 export const backupRetryPlaybooks: PlaybookDefinition[] = [
   {
     id: "playbook:backup-retry:rsync",
@@ -16,25 +28,46 @@ export const backupRetryPlaybooks: PlaybookDefinition[] = [
       {
         id: "step:backup:pre-check",
         label: "Check destination is reachable",
-        command: "ssh {{host}} 'test -d {{destination}} && echo OK'",
-        protocol: "ssh",
-        timeoutMs: 10_000,
+        operation: {
+          id: "op:backup:destination-check",
+          adapterId: "ssh",
+          kind: "shell.command",
+          mode: "read",
+          timeoutMs: 10_000,
+          commandTemplate: "ssh {{host}} 'test -d {{destination}} && echo OK'",
+          expectedSemanticTarget: "path:{{destination}}",
+          safety: readSafety,
+        },
       },
       {
         id: "step:backup:retry",
         label: "Run rsync backup",
-        command: "ssh {{host}} 'rsync -avz --delete {{source}} {{destination}}'",
-        protocol: "ssh",
-        timeoutMs: 240_000,
+        operation: {
+          id: "op:backup:rsync",
+          adapterId: "ssh",
+          kind: "shell.command",
+          mode: "mutate",
+          timeoutMs: 240_000,
+          commandTemplate: "ssh {{host}} 'rsync -avz --delete {{source}} {{destination}}'",
+          expectedSemanticTarget: "path:{{destination}}",
+          safety: mutateSafety,
+        },
       },
     ],
     verificationSteps: [
       {
         id: "verify:backup:timestamp",
         label: "Verify backup timestamp is recent",
-        command: "ssh {{host}} 'stat -c %Y {{destination}} | xargs -I{} date -d @{}'",
-        protocol: "ssh",
-        timeoutMs: 10_000,
+        operation: {
+          id: "op:backup:timestamp",
+          adapterId: "ssh",
+          kind: "shell.command",
+          mode: "read",
+          timeoutMs: 10_000,
+          commandTemplate: "ssh {{host}} 'stat -c %Y {{destination}} | xargs -I{} date -d @{}'",
+          expectedSemanticTarget: "path:{{destination}}",
+          safety: readSafety,
+        },
       },
     ],
     rollbackSteps: [],
@@ -54,18 +87,32 @@ export const backupRetryPlaybooks: PlaybookDefinition[] = [
       {
         id: "step:snapshot:list",
         label: "List recent snapshots",
-        command: "curl -s -k https://{{host}}:5001/webapi/entry.cgi?api=SYNO.Core.Share.Snapshot&version=1&method=list",
-        protocol: "http-api",
-        timeoutMs: 15_000,
+        operation: {
+          id: "op:snapshot:list",
+          adapterId: "http-api",
+          kind: "http.request",
+          mode: "read",
+          timeoutMs: 15_000,
+          commandTemplate: "curl -s -k https://{{host}}:5001/webapi/entry.cgi?api=SYNO.Core.Share.Snapshot&version=1&method=list",
+          expectedSemanticTarget: "snapshot:list",
+          safety: readSafety,
+        },
       },
     ],
     verificationSteps: [
       {
         id: "verify:snapshot:exists",
         label: "Verify snapshot freshness",
-        command: "curl -s -k https://{{host}}:5001/webapi/entry.cgi?api=SYNO.Core.Share.Snapshot&version=1&method=list | grep -c 'snapshot'",
-        protocol: "http-api",
-        timeoutMs: 15_000,
+        operation: {
+          id: "op:snapshot:freshness-check",
+          adapterId: "http-api",
+          kind: "http.request",
+          mode: "read",
+          timeoutMs: 15_000,
+          commandTemplate: "curl -s -k https://{{host}}:5001/webapi/entry.cgi?api=SYNO.Core.Share.Snapshot&version=1&method=list | grep -c 'snapshot'",
+          expectedSemanticTarget: "snapshot:list",
+          safety: readSafety,
+        },
       },
     ],
     rollbackSteps: [],

@@ -1,6 +1,7 @@
 import dgram from "node:dgram";
 import http from "node:http";
 import type { DiscoveryCandidate } from "@/lib/discovery/types";
+import { buildObservation } from "@/lib/discovery/evidence";
 import type { DeviceType } from "@/lib/state/types";
 
 /* ---------- mDNS (Bonjour / DNS-SD) ---------- */
@@ -22,9 +23,9 @@ const MDNS_SERVICE_TYPE_MAP: Record<string, { type: DeviceType; label: string }>
   "_scanner._tcp": { type: "printer", label: "Scanner" },
   "_http._tcp": { type: "server", label: "Web Server" },
   "_https._tcp": { type: "server", label: "Web Server (Secure)" },
-  "_smb._tcp": { type: "nas", label: "SMB File Share" },
-  "_afpovertcp._tcp": { type: "nas", label: "AFP File Share" },
-  "_nfs._tcp": { type: "nas", label: "NFS" },
+  "_smb._tcp": { type: "server", label: "SMB File Share" },
+  "_afpovertcp._tcp": { type: "server", label: "AFP File Share" },
+  "_nfs._tcp": { type: "server", label: "NFS" },
   "_ssh._tcp": { type: "server", label: "SSH" },
   "_sftp-ssh._tcp": { type: "server", label: "SFTP" },
   "_homekit._tcp": { type: "iot", label: "HomeKit" },
@@ -39,6 +40,40 @@ const MDNS_SERVICE_TYPE_MAP: Record<string, { type: DeviceType; label: string }>
   "_workstation._tcp": { type: "workstation", label: "Workstation" },
   "_device-info._tcp": { type: "unknown", label: "Device Info" },
   "_rdlink._tcp": { type: "workstation", label: "Remote Desktop" },
+};
+
+// Per-service type-hint confidence. File-sharing announcements are common on user endpoints,
+// so they stay weak hints unless paired with stronger infrastructure indicators.
+const MDNS_TYPE_HINT_WEIGHT: Record<string, number> = {
+  "_airplay._tcp": 60,
+  "_raop._tcp": 55,
+  "_googlecast._tcp": 62,
+  "_spotify-connect._tcp": 58,
+  "_sonos._tcp": 65,
+  "_ipp._tcp": 72,
+  "_ipps._tcp": 72,
+  "_printer._tcp": 72,
+  "_pdl-datastream._tcp": 68,
+  "_scanner._tcp": 58,
+  "_http._tcp": 22,
+  "_https._tcp": 24,
+  "_smb._tcp": 24,
+  "_afpovertcp._tcp": 24,
+  "_nfs._tcp": 28,
+  "_ssh._tcp": 24,
+  "_sftp-ssh._tcp": 26,
+  "_homekit._tcp": 60,
+  "_hap._tcp": 60,
+  "_hue._tcp": 62,
+  "_mqtt._tcp": 55,
+  "_coap._udp": 55,
+  "_companion-link._tcp": 55,
+  "_sleep-proxy._udp": 35,
+  "_rtsp._tcp": 68,
+  "_daap._tcp": 50,
+  "_workstation._tcp": 50,
+  "_device-info._tcp": 5,
+  "_rdlink._tcp": 52,
 };
 
 // Build a DNS-SD browse query for _services._dns-sd._udp.local
@@ -258,15 +293,16 @@ export async function discoverMdns(timeoutMs = 5000): Promise<DiscoveryCandidate
         }
       }
 
-      // Determine type hint from service types
-      let typeHint: DeviceType | undefined;
+      // Determine type hint from the aggregate set of announced services.
+      const typeScores = new Map<DeviceType, number>();
       for (const svc of allServices) {
         const mapping = MDNS_SERVICE_TYPE_MAP[svc];
-        if (mapping && mapping.type !== "unknown") {
-          typeHint = mapping.type;
-          break;
-        }
+        if (!mapping || mapping.type === "unknown") continue;
+        const weight = MDNS_TYPE_HINT_WEIGHT[svc] ?? 20;
+        typeScores.set(mapping.type, (typeScores.get(mapping.type) ?? 0) + weight);
       }
+      const typeHint = [...typeScores.entries()]
+        .sort((a, b) => b[1] - a[1])[0]?.[0];
 
       candidates.set(ip, {
         ip,
@@ -274,9 +310,25 @@ export async function discoverMdns(timeoutMs = 5000): Promise<DiscoveryCandidate
         typeHint: typeHint ?? existing?.typeHint,
         services: existing?.services ?? [],
         source: "mdns",
+        observations: [
+          ...(existing?.observations ?? []),
+          buildObservation({
+            ip,
+            source: "mdns",
+            evidenceType: "mdns_announcement",
+            confidence: 0.9,
+            observedAt: new Date().toISOString(),
+            ttlMs: 20 * 60_000,
+            details: {
+              services: allServices.slice(0, 20),
+              friendlyName,
+            },
+          }),
+        ],
         metadata: {
           mdnsServices: allServices,
           mdnsFriendlyName: friendlyName ?? (existing?.metadata.mdnsFriendlyName as string | undefined),
+          typeHintSource: "mdns",
         },
       });
     });
@@ -466,6 +518,22 @@ export async function discoverSsdp(timeoutMs = 5000): Promise<DiscoveryCandidate
           typeHint,
           services: [],
           source: "ssdp",
+          observations: [
+            buildObservation({
+              ip,
+              source: "ssdp",
+              evidenceType: "ssdp_response",
+              confidence: 0.88,
+              observedAt: new Date().toISOString(),
+              ttlMs: 20 * 60_000,
+              details: {
+                deviceType: bestDesc?.deviceType,
+                friendlyName: bestDesc?.friendlyName,
+                modelName: bestDesc?.modelName,
+                st: sts.slice(0, 20),
+              },
+            }),
+          ],
           metadata: {
             ssdpDeviceType: bestDesc?.deviceType,
             ssdpFriendlyName: bestDesc?.friendlyName,
@@ -473,6 +541,7 @@ export async function discoverSsdp(timeoutMs = 5000): Promise<DiscoveryCandidate
             ssdpManufacturer: bestDesc?.manufacturer,
             ssdpServer: serverHeader,
             ssdpServiceTypes: sts,
+            typeHintSource: "ssdp",
           },
         });
       }
@@ -541,6 +610,7 @@ export async function discoverMulticast(
         vendor: existing.vendor ?? candidate.vendor,
         typeHint: existing.typeHint ?? candidate.typeHint,
         services: [...existing.services, ...candidate.services],
+        observations: [...existing.observations, ...candidate.observations],
         metadata: { ...existing.metadata, ...candidate.metadata },
       });
     }

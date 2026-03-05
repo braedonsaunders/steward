@@ -1,4 +1,8 @@
-import type { DeviceType, ServiceFingerprint } from "@/lib/state/types";
+import type {
+  DeviceType,
+  DiscoveryObservationInput,
+  ServiceFingerprint,
+} from "@/lib/state/types";
 
 export interface DiscoveryCandidate {
   ip: string;
@@ -10,6 +14,7 @@ export interface DiscoveryCandidate {
   services: ServiceFingerprint[];
   source: "passive" | "active" | "mdns" | "ssdp";
   confidence?: number;
+  observations: DiscoveryObservationInput[];
   metadata: Record<string, unknown>;
 }
 

@@ -6,7 +6,7 @@
  * - Fallback: machine-derived key via scrypt (Linux / WSL / unsupported)
  */
 
-import { scrypt as scryptCb } from "node:crypto";
+import { createHash, scrypt as scryptCb } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import os from "node:os";
@@ -14,8 +14,59 @@ import os from "node:os";
 const execFileAsync = promisify(execFile);
 const scryptAsync = promisify(scryptCb);
 
-const KEYCHAIN_SERVICE = "com.steward.vault-key";
-const KEYCHAIN_ACCOUNT = "steward-vault-key";
+const LEGACY_KEYCHAIN_SERVICE = "com.steward.vault-key";
+const LEGACY_KEYCHAIN_ACCOUNT = "steward-vault-key";
+const KEYCHAIN_MARKER_PREFIX = "keychain:v2:";
+
+function scopedKeychainIdentity(scope?: string): { service: string; account: string } {
+  if (!scope) {
+    return {
+      service: LEGACY_KEYCHAIN_SERVICE,
+      account: LEGACY_KEYCHAIN_ACCOUNT,
+    };
+  }
+
+  const normalizedScope = process.platform === "win32" ? scope.toLowerCase() : scope;
+  const suffix = createHash("sha256").update(normalizedScope).digest("hex").slice(0, 16);
+  return {
+    service: `${LEGACY_KEYCHAIN_SERVICE}.${suffix}`,
+    account: `${LEGACY_KEYCHAIN_ACCOUNT}.${suffix}`,
+  };
+}
+
+function parseKeychainMarker(blob: Buffer): { service: string; account: string } | null {
+  const marker = blob.toString("utf8");
+  if (marker.startsWith(KEYCHAIN_MARKER_PREFIX)) {
+    const encoded = marker.slice(KEYCHAIN_MARKER_PREFIX.length);
+    const separator = encoded.indexOf(":");
+    if (separator > 0 && separator < encoded.length - 1) {
+      return {
+        service: encoded.slice(0, separator),
+        account: encoded.slice(separator + 1),
+      };
+    }
+  }
+
+  if (marker.startsWith("keychain:")) {
+    const service = marker.slice("keychain:".length).trim();
+    return {
+      service: service || LEGACY_KEYCHAIN_SERVICE,
+      account: LEGACY_KEYCHAIN_ACCOUNT,
+    };
+  }
+
+  return null;
+}
+
+async function readKeychainSecret(service: string, account: string): Promise<Buffer> {
+  const { stdout } = await execFileAsync("security", [
+    "find-generic-password",
+    "-a", account,
+    "-s", service,
+    "-w",
+  ]);
+  return Buffer.from(stdout.trim(), "hex");
+}
 
 // ---------------------------------------------------------------------------
 // Windows — DPAPI via PowerShell (works on any Node version)
@@ -43,42 +94,58 @@ async function windowsUnprotect(blob: Buffer): Promise<Buffer> {
 // macOS — Keychain
 // ---------------------------------------------------------------------------
 
-async function macProtect(key: Buffer): Promise<Buffer> {
+async function macProtect(key: Buffer, scope?: string): Promise<Buffer> {
+  const { service, account } = scopedKeychainIdentity(scope);
   const hex = key.toString("hex");
   try {
     // Delete existing entry first (ignore errors if it doesn't exist)
     await execFileAsync("security", [
       "delete-generic-password",
-      "-a", KEYCHAIN_ACCOUNT,
-      "-s", KEYCHAIN_SERVICE,
+      "-a", account,
+      "-s", service,
     ]).catch(() => {});
 
     await execFileAsync("security", [
       "add-generic-password",
-      "-a", KEYCHAIN_ACCOUNT,
-      "-s", KEYCHAIN_SERVICE,
+      "-a", account,
+      "-s", service,
       "-w", hex,
     ]);
   } catch (error) {
     throw new Error(`Failed to store vault key in macOS Keychain: ${error}`);
   }
 
-  // Return a marker so we know to read from keychain
-  return Buffer.from("keychain:" + KEYCHAIN_SERVICE, "utf-8");
+  return Buffer.from(`${KEYCHAIN_MARKER_PREFIX}${service}:${account}`, "utf8");
 }
 
-async function macUnprotect(_blob: Buffer): Promise<Buffer> {
-  try {
-    const { stdout } = await execFileAsync("security", [
-      "find-generic-password",
-      "-a", KEYCHAIN_ACCOUNT,
-      "-s", KEYCHAIN_SERVICE,
-      "-w",
-    ]);
-    return Buffer.from(stdout.trim(), "hex");
-  } catch (error) {
-    throw new Error(`Failed to read vault key from macOS Keychain: ${error}`);
+async function macUnprotect(blob: Buffer, scope?: string): Promise<Buffer> {
+  const identities: Array<{ service: string; account: string }> = [];
+  const markerIdentity = parseKeychainMarker(blob);
+  if (markerIdentity) {
+    identities.push(markerIdentity);
   }
+  if (scope) {
+    identities.push(scopedKeychainIdentity(scope));
+  }
+  identities.push({
+    service: LEGACY_KEYCHAIN_SERVICE,
+    account: LEGACY_KEYCHAIN_ACCOUNT,
+  });
+
+  const seen = new Set<string>();
+  let lastError: unknown;
+  for (const identity of identities) {
+    const key = `${identity.service}:${identity.account}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try {
+      return await readKeychainSecret(identity.service, identity.account);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw new Error(`Failed to read vault key from macOS Keychain: ${lastError}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -116,23 +183,23 @@ async function fallbackUnprotect(blob: Buffer): Promise<Buffer> {
 // Public API
 // ---------------------------------------------------------------------------
 
-export async function protectKey(key: Buffer): Promise<Buffer> {
+export async function protectKey(key: Buffer, scope?: string): Promise<Buffer> {
   switch (process.platform) {
     case "win32":
       return windowsProtect(key);
     case "darwin":
-      return macProtect(key);
+      return macProtect(key, scope);
     default:
       return fallbackProtect(key);
   }
 }
 
-export async function unprotectKey(blob: Buffer): Promise<Buffer> {
+export async function unprotectKey(blob: Buffer, scope?: string): Promise<Buffer> {
   switch (process.platform) {
     case "win32":
       return windowsUnprotect(blob);
     case "darwin":
-      return macUnprotect(blob);
+      return macUnprotect(blob, scope);
     default:
       return fallbackUnprotect(blob);
   }

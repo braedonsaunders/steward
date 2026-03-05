@@ -3,6 +3,7 @@ import dns from "node:dns/promises";
 import net from "node:net";
 import os from "node:os";
 import { runShell } from "@/lib/utils/shell";
+import { buildObservation } from "@/lib/discovery/evidence";
 import type { DiscoveryCandidate } from "@/lib/discovery/types";
 import type { ServiceFingerprint } from "@/lib/state/types";
 
@@ -24,7 +25,7 @@ const COMMON_TCP_SERVICES: Array<{ port: number; name: string; secure: boolean }
   { port: 139, name: "netbios-ssn", secure: false },
   { port: 389, name: "ldap", secure: false },
   { port: 443, name: "https", secure: true },
-  { port: 445, name: "microsoft-ds", secure: false },
+  { port: 445, name: "smb", secure: false },
   { port: 554, name: "rtsp", secure: false },
   { port: 631, name: "ipp", secure: false },
   { port: 993, name: "imaps", secure: true },
@@ -32,6 +33,7 @@ const COMMON_TCP_SERVICES: Array<{ port: number; name: string; secure: boolean }
   { port: 1433, name: "mssql", secure: false },
   { port: 1521, name: "oracle", secure: false },
   { port: 1883, name: "mqtt", secure: false },
+  { port: 8883, name: "mqtts", secure: true },
   { port: 2375, name: "docker", secure: false },
   { port: 2376, name: "docker-tls", secure: true },
   { port: 3306, name: "mysql", secure: false },
@@ -67,6 +69,28 @@ const serviceFromNmap = (
   };
 };
 
+const parseNmapProductVersion = (raw: string | undefined): { product?: string; version?: string } => {
+  if (!raw) {
+    return {};
+  }
+
+  const normalized = raw.replace(/\s+/g, " ").replace(/^\/+|\/+$/g, "").trim();
+  if (!normalized) {
+    return {};
+  }
+
+  const versionMatch = normalized.match(/\b(\d+(?:\.\d+){0,3}(?:[a-z][a-z0-9._-]*)?)\b/i);
+  if (!versionMatch || versionMatch.index === undefined) {
+    return { product: normalized };
+  }
+
+  const product = normalized.slice(0, versionMatch.index).trim().replace(/[/:-]+$/, "");
+  return {
+    product: product || undefined,
+    version: versionMatch[1],
+  };
+};
+
 const parseNmapLine = (line: string): DiscoveryCandidate | undefined => {
   if (!line.startsWith("Host:")) {
     return undefined;
@@ -80,6 +104,7 @@ const parseNmapLine = (line: string): DiscoveryCandidate | undefined => {
   const ip = hostMatch[1];
   const hostname = hostMatch[2].trim() || undefined;
   const portBlob = hostMatch[3];
+  const statusUp = /status:\s*up/i.test(line);
 
   const services: ServiceFingerprint[] = [];
 
@@ -93,7 +118,8 @@ const parseNmapLine = (line: string): DiscoveryCandidate | undefined => {
     const state = fields[1];
     const transport = fields[2] as "tcp" | "udp";
     const service = fields[4] || "unknown";
-    const version = fields[6]?.trim() || undefined;
+    const versionBlob = fields.slice(6).join("/").trim() || undefined;
+    const parsedVersion = parseNmapProductVersion(versionBlob);
 
     if (!Number.isFinite(port) || state !== "open") {
       continue;
@@ -101,15 +127,54 @@ const parseNmapLine = (line: string): DiscoveryCandidate | undefined => {
 
     services.push({
       ...serviceFromNmap(port, transport, service),
-      version,
+      product: parsedVersion.product,
+      version: parsedVersion.version ?? versionBlob,
     });
   }
+
+  if (services.length === 0 && !statusUp) {
+    return undefined;
+  }
+
+  const observations = [
+    ...(statusUp
+      ? [
+          buildObservation({
+            ip,
+            source: "active",
+            evidenceType: "nmap_host_up",
+            confidence: 0.9,
+            observedAt: new Date().toISOString(),
+            ttlMs: 20 * 60_000,
+            details: {
+              scanner: "nmap",
+            },
+          }),
+        ]
+      : []),
+    ...services.map((service) =>
+      buildObservation({
+        ip,
+        source: "active",
+        evidenceType: "tcp_open",
+        confidence: 0.95,
+        observedAt: new Date().toISOString(),
+        ttlMs: 30 * 60_000,
+        details: {
+          transport: service.transport,
+          port: service.port,
+          name: service.name,
+          scanner: "nmap",
+        },
+      })),
+  ];
 
   return {
     ip,
     hostname,
     services,
     source: "active",
+    observations,
     metadata: {
       scanner: "nmap",
     },
@@ -309,6 +374,19 @@ const pingSweep = async (ips: string[]): Promise<DiscoveryCandidate[]> => {
         ip,
         services: [] as ServiceFingerprint[],
         source: "active" as const,
+        observations: [
+          buildObservation({
+            ip,
+            source: "active",
+            evidenceType: "icmp_reply",
+            confidence: 0.9,
+            observedAt: new Date().toISOString(),
+            ttlMs: 15 * 60_000,
+            details: {
+              scanner: "ping",
+            },
+          }),
+        ],
         metadata: {
           scanner: "ping",
         },
@@ -384,18 +462,56 @@ export const collectActiveCandidates = async (
     maxPortScanHosts,
   );
 
-  const enriched = await Promise.all(
+  const enriched: Array<DiscoveryCandidate | undefined> = await Promise.all(
     ipsToPortScan.map(async (ip) => {
       const [services, hostname] = await Promise.all([
         scanTcpServices(ip),
         reverseLookup(ip),
       ]);
 
+      const observations = [
+        ...services.map((service) =>
+          buildObservation({
+            ip,
+            source: "active",
+            evidenceType: "tcp_open",
+            confidence: 0.88,
+            observedAt: new Date().toISOString(),
+            ttlMs: 30 * 60_000,
+            details: {
+              transport: service.transport,
+              port: service.port,
+              name: service.name,
+              scanner: "tcp-connect",
+            },
+          })),
+        ...(hostname
+          ? [
+              buildObservation({
+                ip,
+                source: "active",
+                evidenceType: "dns_ptr",
+                confidence: 0.45,
+                observedAt: new Date().toISOString(),
+                ttlMs: 12 * 60 * 60_000,
+                details: {
+                  hostname,
+                },
+              }),
+            ]
+          : []),
+      ];
+
+      if (observations.length === 0) {
+        return undefined;
+      }
+
       return {
         ip,
-        hostname,
+        ...(hostname ? { hostname } : {}),
         services,
         source: "active" as const,
+        observations,
         metadata: {
           scanner: "tcp-connect",
           deepScan,
@@ -404,5 +520,5 @@ export const collectActiveCandidates = async (
     }),
   );
 
-  return [...pingCandidates, ...enriched];
+  return [...pingCandidates, ...enriched.filter((item): item is DiscoveryCandidate => Boolean(item))];
 };

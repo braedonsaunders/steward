@@ -1,13 +1,20 @@
 import type { Metadata } from "next";
-import { Space_Grotesk, IBM_Plex_Mono } from "next/font/google";
+import { Manrope, Sora, IBM_Plex_Mono } from "next/font/google";
 import { ThemeProvider } from "next-themes";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppShell } from "@/components/app-shell";
 import "./globals.css";
 
-const displayFont = Space_Grotesk({
-  variable: "--font-display",
+const sansFont = Manrope({
+  variable: "--font-ui",
   subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+});
+
+const headingFont = Sora({
+  variable: "--font-heading",
+  subsets: ["latin"],
+  weight: ["500", "600", "700"],
 });
 
 const monoFont = IBM_Plex_Mono({
@@ -28,7 +35,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${displayFont.variable} ${monoFont.variable}`}>
+      <body className={`${sansFont.variable} ${headingFont.variable} ${monoFont.variable}`}>
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false}>
           <TooltipProvider>
             <AppShell>{children}</AppShell>

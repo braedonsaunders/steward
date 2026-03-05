@@ -51,6 +51,7 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import type { LLMProvider } from "@/lib/state/types";
 import { cn } from "@/lib/utils";
+import { withApiTokenQuery, withClientApiToken } from "@/lib/auth/client-token";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -132,6 +133,7 @@ function OpenAIOAuthSection({
   );
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
+  const effectiveStatus = status === "idle" && initialConnected ? "complete" : status;
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -153,7 +155,7 @@ function OpenAIOAuthSection({
     setError(null);
 
     try {
-      const res = await fetch("/api/providers/oauth/openai/start", { method: "POST" });
+      const res = await fetch("/api/providers/oauth/openai/start", withClientApiToken({ method: "POST" }));
       const data = (await res.json()) as { url?: string; error?: string };
 
       if (!res.ok || !data.url) {
@@ -167,7 +169,7 @@ function OpenAIOAuthSection({
       // Poll for completion
       pollRef.current = setInterval(async () => {
         try {
-          const statusRes = await fetch("/api/providers/oauth/openai/status");
+          const statusRes = await fetch("/api/providers/oauth/openai/status", withClientApiToken());
           const statusData = (await statusRes.json()) as {
             status: "pending" | "complete" | "error";
             error?: string;
@@ -213,17 +215,17 @@ function OpenAIOAuthSection({
             Sign in with your OpenAI account
           </p>
         </div>
-        {status === "waiting" ? (
+        {effectiveStatus === "waiting" ? (
           <Button variant="outline" size="sm" disabled>
             <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
             Waiting...
           </Button>
-        ) : status === "disconnecting" ? (
+        ) : effectiveStatus === "disconnecting" ? (
           <Button variant="outline" size="sm" disabled>
             <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
             Disconnecting...
           </Button>
-        ) : status === "complete" ? (
+        ) : effectiveStatus === "complete" ? (
           <div className="flex items-center gap-2">
             <Badge variant="default" className="text-xs">
               <CheckCircle2 className="mr-1 h-3 w-3" />
@@ -252,7 +254,7 @@ function OpenAIOAuthSection({
           </Button>
         )}
       </div>
-      {status === "error" && error && (
+      {effectiveStatus === "error" && error && (
         <Alert variant="destructive">
           <AlertDescription className="text-xs">{error}</AlertDescription>
         </Alert>
@@ -284,6 +286,7 @@ function AnthropicOAuthSection({
 
   const [pastedCode, setPastedCode] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const effectivePhase = phase === "idle" && initialConnected ? "complete" : phase;
 
   const startFlow = useCallback(async () => {
     if (disabled) {
@@ -296,7 +299,7 @@ function AnthropicOAuthSection({
     setError(null);
 
     try {
-      const res = await fetch("/api/providers/oauth/anthropic/start", { method: "POST" });
+      const res = await fetch("/api/providers/oauth/anthropic/start", withClientApiToken({ method: "POST" }));
       const data = (await res.json()) as { url?: string; error?: string };
 
       if (!res.ok || !data.url) {
@@ -323,11 +326,11 @@ function AnthropicOAuthSection({
     setError(null);
 
     try {
-      const res = await fetch("/api/providers/oauth/anthropic/exchange", {
+      const res = await fetch("/api/providers/oauth/anthropic/exchange", withClientApiToken({
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ code: pastedCode.trim() }),
-      });
+      }));
       const data = (await res.json()) as { ok?: boolean; error?: string };
 
       if (!res.ok || !data.ok) {
@@ -366,12 +369,12 @@ function AnthropicOAuthSection({
             Create an API key via your Anthropic account
           </p>
         </div>
-        {phase === "disconnecting" ? (
+        {effectivePhase === "disconnecting" ? (
           <Button variant="outline" size="sm" disabled>
             <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
             Disconnecting...
           </Button>
-        ) : phase === "complete" ? (
+        ) : effectivePhase === "complete" ? (
           <div className="flex items-center gap-2">
             <Badge variant="default" className="text-xs">
               <CheckCircle2 className="mr-1 h-3 w-3" />
@@ -387,7 +390,7 @@ function AnthropicOAuthSection({
               Disconnect
             </Button>
           </div>
-        ) : phase !== "waiting" && phase !== "exchanging" ? (
+        ) : effectivePhase !== "waiting" && effectivePhase !== "exchanging" ? (
           <Button
             variant="outline"
             size="sm"
@@ -401,7 +404,7 @@ function AnthropicOAuthSection({
         ) : null}
       </div>
 
-      {(phase === "waiting" || phase === "exchanging") && (
+      {(effectivePhase === "waiting" || effectivePhase === "exchanging") && (
         <div className="space-y-2 rounded-lg border border-dashed bg-muted/30 px-4 py-3">
           <p className="text-xs text-muted-foreground">
             Paste the authorization code from the Anthropic page:
@@ -416,10 +419,10 @@ function AnthropicOAuthSection({
             <Button
               size="sm"
               onClick={() => void exchangeCode()}
-              disabled={disabled || !pastedCode.trim() || phase === "exchanging"}
+              disabled={disabled || !pastedCode.trim() || effectivePhase === "exchanging"}
               title={disabled ? disabledReason : undefined}
             >
-              {phase === "exchanging" ? (
+              {effectivePhase === "exchanging" ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
                 "Submit"
@@ -429,7 +432,7 @@ function AnthropicOAuthSection({
         </div>
       )}
 
-      {phase === "error" && error && (
+      {effectivePhase === "error" && error && (
         <Alert variant="destructive">
           <AlertDescription className="text-xs">{error}</AlertDescription>
         </Alert>
@@ -513,7 +516,7 @@ function RedirectOAuthSection({
           title={disabled ? disabledReason : undefined}
           onClick={() => {
             window.open(
-              `/api/providers/oauth/start?provider=${provider}`,
+              withApiTokenQuery(`/api/providers/oauth/start?provider=${provider}`),
               "_blank",
               "noopener,noreferrer",
             );
@@ -544,7 +547,7 @@ function ProvidersSection() {
   } | null>(null);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
-  const [customModel, setCustomModel] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
   const didInitializeSelection = useRef(false);
   const modelsRequestSeq = useRef(0);
   const [credentialStatus, setCredentialStatus] = useState<Record<string, boolean>>({});
@@ -555,7 +558,7 @@ function ProvidersSection() {
   // Fetch credential status on mount to show "Connected" for existing OAuth tokens
   const refreshCredentialStatus = useCallback(async () => {
     try {
-      const res = await fetch("/api/providers/status");
+      const res = await fetch("/api/providers/status", withClientApiToken());
       const data = (await res.json()) as Record<string, boolean>;
       setCredentialStatus(data);
     } catch {
@@ -612,15 +615,17 @@ function ProvidersSection() {
     (provider: LLMProvider, refresh = false) => {
       const requestSeq = ++modelsRequestSeq.current;
       setModelsLoading(true);
+      setModelsError(null);
       const url = `/api/providers/models?provider=${provider}${refresh ? "&refresh=1" : ""}`;
-      fetch(url)
-        .then((res) => res.json())
-        .then((data: { models?: string[] }) => {
+      fetch(url, withClientApiToken())
+        .then(async (res) => {
+          const data = (await res.json()) as { models?: string[]; error?: string };
           if (requestSeq !== modelsRequestSeq.current) {
             return;
           }
 
           setAvailableModels(Array.isArray(data.models) ? data.models : []);
+          setModelsError(res.ok ? null : (typeof data.error === "string" ? data.error : "Failed to load models from provider API."));
           setModelsLoading(false);
         })
         .catch(() => {
@@ -629,6 +634,7 @@ function ProvidersSection() {
           }
 
           setAvailableModels([]);
+          setModelsError("Failed to load models from provider API.");
           setModelsLoading(false);
         });
     },
@@ -638,7 +644,7 @@ function ProvidersSection() {
   // Fetch models when provider changes
   useEffect(() => {
     setAvailableModels([]);
-    setCustomModel(false);
+    setModelsError(null);
     fetchModels(selectedId);
   }, [selectedId, fetchModels]);
 
@@ -655,7 +661,7 @@ function ProvidersSection() {
   }, [selectedId, selectedConfig]);
 
   useEffect(() => {
-    if (customModel || stateLoading) {
+    if (stateLoading) {
       return;
     }
 
@@ -664,23 +670,36 @@ function ProvidersSection() {
         return prev;
       }
 
-      if (!prev.model || availableModels.includes(prev.model)) {
+      if (!prev.model) {
+        return { ...prev, model: availableModels[0] };
+      }
+
+      if (availableModels.includes(prev.model)) {
         return prev;
       }
 
-      return { ...prev, model: "" };
+      return { ...prev, model: availableModels[0] };
     });
-  }, [availableModels, customModel, stateLoading]);
+  }, [availableModels, stateLoading]);
 
   const handleSave = useCallback(async () => {
     setSaving(true);
     setFeedback(null);
     try {
+      const hasDraftApiKey = draft.apiKey.trim().length > 0;
+      if (draft.model) {
+        if (!availableModels.includes(draft.model)) {
+          throw new Error("Select a model returned directly by the provider API.");
+        }
+      } else if (!hasDraftApiKey) {
+        throw new Error("Select a model returned directly by the provider API.");
+      }
+
       // The currently selected provider from the dropdown IS the active one.
       // Always enable it — the API will disable all others automatically.
       await saveProvider(selectedId, {
         enabled: true,
-        model: draft.model,
+        model: draft.model || undefined,
         apiKey: draft.apiKey || undefined,
         baseUrl: draft.baseUrl || undefined,
       });
@@ -694,16 +713,16 @@ function ProvidersSection() {
     } finally {
       setSaving(false);
     }
-  }, [selectedId, draft, saveProvider]);
+  }, [availableModels, selectedId, draft, saveProvider]);
 
   // Disconnect handler — removes all credentials from vault and refreshes status
   const handleDisconnect = useCallback(
     async (provider: LLMProvider) => {
-      const res = await fetch("/api/providers/disconnect", {
+      const res = await fetch("/api/providers/disconnect", withClientApiToken({
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ provider }),
-      });
+      }));
       if (!res.ok) {
         const data = (await res.json()) as { error?: string };
         throw new Error(data.error ?? "Failed to disconnect");
@@ -841,16 +860,6 @@ function ProvidersSection() {
                 Model
               </Label>
               <div className="flex items-center gap-2">
-                {availableModels.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setCustomModel((v) => !v)}
-                    disabled={!vaultReady}
-                    className="text-[10px] text-primary hover:underline"
-                  >
-                    {customModel ? "Show list" : "Custom"}
-                  </button>
-                )}
                 <button
                   type="button"
                   onClick={() => fetchModels(selectedId, true)}
@@ -862,40 +871,36 @@ function ProvidersSection() {
                 </button>
               </div>
             </div>
-            {customModel ? (
-              <Input
-                id="provider-model"
-                value={draft.model}
-                onChange={(e) =>
-                  setDraft((prev) => ({ ...prev, model: e.target.value }))
-                }
-                disabled={!vaultReady}
-                placeholder={selectedMeta?.defaultModel || "e.g. gpt-4o"}
-              />
-            ) : (
-              <Select
-                value={draft.model || undefined}
-                disabled={!vaultReady}
-                onValueChange={(v) => setDraft((prev) => ({ ...prev, model: v }))}
-              >
-                <SelectTrigger id="provider-model" className="w-full">
-                  {modelsLoading ? (
-                    <span className="flex items-center gap-2 text-muted-foreground">
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      Loading...
-                    </span>
-                  ) : (
-                    <SelectValue placeholder={draft.model || "Select a model"} />
-                  )}
-                </SelectTrigger>
-                <SelectContent>
-                  {availableModels.map((m) => (
-                    <SelectItem key={m} value={m}>
-                      {m}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            <Select
+              value={draft.model || undefined}
+              disabled={!vaultReady || modelsLoading || availableModels.length === 0}
+              onValueChange={(v) => setDraft((prev) => ({ ...prev, model: v }))}
+            >
+              <SelectTrigger id="provider-model" className="w-full">
+                {modelsLoading ? (
+                  <span className="flex items-center gap-2 text-muted-foreground">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Loading...
+                  </span>
+                ) : (
+                  <SelectValue placeholder={availableModels.length ? "Select a model" : "No models returned by provider API"} />
+                )}
+              </SelectTrigger>
+              <SelectContent>
+                {availableModels.map((m) => (
+                  <SelectItem key={m} value={m}>
+                    {m}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-[10px] text-muted-foreground">
+              Models are retrieved directly from the selected provider API.
+            </p>
+            {modelsError && (
+              <p className="text-[10px] text-destructive">
+                {modelsError}
+              </p>
             )}
           </div>
 
@@ -1114,15 +1119,32 @@ function VaultSection() {
 // ---------------------------------------------------------------------------
 
 function GeneralSection() {
-  const { agentRuns, runAgentCycle, runtimeSettings, saveRuntimeSettings } = useSteward();
+  const {
+    agentRuns,
+    runAgentCycle,
+    runtimeSettings,
+    saveRuntimeSettings,
+    systemSettings,
+    saveSystemSettings,
+    authSettings,
+    setApiToken,
+  } = useSteward();
   const [running, setRunning] = useState(false);
   const [savingRuntime, setSavingRuntime] = useState(false);
+  const [savingSystem, setSavingSystem] = useState(false);
+  const [savingToken, setSavingToken] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "ok" | "error"; message: string } | null>(null);
   const [runtimeDraft, setRuntimeDraft] = useState(runtimeSettings);
+  const [systemDraft, setSystemDraft] = useState(systemSettings);
+  const [apiTokenDraft, setApiTokenDraft] = useState("");
 
   useEffect(() => {
     setRuntimeDraft(runtimeSettings);
   }, [runtimeSettings]);
+
+  useEffect(() => {
+    setSystemDraft(systemSettings);
+  }, [systemSettings]);
 
   const lastRun = useMemo(() => {
     if (agentRuns.length === 0) return null;
@@ -1170,6 +1192,36 @@ function GeneralSection() {
       setSavingRuntime(false);
     }
   }, [runtimeDraft, saveRuntimeSettings]);
+
+  const handleSaveSystem = useCallback(async () => {
+    setSavingSystem(true);
+    setFeedback(null);
+    try {
+      await saveSystemSettings(systemDraft);
+      setFeedback({ type: "ok", message: "System settings saved." });
+    } catch (err) {
+      setFeedback({ type: "error", message: err instanceof Error ? err.message : "Failed to save system settings." });
+    } finally {
+      setSavingSystem(false);
+    }
+  }, [saveSystemSettings, systemDraft]);
+
+  const handleSetToken = useCallback(async () => {
+    setSavingToken(true);
+    setFeedback(null);
+    try {
+      await setApiToken(apiTokenDraft.trim() || null);
+      setApiTokenDraft("");
+      setFeedback({
+        type: "ok",
+        message: apiTokenDraft.trim() ? "API auth token updated." : "API auth token cleared.",
+      });
+    } catch (err) {
+      setFeedback({ type: "error", message: err instanceof Error ? err.message : "Failed to update API auth token." });
+    } finally {
+      setSavingToken(false);
+    }
+  }, [apiTokenDraft, setApiToken]);
 
   return (
     <div className="space-y-4">
@@ -1248,6 +1300,21 @@ function GeneralSection() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border/60 bg-muted/30 px-3 py-2">
+            <p className="text-xs text-muted-foreground">
+              RBAC users/sessions, OIDC SSO, and LDAP login settings are managed in Access Controls.
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                window.location.assign("/access");
+              }}
+            >
+              Open Access Controls
+            </Button>
+          </div>
+
           <div className="grid gap-3 md:grid-cols-2">
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">Agent interval (ms)</Label>
@@ -1284,6 +1351,123 @@ function GeneralSection() {
           </Button>
         </CardContent>
       </Card>
+
+      <Card className="bg-card/60">
+        <CardHeader>
+          <CardTitle className="text-base">System and Security</CardTitle>
+          <CardDescription>
+            DB-backed system defaults, scheduled digest window, and API token guard.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Node identity</Label>
+              <Input
+                value={systemDraft.nodeIdentity}
+                onChange={(e) => setSystemDraft((current) => ({ ...current, nodeIdentity: e.target.value }))}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Timezone (IANA)</Label>
+              <Input
+                value={systemDraft.timezone}
+                onChange={(e) => setSystemDraft((current) => ({ ...current, timezone: e.target.value }))}
+                placeholder="America/Toronto"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Upgrade channel</Label>
+              <Select
+                value={systemDraft.upgradeChannel}
+                onValueChange={(value) =>
+                  setSystemDraft((current) => ({ ...current, upgradeChannel: value as "stable" | "preview" }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="stable">Stable</SelectItem>
+                  <SelectItem value="preview">Preview</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Daily digest schedule</Label>
+              <div className="flex items-center gap-3 rounded-md border px-3 py-2">
+                <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={systemDraft.digestScheduleEnabled}
+                    onChange={(e) =>
+                      setSystemDraft((current) => ({ ...current, digestScheduleEnabled: e.target.checked }))
+                    }
+                  />
+                  Enabled
+                </label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={23}
+                  className="h-8 w-20"
+                  value={systemDraft.digestHourLocal}
+                  onChange={(e) =>
+                    setSystemDraft((current) => ({
+                      ...current,
+                      digestHourLocal: Math.max(0, Math.min(23, Number(e.target.value) || 0)),
+                    }))
+                  }
+                />
+                <span className="text-xs text-muted-foreground">:</span>
+                <Input
+                  type="number"
+                  min={0}
+                  max={59}
+                  className="h-8 w-20"
+                  value={systemDraft.digestMinuteLocal}
+                  onChange={(e) =>
+                    setSystemDraft((current) => ({
+                      ...current,
+                      digestMinuteLocal: Math.max(0, Math.min(59, Number(e.target.value) || 0)),
+                    }))
+                  }
+                />
+              </div>
+            </div>
+          </div>
+          <Button onClick={() => void handleSaveSystem()} disabled={savingSystem}>
+            {savingSystem ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Settings2 className="mr-1.5 h-4 w-4" />}
+            {savingSystem ? "Saving..." : "Save System Settings"}
+          </Button>
+
+          <Separator />
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs text-muted-foreground">API auth token</Label>
+              <Badge variant={authSettings.apiTokenEnabled ? "default" : "secondary"} className="text-[10px]">
+                {authSettings.apiTokenEnabled ? "Enabled" : "Disabled"}
+              </Badge>
+            </div>
+            <div className="flex gap-2">
+              <Input
+                type="password"
+                placeholder="Enter new token (min 16 chars)"
+                value={apiTokenDraft}
+                onChange={(e) => setApiTokenDraft(e.target.value)}
+              />
+              <Button onClick={() => void handleSetToken()} disabled={savingToken}>
+                {savingToken ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
+                {savingToken ? "Saving..." : "Set / Clear"}
+              </Button>
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              Token values are never returned by the API. Send it as `Authorization: Bearer &lt;token&gt;` or `x-steward-token`.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -1311,7 +1495,7 @@ export default function SettingsPage() {
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+        <h1 className="text-2xl font-semibold tracking-tight steward-heading-font">Settings</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Configure providers, vault, and agent behavior.
         </p>

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { isAuthorized } from "@/lib/auth/guard";
+import { startDeviceAdoption } from "@/lib/adoption/orchestrator";
 import { graphStore } from "@/lib/state/graph";
 import { stateStore } from "@/lib/state/store";
 
@@ -72,6 +73,7 @@ export async function POST(request: NextRequest) {
     metadata: {
       ...(existing?.metadata ?? {}),
       source: "manual",
+      ...(existing?.hostname ? { hostname: existing.hostname } : {}),
       adoption: {
         ...(typeof existing?.metadata?.adoption === "object" && existing.metadata.adoption !== null
           ? (existing.metadata.adoption as Record<string, unknown>)
@@ -96,6 +98,20 @@ export async function POST(request: NextRequest) {
       deviceId: device.id,
     },
   });
+
+  try {
+    await startDeviceAdoption(device.id, { triggeredBy: "user" });
+  } catch (error) {
+    await stateStore.addAction({
+      actor: "steward",
+      kind: "diagnose",
+      message: `Failed to start onboarding for ${device.name}`,
+      context: {
+        deviceId: device.id,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    });
+  }
 
   return NextResponse.json({ device });
 }

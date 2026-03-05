@@ -1,5 +1,18 @@
 import type { PlaybookDefinition } from "@/lib/state/types";
 
+const readSafety = {
+  dryRunSupported: false,
+  requiresConfirmedRevert: false,
+  criticality: "low" as const,
+};
+
+const networkMutationSafety = {
+  dryRunSupported: false,
+  requiresConfirmedRevert: true,
+  revertMechanism: "commit-confirmed" as const,
+  criticality: "high" as const,
+};
+
 export const configBackupPlaybooks: PlaybookDefinition[] = [
   {
     id: "playbook:config-backup:ssh-show",
@@ -16,18 +29,33 @@ export const configBackupPlaybooks: PlaybookDefinition[] = [
       {
         id: "step:config:capture",
         label: "Capture running configuration",
-        command: "ssh {{host}} 'show running-config' 2>/dev/null || ssh {{host}} 'cat /etc/network/interfaces /etc/hosts /etc/resolv.conf' 2>/dev/null || echo 'config-capture-unsupported'",
-        protocol: "ssh",
-        timeoutMs: 20_000,
+        operation: {
+          id: "op:config:capture-ssh",
+          adapterId: "network-ssh",
+          kind: "network.config",
+          mode: "read",
+          timeoutMs: 20_000,
+          commandTemplate:
+            "ssh {{host}} 'show running-config' 2>/dev/null || ssh {{host}} 'cat /etc/network/interfaces /etc/hosts /etc/resolv.conf' 2>/dev/null || echo 'config-capture-unsupported'",
+          expectedSemanticTarget: "config:running",
+          safety: networkMutationSafety,
+        },
       },
     ],
     verificationSteps: [
       {
         id: "verify:config:non-empty",
         label: "Verify config output is non-empty",
-        command: "test -n '{{last_output}}' && echo 'OK' || echo 'EMPTY'",
-        protocol: "ssh",
-        timeoutMs: 5_000,
+        operation: {
+          id: "op:config:non-empty-check",
+          adapterId: "ssh",
+          kind: "shell.command",
+          mode: "read",
+          timeoutMs: 5_000,
+          commandTemplate: "test -n '{{last_output}}' && echo 'OK' || echo 'EMPTY'",
+          expectedSemanticTarget: "config:running",
+          safety: readSafety,
+        },
       },
     ],
     rollbackSteps: [],
@@ -47,18 +75,33 @@ export const configBackupPlaybooks: PlaybookDefinition[] = [
       {
         id: "step:config:http-export",
         label: "Export configuration via API",
-        command: "curl -s -k https://{{host}}/api/config/export 2>/dev/null || curl -s -k http://{{host}}/api/config/export 2>/dev/null || echo 'api-export-unsupported'",
-        protocol: "http-api",
-        timeoutMs: 20_000,
+        operation: {
+          id: "op:config:http-export",
+          adapterId: "http-api",
+          kind: "http.request",
+          mode: "read",
+          timeoutMs: 20_000,
+          commandTemplate:
+            "curl -s -k https://{{host}}/api/config/export 2>/dev/null || curl -s -k http://{{host}}/api/config/export 2>/dev/null || echo 'api-export-unsupported'",
+          expectedSemanticTarget: "config:export",
+          safety: readSafety,
+        },
       },
     ],
     verificationSteps: [
       {
         id: "verify:config:http-non-empty",
         label: "Verify export output is non-empty",
-        command: "test -n '{{last_output}}' && echo 'OK' || echo 'EMPTY'",
-        protocol: "http-api",
-        timeoutMs: 5_000,
+        operation: {
+          id: "op:config:http-non-empty-check",
+          adapterId: "http-api",
+          kind: "shell.command",
+          mode: "read",
+          timeoutMs: 5_000,
+          commandTemplate: "test -n '{{last_output}}' && echo 'OK' || echo 'EMPTY'",
+          expectedSemanticTarget: "config:export",
+          safety: readSafety,
+        },
       },
     ],
     rollbackSteps: [],

@@ -1,5 +1,5 @@
 import type { Device, PlaybookDefinition } from "@/lib/state/types";
-import { pluginRegistry } from "@/lib/plugins/registry";
+import { adapterRegistry } from "@/lib/adapters/registry";
 import { serviceRecoveryPlaybooks } from "@/lib/playbooks/definitions/service-recovery";
 import { certRenewalPlaybooks } from "@/lib/playbooks/definitions/cert-renewal";
 import { backupRetryPlaybooks } from "@/lib/playbooks/definitions/backup-retry";
@@ -15,7 +15,7 @@ const BUILTIN_PLAYBOOKS: PlaybookDefinition[] = [
 ];
 
 function getAllPlaybooks(): PlaybookDefinition[] {
-  return [...BUILTIN_PLAYBOOKS, ...pluginRegistry.getPluginPlaybooks()];
+  return [...BUILTIN_PLAYBOOKS, ...adapterRegistry.getAdapterPlaybooks()];
 }
 
 export function getPlaybookDefinitions(): PlaybookDefinition[] {
@@ -65,7 +65,7 @@ export function matchPlaybooksForIncident(
       case "config-backup":
         return title.includes("config") || title.includes("drift");
       default:
-        // Plugin playbooks with custom families use matchesIncident
+        // Adapter playbooks with custom families use matchesIncident.
         if (playbook.matchesIncident) {
           return playbook.matchesIncident(title, incidentMetadata);
         }

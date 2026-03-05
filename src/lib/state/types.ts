@@ -17,6 +17,56 @@ export type DeviceType =
 
 export type DeviceStatus = "online" | "offline" | "degraded" | "unknown";
 
+export type DiscoveryObservationSource =
+  | "passive"
+  | "active"
+  | "mdns"
+  | "ssdp"
+  | "fingerprint"
+  | "fusion";
+
+export type DiscoveryEvidenceType =
+  | "arp_resolved"
+  | "icmp_reply"
+  | "tcp_open"
+  | "nmap_host_up"
+  | "mdns_announcement"
+  | "ssdp_response"
+  | "dns_ptr"
+  | "dns_service"
+  | "snmp_sysdescr"
+  | "http_banner"
+  | "tls_cert"
+  | "ssh_banner"
+  | "smb_negotiate"
+  | "winrm_endpoint"
+  | "mqtt_connack"
+  | "netbios_name"
+  | "protocol_hint";
+
+export interface DiscoveryObservationInput {
+  ip: string;
+  source: DiscoveryObservationSource;
+  evidenceType: DiscoveryEvidenceType;
+  confidence: number;
+  observedAt: string;
+  expiresAt?: string;
+  ttlMs?: number;
+  details?: Record<string, unknown>;
+}
+
+export interface DiscoveryObservation {
+  id: string;
+  ip: string;
+  deviceId?: string;
+  source: DiscoveryObservationSource;
+  evidenceType: DiscoveryEvidenceType;
+  confidence: number;
+  observedAt: string;
+  expiresAt: string;
+  details: Record<string, unknown>;
+}
+
 export type IncidentSeverity = "critical" | "warning" | "info";
 
 export type RecommendationPriority = "high" | "medium" | "low";
@@ -26,6 +76,70 @@ export type ActionClass = "A" | "B" | "C" | "D";
 export type EnvironmentLabel = "prod" | "staging" | "dev" | "lab";
 
 export type PolicyDecision = "ALLOW_AUTO" | "REQUIRE_APPROVAL" | "DENY";
+
+export type ExecutionLane = "A" | "B" | "C";
+
+export type LlmHealthState = "AVAILABLE" | "DEGRADED" | "UNAVAILABLE" | "SAFE_MODE";
+
+export type OperationMode = "read" | "mutate";
+
+export type OperationKind =
+  | "shell.command"
+  | "service.restart"
+  | "service.stop"
+  | "container.restart"
+  | "container.stop"
+  | "http.request"
+  | "cert.renew"
+  | "file.copy"
+  | "network.config";
+
+export type RevertMechanism = "commit-confirmed" | "timed-rollback" | "manual";
+
+export interface OperationSafetyProfile {
+  dryRunSupported: boolean;
+  dryRunCommandTemplate?: string;
+  requiresConfirmedRevert: boolean;
+  revertMechanism?: RevertMechanism;
+  riskTags?: string[];
+  criticality?: "low" | "medium" | "high";
+}
+
+export interface OperationSpec {
+  id: string;
+  adapterId: string;
+  kind: OperationKind;
+  mode: OperationMode;
+  timeoutMs: number;
+  commandTemplate?: string;
+  args?: Record<string, string | number | boolean>;
+  expectedSemanticTarget?: string;
+  safety: OperationSafetyProfile;
+}
+
+export type SafetyGateName = "schema" | "state_hash" | "policy" | "dry_run";
+
+export interface SafetyGateResult {
+  gate: SafetyGateName;
+  passed: boolean;
+  message: string;
+  at: string;
+  details?: Record<string, unknown>;
+}
+
+export interface CapabilityTokenScope {
+  deviceId: string;
+  adapterId: string;
+  operationKinds: OperationKind[];
+  mode: OperationMode;
+}
+
+export interface CapabilityToken {
+  token: string;
+  scope: CapabilityTokenScope;
+  issuedAt: string;
+  expiresAt: string;
+}
 
 export type PlaybookFamily =
   | "service-recovery"
@@ -118,6 +232,103 @@ export interface Device {
   lastSeenAt: string;
   lastChangedAt: string;
   metadata: Record<string, unknown>;
+}
+
+export type AdoptionRunStatus = "running" | "awaiting_user" | "completed" | "failed";
+
+export type AdoptionRunStage =
+  | "profile"
+  | "questions"
+  | "credentials"
+  | "adapter_binding"
+  | "activation"
+  | "completed"
+  | "failed";
+
+export interface AdoptionRun {
+  id: string;
+  deviceId: string;
+  status: AdoptionRunStatus;
+  stage: AdoptionRunStage;
+  profileJson: Record<string, unknown>;
+  summary?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdoptionQuestionOption {
+  label: string;
+  value: string;
+}
+
+export interface AdoptionQuestion {
+  id: string;
+  runId: string;
+  deviceId: string;
+  questionKey: string;
+  prompt: string;
+  options: AdoptionQuestionOption[];
+  required: boolean;
+  answerJson?: Record<string, unknown>;
+  answeredAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type DeviceCredentialStatus = "pending" | "provided" | "validated" | "invalid";
+
+export interface DeviceCredential {
+  id: string;
+  deviceId: string;
+  protocol: string;
+  adapterId?: string;
+  vaultSecretRef: string;
+  accountLabel?: string;
+  scopeJson: Record<string, unknown>;
+  status: DeviceCredentialStatus;
+  lastValidatedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DeviceAdapterBinding {
+  id: string;
+  deviceId: string;
+  adapterId: string;
+  protocol: string;
+  score: number;
+  selected: boolean;
+  reason: string;
+  configJson: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ServiceContract {
+  id: string;
+  deviceId: string;
+  serviceKey: string;
+  displayName: string;
+  criticality: "low" | "medium" | "high";
+  desiredState: "running" | "stopped";
+  checkIntervalSec: number;
+  policyJson: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DeviceFinding {
+  id: string;
+  deviceId: string;
+  dedupeKey: string;
+  findingType: string;
+  severity: IncidentSeverity;
+  title: string;
+  summary: string;
+  evidenceJson: Record<string, unknown>;
+  status: "open" | "resolved";
+  firstSeenAt: string;
+  lastSeenAt: string;
 }
 
 export interface DeviceBaseline {
@@ -254,6 +465,72 @@ export interface RuntimeSettings {
   enableSsdpDiscovery: boolean;
   enableSnmpProbe: boolean;
   ouiUpdateIntervalMs: number;
+  laneBEnabled: boolean;
+  laneBAllowedEnvironments: EnvironmentLabel[];
+  laneBAllowedFamilies: string[];
+  laneCMutationsInLab: boolean;
+  laneCMutationsInProd: boolean;
+  mutationRequireDryRunWhenSupported: boolean;
+  approvalTtlClassBMs: number;
+  approvalTtlClassCMs: number;
+  approvalTtlClassDMs: number;
+  quarantineThresholdCount: number;
+  quarantineThresholdWindowMs: number;
+}
+
+export type UserRole = "Owner" | "Admin" | "Operator" | "Auditor" | "ReadOnly";
+
+export type AuthMode = "open" | "token" | "session" | "hybrid";
+
+export type AuthProviderType = "local" | "oidc" | "ldap";
+
+export interface OidcAuthSettings {
+  enabled: boolean;
+  issuer: string;
+  clientId: string;
+  scopes: string;
+  autoProvision: boolean;
+  defaultRole: UserRole;
+  clientSecretConfigured: boolean;
+}
+
+export interface LdapAuthSettings {
+  enabled: boolean;
+  url: string;
+  baseDn: string;
+  bindDn: string;
+  userFilter: string;
+  uidAttribute: string;
+  autoProvision: boolean;
+  defaultRole: UserRole;
+  bindPasswordConfigured: boolean;
+}
+
+export interface SystemSettings {
+  nodeIdentity: string;
+  timezone: string;
+  digestScheduleEnabled: boolean;
+  digestHourLocal: number;
+  digestMinuteLocal: number;
+  upgradeChannel: "stable" | "preview";
+}
+
+export interface AuthSettings {
+  apiTokenEnabled: boolean;
+  mode: AuthMode;
+  sessionTtlHours: number;
+  oidc: OidcAuthSettings;
+  ldap: LdapAuthSettings;
+}
+
+export interface SettingsHistoryEntry<T = Record<string, unknown>> {
+  id: string;
+  domain: "runtime" | "system" | "auth";
+  version: number;
+  effectiveFrom: string;
+  payload: T;
+  actor: "steward" | "user";
+  createdAt: string;
 }
 
 export interface PolicyRule {
@@ -292,19 +569,23 @@ export interface PolicyEvaluation {
     environmentLabel: EnvironmentLabel;
     inMaintenanceWindow: boolean;
     deviceId: string;
+    blastRadius: "single-service" | "single-device" | "multi-device";
+    criticality: "low" | "medium" | "high";
+    lane: ExecutionLane;
+    recentFailures: number;
+    quarantineActive: boolean;
   };
 }
 
 export interface PlaybookStep {
   id: string;
   label: string;
-  command: string;
-  protocol: string;
-  timeoutMs: number;
+  operation: OperationSpec;
   status: PlaybookStepStatus;
   output?: string;
   startedAt?: string;
   completedAt?: string;
+  gateResults?: SafetyGateResult[];
 }
 
 export interface PlaybookDefinition {
@@ -323,7 +604,7 @@ export interface PlaybookDefinition {
   steps: Omit<PlaybookStep, "status" | "output" | "startedAt" | "completedAt">[];
   verificationSteps: Omit<PlaybookStep, "status" | "output" | "startedAt" | "completedAt">[];
   rollbackSteps: Omit<PlaybookStep, "status" | "output" | "startedAt" | "completedAt">[];
-  /** Optional custom incident matcher for plugin playbooks. */
+  /** Optional custom incident matcher for adapter playbooks. */
   matchesIncident?: (title: string, metadata: Record<string, unknown>) => boolean;
 }
 
@@ -341,9 +622,27 @@ export interface PlaybookRun {
   verificationSteps: PlaybookStep[];
   rollbackSteps: PlaybookStep[];
   evidence: {
-    preSnapshot?: Record<string, unknown>;
-    postSnapshot?: Record<string, unknown>;
+    preSnapshot?: Record<string, unknown> & { stateHash?: string };
+    postSnapshot?: Record<string, unknown> & { stateHash?: string };
     logs: string[];
+    gateResults?: SafetyGateResult[];
+    auditBundle?: {
+      actor: "steward" | "user";
+      lane: ExecutionLane;
+      rationale: string;
+      operations: Array<{
+        stepId: string;
+        operationId: string;
+        adapterId: string;
+        mode: OperationMode;
+        input: Record<string, unknown>;
+        output: string;
+        ok: boolean;
+        startedAt: string;
+        completedAt: string;
+        idempotencyKey: string;
+      }>;
+    };
   };
   createdAt: string;
   startedAt?: string;
@@ -415,6 +714,29 @@ export interface ChatMessage {
   createdAt: string;
 }
 
+export interface AuthUser {
+  id: string;
+  username: string;
+  displayName: string;
+  role: UserRole;
+  provider: AuthProviderType;
+  externalId?: string;
+  disabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastLoginAt?: string;
+}
+
+export interface AuthSession {
+  id: string;
+  userId: string;
+  createdAt: string;
+  expiresAt: string;
+  lastSeenAt: string;
+  ip?: string;
+  userAgent?: string;
+}
+
 export interface StewardState {
   version: number;
   initializedAt: string;
@@ -435,4 +757,6 @@ export interface StewardState {
   maintenanceWindows: MaintenanceWindow[];
   playbookRuns: PlaybookRun[];
   dailyDigests: DailyDigest[];
+  systemSettings: SystemSettings;
+  authSettings: AuthSettings;
 }

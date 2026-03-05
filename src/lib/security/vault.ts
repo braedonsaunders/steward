@@ -148,26 +148,36 @@ export const vault = {
 
       // Migrate from legacy passphrase vault
       const hasLegacy = await fileExists(legacyMetaFile);
-      const hasNewKey = await fileExists(vaultKeyFile);
+      let hasNewKey = await fileExists(vaultKeyFile);
+      let hasDataFile = await fileExists(vaultDataFile);
 
       if (hasLegacy && !hasNewKey) {
         await removeLegacyVault();
+        hasDataFile = false;
+        hasNewKey = false;
       }
 
       // Initialize if needed
-      if (!await fileExists(vaultKeyFile)) {
+      if (!hasNewKey) {
+        if (hasDataFile) {
+          throw new Error(
+            "Vault key is missing while encrypted vault data exists. Refusing to overwrite existing vault.",
+          );
+        }
+
         const rawKey = randomBytes(32);
-        const protectedBlob = await protectKey(rawKey);
+        const protectedBlob = await protectKey(rawKey, vaultKeyFile);
         await writeFile(vaultKeyFile, protectedBlob);
-        await writePayload(defaultPayload(), rawKey);
+        const payload = defaultPayload();
+        await writePayload(payload, rawKey);
         unlockedKey = rawKey;
-        cachedPayload = defaultPayload();
+        cachedPayload = payload;
         return true;
       }
 
       // Unlock — read protected key, unprotect, decrypt payload
       const protectedBlob = await readFile(vaultKeyFile);
-      const rawKey = await unprotectKey(protectedBlob);
+      const rawKey = await unprotectKey(protectedBlob, vaultKeyFile);
       unlockedKey = rawKey;
 
       const envelope = await readEnvelope();
@@ -175,8 +185,9 @@ export const vault = {
         cachedPayload = decryptPayload(envelope, rawKey);
       } else {
         // Key file exists but no data file — create empty payload
-        cachedPayload = defaultPayload();
-        await writePayload(cachedPayload, rawKey);
+        const payload = defaultPayload();
+        cachedPayload = payload;
+        await writePayload(payload, rawKey);
       }
 
       return true;

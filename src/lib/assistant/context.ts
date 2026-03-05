@@ -1,4 +1,22 @@
 import { stateStore } from "@/lib/state/store";
+import { adapterRegistry } from "@/lib/adapters/registry";
+
+function trimForPrompt(value: string | undefined, maxChars = 1_200): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (trimmed.length <= maxChars) {
+    return trimmed;
+  }
+
+  return `${trimmed.slice(0, maxChars)}\n...[truncated]`;
+}
 
 export interface AssistantContext {
   generatedAt: string;
@@ -24,13 +42,33 @@ export interface AssistantContext {
     status: string;
     deviceIds: string[];
   }>;
+  adapterSkillGuides: Array<{
+    adapterId: string;
+    adapterName: string;
+    markdown: string;
+  }>;
+  adapterToolSkills: Array<{
+    adapterId: string;
+    adapterName: string;
+    skillId: string;
+    skillName: string;
+    description: string;
+    category?: string;
+    toolCallName: string;
+    toolCallDescription: string;
+    toolCallParameters: Record<string, unknown>;
+    markdown?: string;
+  }>;
 }
 
 export const buildAssistantContext = async (): Promise<AssistantContext> => {
   const state = await stateStore.getState();
+  await adapterRegistry.initialize();
+  const adapters = adapterRegistry.getAdapterRecords();
 
   const online = state.devices.filter((device) => device.status === "online").length;
   const offline = state.devices.filter((device) => device.status === "offline").length;
+  const enabledAdapters = adapters.filter((adapter) => adapter.enabled && adapter.status === "loaded");
 
   return {
     generatedAt: new Date().toISOString(),
@@ -57,5 +95,38 @@ export const buildAssistantContext = async (): Promise<AssistantContext> => {
       status: incident.status,
       deviceIds: incident.deviceIds,
     })),
+    adapterSkillGuides: enabledAdapters
+      .map((adapter) => {
+        const markdown = trimForPrompt(adapter.skillMd?.content);
+        if (!markdown) {
+          return undefined;
+        }
+        return {
+          adapterId: adapter.id,
+          adapterName: adapter.name,
+          markdown,
+        };
+      })
+      .filter((item): item is { adapterId: string; adapterName: string; markdown: string } => Boolean(item))
+      .slice(0, 16),
+    adapterToolSkills: enabledAdapters
+      .flatMap((adapter) =>
+        (adapter.toolSkills ?? []).map((skill) => ({
+          adapterId: adapter.id,
+          adapterName: adapter.name,
+          skillId: skill.id,
+          skillName: skill.name,
+          description: skill.description,
+          category: skill.category,
+          toolCallName: skill.toolCall?.name ?? skill.id,
+          toolCallDescription: skill.toolCall?.description ?? skill.description,
+          toolCallParameters: skill.toolCall?.parameters ?? {
+            type: "object",
+            properties: {},
+            additionalProperties: true,
+          },
+          markdown: trimForPrompt(skill.skillMd?.content, 900),
+        })))
+      .slice(0, 60),
   };
 };
