@@ -153,7 +153,16 @@ function selectCredentialForExecution(
     .getDeviceCredentials(device.id)
     .filter((credential) => credential.protocol.toLowerCase() === "ssh");
   const availableStatuses = Array.from(new Set(candidates.map((credential) => credential.status)));
-  const credential = candidates.find((item) => item.status === "validated")
+  const priority = ["validated", "provided", "invalid", "pending"] as const;
+  const sorted = [...candidates].sort((a, b) => {
+    const aPriority = priority.indexOf(a.status as (typeof priority)[number]);
+    const bPriority = priority.indexOf(b.status as (typeof priority)[number]);
+    if (aPriority !== bPriority) {
+      return (aPriority === -1 ? 99 : aPriority) - (bPriority === -1 ? 99 : bPriority);
+    }
+    return b.updatedAt.localeCompare(a.updatedAt);
+  });
+  const credential = sorted[0]
     ?? (context.allowProvidedCredentials ? candidates.find((item) => item.status === "provided") : undefined);
   return { credential, availableStatuses };
 }
@@ -187,9 +196,9 @@ async function injectCredentialIntoCommand(
       adapterId: operation.adapterId,
       actor: context.actor,
       purpose: operation.kind,
-      result: availableStatuses.length > 0 ? "skipped_unvalidated" : "no_validated_credential",
+      result: availableStatuses.length > 0 ? "credential_unusable" : "no_stored_credential",
       details: {
-        allowedStatuses: context.allowProvidedCredentials ? ["provided", "validated"] : ["validated"],
+        allowedStatuses: ["pending", "provided", "validated", "invalid"],
         availableStatuses,
       },
     });
@@ -339,6 +348,13 @@ function adapterMatchesDevice(operation: OperationSpec, device: Device): boolean
       return device.services.some((service) =>
         service.transport === "tcp"
         && (service.port === 2375 || service.port === 2376 || /docker/i.test(service.name)),
+      );
+    }
+
+    if (alias === "snmp") {
+      return device.services.some((service) =>
+        (service.transport === "udp" || service.transport === "tcp")
+        && (service.port === 161 || service.port === 162 || /snmp/i.test(service.name)),
       );
     }
 
@@ -531,18 +547,26 @@ export async function executeOperationWithGates(
     context.policyDecision === "ALLOW_AUTO"
     || (context.policyDecision === "REQUIRE_APPROVAL" && context.approved);
 
-  const policyFailureReason = context.policyDecision === "DENY"
-    ? `Policy denied operation: ${context.policyReason}`
-    : context.policyDecision === "REQUIRE_APPROVAL" && !context.approved
-      ? "Policy requires approval before execution"
-      : "Policy allowed";
-
-  const semanticOk = adapterMatchesDevice(operation, device);
+  const semanticObservedMatch = adapterMatchesDevice(operation, device);
+  const semanticOk = operation.mode === "read" ? true : semanticObservedMatch;
   const semanticTarget = operation.expectedSemanticTarget
     ? interpolateOperationValue(operation.expectedSemanticTarget, device.ip, params)
     : undefined;
   const semanticTargetResolved = semanticTarget ? !semanticTarget.includes("{{") : true;
   const revertOk = hasSafeNetworkRevert(operation);
+  const policyFailureReason = context.policyDecision === "DENY"
+    ? `Policy denied operation: ${context.policyReason}`
+    : context.policyDecision === "REQUIRE_APPROVAL" && !context.approved
+      ? "Policy requires approval before execution"
+      : !semanticOk
+        ? `Semantic check failed: adapter ${operation.adapterId} does not match known capabilities for ${device.name}`
+        : !semanticTargetResolved
+          ? "Semantic target interpolation failed"
+          : !revertOk
+            ? "Unsafe network operation blocked: missing confirmed revert path"
+            : context.quarantineActive
+              ? "Execution blocked: quarantine is active"
+              : "Policy allowed";
   const policyGateOk = policyAllowed && semanticOk && semanticTargetResolved && revertOk && !context.quarantineActive;
   gateResults.push(
     gate(
@@ -552,6 +576,7 @@ export async function executeOperationWithGates(
       {
         policyDecision: context.policyDecision,
         semanticOk,
+        semanticObservedMatch,
         semanticTarget,
         semanticTargetResolved,
         revertOk,

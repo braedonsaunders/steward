@@ -34,6 +34,7 @@ export const buildStewardSystemPrompt = (context: AssistantContext): string => {
     "When a suitable adapter tool skill is available, call it instead of describing a fake tool call.",
     "When deep diagnostics are needed on an attached device, use steward_shell_read with focused read-only commands.",
     "For unknown or appliance-like endpoints (for example HTTP-only on port 80), use steward_deep_probe before asking the user to investigate manually.",
+    "When GUI-only workflows are required, use steward_browser_browse (Playwright) as a first-class browser tool to log in, navigate, diagnose issues, and apply approved UI changes.",
     "For current events, vendor documentation, CVEs, product changes, pricing, or any other question that needs public internet verification, use steward_web_research.",
     "Do not claim you searched the web unless you actually used steward_web_research.",
     "Treat public web research as supporting context only. Do not identify a private device solely from vendor/OUI plus common port numbers.",

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, LayoutGrid, RefreshCw, ShieldAlert, Sparkles, Trash2 } from "lucide-react";
+import { Activity, LayoutGrid, Maximize2, Minimize2, RefreshCw, ShieldAlert, Sparkles, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -71,7 +71,7 @@ function buildWidgetDocument(args: {
     ":root { color-scheme: light dark; }",
     "html, body { margin: 0; padding: 0; min-height: 100%; background: transparent; }",
     "body { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }",
-    "#steward-widget-root { min-height: 100vh; box-sizing: border-box; }",
+    "#steward-widget-root { min-height: 100%; box-sizing: border-box; }",
     args.widget.css,
     "</style>",
     "</head>",
@@ -292,20 +292,64 @@ function WidgetRuntimeFrame({
   context,
   active,
   onContextRefresh,
+  maxFrameHeight = 2_200,
 }: {
   deviceId: string;
   widget: DeviceWidget;
   context: DeviceWidgetContext;
   active: boolean;
   onContextRefresh: () => Promise<DeviceWidgetContext | null>;
+  maxFrameHeight?: number;
 }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const [runtimeState, setRuntimeState] = useState<Record<string, unknown>>({});
   const [runtimeLoading, setRuntimeLoading] = useState(true);
   const [frameHeight, setFrameHeight] = useState(640);
   const [frameStatus, setFrameStatus] = useState("Ready");
   const [frameError, setFrameError] = useState<string | null>(null);
   const [bootSnapshot, setBootSnapshot] = useState<{ context: DeviceWidgetContext; state: Record<string, unknown> } | null>(null);
+  const [isInViewport, setIsInViewport] = useState(false);
+  const [isDocumentVisible, setIsDocumentVisible] = useState(true);
+  const runtimeActive = active && isInViewport && isDocumentVisible;
+
+  useEffect(() => {
+    if (typeof document !== "undefined") {
+      setIsDocumentVisible(!document.hidden);
+    }
+    const handleVisibilityChange = () => {
+      setIsDocumentVisible(typeof document === "undefined" ? true : !document.hidden);
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof IntersectionObserver === "undefined") {
+      setIsInViewport(true);
+      return;
+    }
+    const target = containerRef.current;
+    if (!target) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        setIsInViewport(Boolean(entry?.isIntersecting && entry.intersectionRatio >= 0.2));
+      },
+      {
+        root: null,
+        threshold: [0, 0.2, 0.5, 1],
+      },
+    );
+    observer.observe(target);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
 
   const loadRuntimeState = useCallback(async () => {
     setRuntimeLoading(true);
@@ -392,7 +436,7 @@ function WidgetRuntimeFrame({
   }, [deviceId, widget.id]);
 
   useEffect(() => {
-    if (!active) {
+    if (!runtimeActive) {
       return;
     }
 
@@ -409,7 +453,7 @@ function WidgetRuntimeFrame({
       if (type === "resize") {
         const rawHeight = Number(data.height);
         if (Number.isFinite(rawHeight)) {
-          setFrameHeight(Math.max(320, Math.min(1_600, Math.ceil(rawHeight))));
+          setFrameHeight(Math.max(320, Math.min(maxFrameHeight, Math.ceil(rawHeight))));
         }
         return;
       }
@@ -525,23 +569,24 @@ function WidgetRuntimeFrame({
       window.removeEventListener("message", handleMessage);
     };
   }, [
-    active,
+    runtimeActive,
     context,
     deviceId,
     loadOperationRuns,
     onContextRefresh,
     postWidgetOperation,
+    maxFrameHeight,
     respondToWidget,
     runtimeState,
     widget.id,
   ]);
 
   useEffect(() => {
-    if (!active || runtimeLoading) {
+    if (!runtimeActive || runtimeLoading) {
       return;
     }
     respondToWidget({ type: "context-update", context });
-  }, [active, context, respondToWidget, runtimeLoading]);
+  }, [runtimeActive, context, respondToWidget, runtimeLoading]);
 
   const documentHtml = useMemo(
     () => bootSnapshot
@@ -559,12 +604,13 @@ function WidgetRuntimeFrame({
   }
 
   return (
-    <div className="space-y-3">
+    <div ref={containerRef} className="space-y-3">
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <Badge variant="secondary" className="gap-1">
           <Activity className="size-3" />
           {frameStatus}
         </Badge>
+        {!runtimeActive && <Badge variant="outline">Paused (off-screen)</Badge>}
         <Badge variant="outline">rev {widget.revision}</Badge>
         {widget.capabilities.map((capability) => (
           <Badge key={capability} variant="outline" className="capitalize">
@@ -582,14 +628,22 @@ function WidgetRuntimeFrame({
         </Card>
       )}
 
-      <iframe
-        ref={iframeRef}
-        title={widget.name}
-        sandbox="allow-scripts"
-        srcDoc={documentHtml}
-        className="w-full rounded-2xl border bg-background"
-        style={{ height: `${frameHeight}px` }}
-      />
+      {runtimeActive ? (
+        <iframe
+          ref={iframeRef}
+          title={widget.name}
+          sandbox="allow-scripts"
+          srcDoc={documentHtml}
+          className="block min-h-[320px] w-full rounded-2xl border bg-background"
+          style={{ height: `${frameHeight}px` }}
+        />
+      ) : (
+        <Card>
+          <CardContent className="flex min-h-[320px] items-center justify-center p-4 text-sm text-muted-foreground">
+            Widget runtime is paused while this panel is off-screen.
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
@@ -602,6 +656,7 @@ export function DeviceWidgetsPanel({ deviceId, active = false, className }: Devi
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [hasLoaded, setHasLoaded] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
 
   useEffect(() => {
     setWidgets([]);
@@ -610,6 +665,7 @@ export function DeviceWidgetsPanel({ deviceId, active = false, className }: Devi
     setError(null);
     setHasLoaded(false);
     setLoading(true);
+    setFullscreen(false);
   }, [deviceId]);
 
   const loadContext = useCallback(async (): Promise<DeviceWidgetContext | null> => {
@@ -700,7 +756,7 @@ export function DeviceWidgetsPanel({ deviceId, active = false, className }: Devi
 
   if (loading) {
     return (
-      <div className={cn("grid min-w-0 gap-4 lg:grid-cols-[280px_1fr]", className)}>
+      <div className={cn("grid min-w-0 gap-4 lg:grid-cols-[300px_1fr]", className)}>
         <Skeleton className="h-[420px] w-full rounded-2xl" />
         <Skeleton className="h-[520px] w-full rounded-2xl" />
       </div>
@@ -736,8 +792,15 @@ export function DeviceWidgetsPanel({ deviceId, active = false, className }: Devi
   }
 
   return (
-    <div className={cn("grid h-full min-h-0 min-w-0 gap-4 lg:grid-cols-[280px_1fr]", className)}>
-      <Card className="min-h-0 min-w-0 overflow-hidden">
+    <div
+      className={cn(
+        "relative grid h-full min-h-0 min-w-0 gap-4 overflow-x-hidden",
+        fullscreen ? "grid-cols-1" : "lg:grid-cols-[300px_1fr]",
+        className,
+      )}
+    >
+      {!fullscreen && (
+        <Card className="flex min-h-0 min-w-0 flex-col overflow-hidden">
         <CardHeader className="gap-3 pb-3">
           <div className="flex items-center gap-2">
             <LayoutGrid className="size-4 text-primary" />
@@ -758,26 +821,26 @@ export function DeviceWidgetsPanel({ deviceId, active = false, className }: Devi
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="min-h-0 min-w-0 p-0">
-          <ScrollArea className="h-[520px] min-w-0">
-            <div className="space-y-2 p-3">
+        <CardContent className="flex min-h-0 min-w-0 flex-1 p-0">
+          <ScrollArea className="h-full min-w-0 [&>[data-radix-scroll-area-viewport]]:overflow-x-hidden">
+            <div className="space-y-2 p-3 pr-4">
               {widgets.map((widget) => (
                 <button
                   key={widget.id}
                   type="button"
                   onClick={() => setSelectedWidgetId(widget.id)}
                   className={cn(
-                    "block w-[calc(100%-0.75rem)] min-w-0 rounded-2xl border px-3 py-3 text-left transition-colors",
+                    "block w-full min-w-0 max-w-full overflow-hidden rounded-2xl border px-3 py-3 text-left transition-colors",
                     widget.id === selectedWidgetId
                       ? "border-primary bg-primary/5 shadow-sm"
                       : "border-border/70 bg-card hover:border-primary/40 hover:bg-accent/40",
                   )}
                 >
-                  <div className="flex items-start gap-2">
+                  <div className="flex min-w-0 flex-wrap items-start gap-2">
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium text-foreground">{widget.name}</p>
                       {widget.description && (
-                        <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                        <p className="mt-1 break-words text-xs leading-5 text-muted-foreground">
                           {widget.description}
                         </p>
                       )}
@@ -791,9 +854,15 @@ export function DeviceWidgetsPanel({ deviceId, active = false, className }: Devi
             </div>
           </ScrollArea>
         </CardContent>
-      </Card>
+        </Card>
+      )}
 
-      <Card className="min-h-0 min-w-0 overflow-hidden">
+      <Card
+        className={cn(
+          "min-h-0 min-w-0 overflow-hidden",
+          fullscreen && "flex h-full w-full flex-col",
+        )}
+      >
         <CardHeader className="pb-3">
           <div className="flex flex-wrap items-start gap-3">
             <div className="min-w-0 flex-1">
@@ -802,6 +871,25 @@ export function DeviceWidgetsPanel({ deviceId, active = false, className }: Devi
                 <CardDescription className="mt-1">{selectedWidget.description}</CardDescription>
               )}
             </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="shrink-0"
+              onClick={() => setFullscreen((current) => !current)}
+            >
+              {fullscreen ? (
+                <>
+                  <Minimize2 className="mr-2 size-3.5" />
+                  Exit Fullscreen
+                </>
+              ) : (
+                <>
+                  <Maximize2 className="mr-2 size-3.5" />
+                  Fullscreen
+                </>
+              )}
+            </Button>
             <Badge variant="outline" className="capitalize">{selectedWidget.slug}</Badge>
           </div>
         </CardHeader>
@@ -812,6 +900,7 @@ export function DeviceWidgetsPanel({ deviceId, active = false, className }: Devi
             context={context}
             active={active}
             onContextRefresh={loadContext}
+            maxFrameHeight={fullscreen ? 4_000 : 2_000}
           />
         </CardContent>
       </Card>

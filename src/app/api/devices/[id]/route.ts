@@ -4,6 +4,7 @@ import { isAuthorized } from "@/lib/auth/guard";
 import { startDeviceAdoption } from "@/lib/adoption/orchestrator";
 import { getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
 import { stateStore } from "@/lib/state/store";
+import { DEVICE_TYPE_VALUES } from "@/lib/state/types";
 
 export const runtime = "nodejs";
 
@@ -11,21 +12,7 @@ const ADOPTION_RECOMMENDATION_TITLE = /adopt\s+.+\s+for\s+active\s+management/i;
 
 const updateDeviceSchema = z.object({
   name: z.string().trim().min(1).max(128).optional(),
-  type: z.enum([
-    "server",
-    "workstation",
-    "router",
-    "firewall",
-    "switch",
-    "access-point",
-    "camera",
-    "nas",
-    "printer",
-    "iot",
-    "container-host",
-    "hypervisor",
-    "unknown",
-  ]).optional(),
+  type: z.enum(DEVICE_TYPE_VALUES).optional(),
   autonomyTier: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
   tags: z.array(z.string().min(1)).optional(),
   adoptionStatus: z.enum(["discovered", "adopted", "ignored"]).optional(),
@@ -102,6 +89,19 @@ export async function PATCH(
       );
     }
     device.name = payload.data.name;
+    const identity =
+      typeof device.metadata.identity === "object" && device.metadata.identity !== null
+        ? (device.metadata.identity as Record<string, unknown>)
+        : {};
+    device.metadata = {
+      ...device.metadata,
+      identity: {
+        ...identity,
+        nameManuallySet: true,
+        nameManuallySetAt: new Date().toISOString(),
+        nameSetBy: "user",
+      },
+    };
     updates.name = payload.data.name;
   }
 

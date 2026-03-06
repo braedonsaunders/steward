@@ -2,7 +2,7 @@ FROM node:22-bookworm-slim AS deps
 WORKDIR /app
 COPY package*.json ./
 RUN apt-get update \
-  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nmap tshark \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nmap tshark snmp \
   && rm -rf /var/lib/apt/lists/* \
   && npm ci
 
@@ -21,7 +21,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 RUN apt-get update \
-  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates wget gpg nmap tshark \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates wget gpg nmap tshark snmp \
   && wget -q https://packages.microsoft.com/config/debian/12/packages-microsoft-prod.deb \
   && dpkg -i packages-microsoft-prod.deb \
   && rm packages-microsoft-prod.deb \

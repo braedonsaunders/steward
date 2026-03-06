@@ -52,24 +52,10 @@ import {
 } from "@/components/ui/table";
 import { useSteward } from "@/lib/hooks/use-steward";
 import { getDeviceAdoptionStatus, type DeviceAdoptionStatus } from "@/lib/state/device-adoption";
-import type { DeviceStatus, DeviceType } from "@/lib/state/types";
+import { DEVICE_TYPE_VALUES, type DeviceStatus, type DeviceType } from "@/lib/state/types";
 import { cn } from "@/lib/utils";
 
-const DEVICE_TYPES: DeviceType[] = [
-  "server",
-  "workstation",
-  "router",
-  "firewall",
-  "switch",
-  "access-point",
-  "camera",
-  "nas",
-  "printer",
-  "iot",
-  "container-host",
-  "hypervisor",
-  "unknown",
-];
+const DEVICE_TYPES: DeviceType[] = [...DEVICE_TYPE_VALUES];
 
 const STATUS_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "all", label: "All Statuses" },
@@ -278,10 +264,10 @@ export function DeviceInventoryPage({ scope }: { scope: DeviceInventoryScope }) 
 
     // Sort
     result = [...result].sort((a, b) => {
-      let cmp = 0;
-      switch (sortField) {
-        case "name":
-          cmp = (a.hostname ?? a.name).localeCompare(b.hostname ?? b.name);
+        let cmp = 0;
+        switch (sortField) {
+          case "name":
+          cmp = a.name.localeCompare(b.name);
           break;
         case "ip":
           cmp = a.ip.localeCompare(b.ip);
@@ -802,7 +788,7 @@ export function DeviceInventoryPage({ scope }: { scope: DeviceInventoryScope }) 
                         </div>
                       </TableCell>
                       <TableCell className="font-medium">
-                        {device.hostname ?? device.name}
+                        {device.name}
                       </TableCell>
                       <TableCell className="font-mono text-xs text-muted-foreground">
                         {device.ip}

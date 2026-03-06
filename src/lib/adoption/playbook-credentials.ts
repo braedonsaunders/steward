@@ -34,7 +34,7 @@ export function getMissingCredentialProtocolsForPlaybook(
     return [];
   }
 
-  const available = new Set(stateStore.getValidatedCredentialProtocols(device.id).map(normalizeProtocol));
+  const available = new Set(stateStore.getUsableCredentialProtocols(device.id).map(normalizeProtocol));
   const missing = Array.from(required).filter((protocol) => !available.has(protocol));
   return missing;
 }

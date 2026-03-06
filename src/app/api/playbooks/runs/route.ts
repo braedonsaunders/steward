@@ -61,7 +61,7 @@ export async function POST(request: NextRequest) {
   if (missingCredentials.length > 0) {
     return NextResponse.json(
       {
-        error: `Missing validated credentials for protocols: ${missingCredentials.join(", ")}`,
+        error: `Missing stored credentials for protocols: ${missingCredentials.join(", ")}`,
         missingCredentials,
       },
       { status: 400 },

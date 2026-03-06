@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "postinstall": "node scripts/ensure-playwright.mjs --best-effort && node scripts/ensure-network-tools.mjs --best-effort",
+    "postinstall": "node scripts/ensure-playwright.mjs --best-effort && node scripts/ensure-network-tools.mjs",
     "network-tools:install": "node scripts/ensure-network-tools.mjs",
     "playwright:install": "node scripts/ensure-playwright.mjs",
     "predev": "node scripts/ensure-network-tools.mjs && node scripts/ensure-playwright.mjs && node scripts/free-port.mjs 3010",

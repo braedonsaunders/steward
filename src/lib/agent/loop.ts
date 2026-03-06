@@ -337,8 +337,8 @@ const evaluateAssurancesForDevice = async (
   }
 
   const nowMs = Date.now();
-  const validated = new Set(
-    stateStore.getValidatedCredentialProtocols(device.id).map((protocol) => protocol.toLowerCase()),
+  const available = new Set(
+    stateStore.getUsableCredentialProtocols(device.id).map((protocol) => protocol.toLowerCase()),
   );
   const ignoredTypes = normalizedIgnoredIncidentTypes(runtimeSettings);
   const assuranceAlertsEnabled = runtimeSettings.serviceContractScannerAlertsEnabled
@@ -351,7 +351,7 @@ const evaluateAssurancesForDevice = async (
     }
 
     const requiredProtocols = getRequiredProtocolsForServiceContract(contract);
-    const missingProtocols = requiredProtocols.filter((protocol) => !validated.has(protocol.toLowerCase()));
+    const missingProtocols = requiredProtocols.filter((protocol) => !available.has(protocol.toLowerCase()));
     const findingKey = `service-contract:${contract.id}`;
 
     if (missingProtocols.length > 0) {

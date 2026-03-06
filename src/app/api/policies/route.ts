@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { isAuthorized } from "@/lib/auth/guard";
 import { stateStore } from "@/lib/state/store";
+import { DEVICE_TYPE_VALUES } from "@/lib/state/types";
 
 const CreatePolicySchema = z.object({
   name: z.string().min(1),
@@ -13,7 +14,7 @@ const CreatePolicySchema = z.object({
   actionClasses: z.array(z.enum(["A", "B", "C", "D"])).optional(),
   autonomyTiers: z.array(z.union([z.literal(1), z.literal(2), z.literal(3)])).optional(),
   environmentLabels: z.array(z.enum(["prod", "staging", "dev", "lab"])).optional(),
-  deviceTypes: z.array(z.enum(["server", "workstation", "router", "firewall", "switch", "access-point", "camera", "nas", "printer", "iot", "container-host", "hypervisor", "unknown"])).optional(),
+  deviceTypes: z.array(z.enum(DEVICE_TYPE_VALUES)).optional(),
   decision: z.enum(["ALLOW_AUTO", "REQUIRE_APPROVAL", "DENY"]),
   priority: z.number().int().min(0).optional().default(100),
   enabled: z.boolean().optional().default(true),

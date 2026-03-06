@@ -19,7 +19,7 @@ export async function POST(
     return NextResponse.json({ credential: redactDeviceCredential(credential) });
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Failed to validate credential" },
+      { error: error instanceof Error ? error.message : "Failed to mark credential as validated" },
       { status: 400 },
     );
   }

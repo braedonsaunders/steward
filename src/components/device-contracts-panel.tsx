@@ -1,10 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Loader2, Pencil, Plus, Trash2 } from "lucide-react";
 import { withClientApiToken } from "@/lib/auth/client-token";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import type {
   AdoptionQuestion,
   AdoptionRun,
@@ -54,10 +60,32 @@ function readString(record: Record<string, unknown> | undefined, key: string): s
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+const WORKLOAD_CATEGORY_OPTIONS: Workload["category"][] = [
+  "application",
+  "platform",
+  "data",
+  "network",
+  "perimeter",
+  "storage",
+  "telemetry",
+  "background",
+  "unknown",
+];
+
+const WORKLOAD_CRITICALITY_OPTIONS: Workload["criticality"][] = ["low", "medium", "high"];
+
 export function DeviceWorkloadsPanel({ deviceId, className }: { deviceId: string; className?: string }) {
   const [snapshot, setSnapshot] = useState<AdoptionSnapshot | null>(null);
   const [findings, setFindings] = useState<DeviceFinding[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [workloadDialogOpen, setWorkloadDialogOpen] = useState(false);
+  const [editingWorkloadId, setEditingWorkloadId] = useState<string | null>(null);
+  const [workloadDisplayName, setWorkloadDisplayName] = useState("");
+  const [workloadCategory, setWorkloadCategory] = useState<Workload["category"]>("unknown");
+  const [workloadCriticality, setWorkloadCriticality] = useState<Workload["criticality"]>("medium");
+  const [workloadSummary, setWorkloadSummary] = useState("");
+  const [workloadSaving, setWorkloadSaving] = useState(false);
+  const [deletingWorkloadId, setDeletingWorkloadId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -86,6 +114,102 @@ export function DeviceWorkloadsPanel({ deviceId, className }: { deviceId: string
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const resetWorkloadForm = useCallback(() => {
+    setEditingWorkloadId(null);
+    setWorkloadDisplayName("");
+    setWorkloadCategory("unknown");
+    setWorkloadCriticality("medium");
+    setWorkloadSummary("");
+  }, []);
+
+  const openCreateWorkloadDialog = useCallback(() => {
+    resetWorkloadForm();
+    setWorkloadDialogOpen(true);
+  }, [resetWorkloadForm]);
+
+  const openEditWorkloadDialog = useCallback((workload: Workload) => {
+    setEditingWorkloadId(workload.id);
+    setWorkloadDisplayName(workload.displayName);
+    setWorkloadCategory(workload.category);
+    setWorkloadCriticality(workload.criticality);
+    setWorkloadSummary(workload.summary ?? "");
+    setWorkloadDialogOpen(true);
+  }, []);
+
+  const submitWorkload = useCallback(async () => {
+    if (!workloadDisplayName.trim()) {
+      return;
+    }
+    setWorkloadSaving(true);
+    try {
+      const body = {
+        displayName: workloadDisplayName.trim(),
+        category: workloadCategory,
+        criticality: workloadCriticality,
+        summary: workloadSummary.trim() || null,
+      };
+      const endpoint = editingWorkloadId
+        ? `/api/devices/${deviceId}/workloads/${editingWorkloadId}`
+        : `/api/devices/${deviceId}/workloads`;
+      const method = editingWorkloadId ? "PATCH" : "POST";
+
+      const response = await fetch(
+        endpoint,
+        withClientApiToken({
+          method,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+      );
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to save workload");
+      }
+
+      setWorkloadDialogOpen(false);
+      resetWorkloadForm();
+      await refresh();
+      setError(null);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Failed to save workload");
+    } finally {
+      setWorkloadSaving(false);
+    }
+  }, [
+    deviceId,
+    editingWorkloadId,
+    refresh,
+    resetWorkloadForm,
+    workloadCategory,
+    workloadCriticality,
+    workloadDisplayName,
+    workloadSummary,
+  ]);
+
+  const deleteWorkload = useCallback(async (workload: Workload) => {
+    if (!window.confirm(`Delete workload "${workload.displayName}"?`)) {
+      return;
+    }
+    setDeletingWorkloadId(workload.id);
+    try {
+      const response = await fetch(
+        `/api/devices/${deviceId}/workloads/${workload.id}`,
+        withClientApiToken({ method: "DELETE" }),
+      );
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to delete workload");
+      }
+
+      await refresh();
+      setError(null);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Failed to delete workload");
+    } finally {
+      setDeletingWorkloadId(null);
+    }
+  }, [deviceId, refresh]);
 
   const runByAssuranceId = useMemo(
     () => new Map((snapshot?.assuranceRuns ?? []).map((run) => [run.assuranceId, run])),
@@ -165,11 +289,17 @@ export function DeviceWorkloadsPanel({ deviceId, className }: { deviceId: string
         </div>
 
         <p className="text-xs text-muted-foreground">
-          Use the Chat tab to refine responsibilities, then approve the resulting workload and assurance model.
+          Add, edit, or delete workloads directly here. Use Chat when you want Steward to propose and refine the model automatically.
         </p>
 
         <div className="space-y-2">
-          <Label className="text-xs">Active Workload Model</Label>
+          <div className="flex items-center justify-between gap-2">
+            <Label className="text-xs">Active Workload Model</Label>
+            <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]" onClick={openCreateWorkloadDialog}>
+              <Plus className="mr-1 size-3" />
+              Add Workload
+            </Button>
+          </div>
           {(snapshot?.workloads.length ?? 0) === 0 ? (
             <p className="text-xs text-muted-foreground">
               No workloads have been committed yet. Continue onboarding in Chat to convert observed endpoints into managed responsibilities.
@@ -187,7 +317,32 @@ export function DeviceWorkloadsPanel({ deviceId, className }: { deviceId: string
                           {workload.category.replace(/_/g, " ")} workload
                         </p>
                       </div>
-                      <Badge variant="outline">{workload.criticality}</Badge>
+                      <div className="flex items-center gap-1.5">
+                        <Badge variant="outline">{workload.criticality}</Badge>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-6 px-2 text-[10px]"
+                          onClick={() => openEditWorkloadDialog(workload)}
+                        >
+                          <Pencil className="mr-1 size-3" />
+                          Edit
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-6 px-2 text-[10px] text-destructive"
+                          disabled={deletingWorkloadId === workload.id}
+                          onClick={() => void deleteWorkload(workload)}
+                        >
+                          {deletingWorkloadId === workload.id ? (
+                            <Loader2 className="mr-1 size-3 animate-spin" />
+                          ) : (
+                            <Trash2 className="mr-1 size-3" />
+                          )}
+                          Delete
+                        </Button>
+                      </div>
                     </div>
                     {workload.summary ? (
                       <p className="mt-2 text-xs text-muted-foreground">{workload.summary}</p>
@@ -297,6 +452,84 @@ export function DeviceWorkloadsPanel({ deviceId, className }: { deviceId: string
 
         {error ? <p className="rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-2 text-xs text-destructive">{error}</p> : null}
       </CardContent>
+
+      <Dialog
+        open={workloadDialogOpen}
+        onOpenChange={(open) => {
+          setWorkloadDialogOpen(open);
+          if (!open) {
+            resetWorkloadForm();
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{editingWorkloadId ? "Edit Workload" : "Add Workload"}</DialogTitle>
+            <DialogDescription>
+              Define the responsibility Steward should manage for this device.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-2 py-1">
+            <Label htmlFor="workload-display-name">Display Name</Label>
+            <Input
+              id="workload-display-name"
+              value={workloadDisplayName}
+              onChange={(event) => setWorkloadDisplayName(event.target.value)}
+              placeholder="Primary API Service"
+            />
+
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div className="space-y-1">
+                <Label htmlFor="workload-category">Category</Label>
+                <Select
+                  value={workloadCategory}
+                  onValueChange={(value) => setWorkloadCategory(value as Workload["category"])}
+                >
+                  <SelectTrigger id="workload-category"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {WORKLOAD_CATEGORY_OPTIONS.map((option) => (
+                      <SelectItem key={option} value={option}>{option.replace(/_/g, " ")}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1">
+                <Label htmlFor="workload-criticality">Criticality</Label>
+                <Select
+                  value={workloadCriticality}
+                  onValueChange={(value) => setWorkloadCriticality(value as Workload["criticality"])}
+                >
+                  <SelectTrigger id="workload-criticality"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {WORKLOAD_CRITICALITY_OPTIONS.map((option) => (
+                      <SelectItem key={option} value={option}>{option}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <Label htmlFor="workload-summary">Summary (optional)</Label>
+            <Textarea
+              id="workload-summary"
+              value={workloadSummary}
+              onChange={(event) => setWorkloadSummary(event.target.value)}
+              placeholder="What this workload is responsible for"
+              rows={4}
+            />
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setWorkloadDialogOpen(false)} disabled={workloadSaving}>Cancel</Button>
+            <Button onClick={() => void submitWorkload()} disabled={workloadSaving || !workloadDisplayName.trim()}>
+              {workloadSaving ? <Loader2 className="mr-1.5 size-3.5 animate-spin" /> : null}
+              {editingWorkloadId ? "Save Changes" : "Save Workload"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }

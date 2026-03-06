@@ -1,6 +1,8 @@
-import type { Device } from "@/lib/state/types";
+import { DEVICE_TYPE_VALUES, type Device } from "@/lib/state/types";
 
-const AUTO_NAME_PATTERN = /^(server|workstation|router|firewall|switch|access-point|camera|nas|printer|iot|container-host|hypervisor|unknown|device)-\d+-\d+-\d+-\d+$/;
+const AUTO_NAME_PATTERN = new RegExp(
+  `^(?:${[...DEVICE_TYPE_VALUES, "device"].join("|")})-\\d+-\\d+-\\d+-\\d+$`,
+);
 const SLUG_ONLY_PATTERN = /^[a-z0-9-]+$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -11,7 +13,12 @@ function ipSlug(ip: string): string {
   return ip.trim().toLowerCase().replaceAll(".", "-").replaceAll(":", "-");
 }
 
-export function looksLikeScannedDeviceName(device: Pick<Device, "name" | "ip">): boolean {
+export function looksLikeScannedDeviceName(device: Pick<Device, "name" | "ip" | "metadata">): boolean {
+  const identity = isRecord(device.metadata?.identity) ? device.metadata.identity : null;
+  if (identity?.nameManuallySet === true) {
+    return false;
+  }
+
   const name = device.name.trim().toLowerCase();
   if (!name) {
     return true;

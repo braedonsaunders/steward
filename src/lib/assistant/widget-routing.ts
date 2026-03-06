@@ -22,7 +22,7 @@ const WidgetGenerateToolArgsSchema = z.object({
   action: z.literal("generate"),
   widget_id: z.string().min(1).optional(),
   widget_slug: z.string().min(1).optional(),
-  prompt: z.string().min(1).max(6_000),
+  prompt: z.string().min(1).max(1_200),
 });
 
 const WidgetGetToolArgsSchema = z.object({
@@ -132,6 +132,7 @@ export async function planWidgetRoute(args: {
       "- If revising an existing widget, prefer the most recently updated relevant widget from inventory.",
       "- If the user clearly wants a new separate widget, omit widget_id and widget_slug.",
       "- toolArgs.prompt must be a concrete instruction Steward can hand to steward_manage_widget.",
+      "- Keep toolArgs.prompt concise: <= 500 characters, plain text, no code fences, and no escaped newlines.",
     ].join("\n"),
     prompt: [
       `Attached device: ${args.attachedDevice.name} (${args.attachedDevice.ip}) id=${args.attachedDevice.id} type=${args.attachedDevice.type}`,

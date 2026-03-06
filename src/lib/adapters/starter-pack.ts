@@ -549,6 +549,13 @@ function looksWorkstation(candidate) {
     || /(workstation|desktop|laptop|gaming|pc|rog|tuf|legion|alienware|omen|zephyrus)/.test(text);
 }
 
+function isWorkstationTarget(candidate, services) {
+  const typeHint = String(candidate.typeHint || candidate.type || "").toLowerCase();
+  return typeHint === "workstation"
+    || looksWorkstation(candidate)
+    || (hasRdpPort(services) && !hasServerPorts(services));
+}
+
 module.exports = {
   enrich(candidate, context) {
     const config = context.getConfig();
@@ -562,9 +569,7 @@ module.exports = {
       return candidate;
     }
 
-    const workstationLike = candidate.typeHint === "workstation"
-      || looksWorkstation(candidate)
-      || (hasRdpPort(services) && !hasServerPorts(services));
+    const workstationLike = isWorkstationTarget(candidate, services);
     if (!workstationLike) {
       return candidate;
     }
@@ -593,6 +598,9 @@ module.exports = {
     }
 
     const services = device.services || [];
+    if (!isWorkstationTarget(device, services)) {
+      return [];
+    }
     const capabilities = [];
 
     if (hasWinrmPort(services)) {
@@ -1330,7 +1338,7 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
       id: "steward.snmp-network-intel",
       name: "SNMP Network Intel",
       description: "Seeds SNMP endpoints, enriches switch/router classification, and contributes network intel capabilities.",
-      version: "1.0.0",
+      version: "1.0.1",
       author: "Steward",
       entry: "index.js",
       provides: ["discovery", "enrichment", "protocol"],
@@ -1379,6 +1387,10 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
           description: "Collect and reason about SNMP interface counters.",
           category: "diagnostics",
           operationKinds: ["shell.command"],
+          execution: {
+            adapterId: "snmp",
+            mode: "read",
+          },
           enabledByDefault: true,
         },
         {
@@ -1387,6 +1399,10 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
           description: "Track sysDescr and firmware drift on network devices.",
           category: "security",
           operationKinds: ["shell.command"],
+          execution: {
+            adapterId: "snmp",
+            mode: "read",
+          },
           enabledByDefault: true,
         },
         {
@@ -1395,6 +1411,10 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
           description: "Track CRC/error/discard trends and surface degraded interfaces.",
           category: "diagnostics",
           operationKinds: ["shell.command"],
+          execution: {
+            adapterId: "snmp",
+            mode: "read",
+          },
           enabledByDefault: true,
         },
         {
@@ -1403,6 +1423,10 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
           description: "Build L2/L3 relationship hints from SNMP metadata and neighbor signals.",
           category: "operations",
           operationKinds: ["shell.command"],
+          execution: {
+            adapterId: "snmp",
+            mode: "read",
+          },
           enabledByDefault: true,
         },
       ],
@@ -1613,7 +1637,7 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
       id: "steward.windows-workstation",
       name: "Windows Workstation",
       description: "Desktop/laptop adapter for Windows workstations, gaming PCs, and RDP-exposed personal machines.",
-      version: "1.0.0",
+      version: "1.0.1",
       author: "Steward",
       entry: "index.js",
       provides: ["enrichment", "protocol", "playbooks"],

@@ -15,7 +15,7 @@ fi
 echo "Ensuring Playwright runtime..."
 node scripts/ensure-playwright.mjs
 
-echo "Ensuring required network tools (nmap, tshark)..."
+echo "Ensuring required network tools (nmap, tshark, snmpget, snmpwalk)..."
 node scripts/ensure-network-tools.mjs
 
 if ! command -v pwsh >/dev/null 2>&1; then

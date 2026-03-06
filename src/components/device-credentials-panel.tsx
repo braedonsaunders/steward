@@ -98,7 +98,6 @@ export function DeviceCredentialsPanel({ deviceId, className }: { deviceId: stri
               protocol: credentialType,
               secret: password,
               accountLabel: username.trim() || undefined,
-              validateNow: true,
             }),
           }),
         );
@@ -114,7 +113,6 @@ export function DeviceCredentialsPanel({ deviceId, className }: { deviceId: stri
             protocol: credentialType,
             secret: password,
             accountLabel: username.trim() || undefined,
-            validateNow: true,
           }),
         }));
         const data = (await res.json()) as { snapshot?: AdoptionSnapshot; error?: string };
@@ -158,11 +156,11 @@ export function DeviceCredentialsPanel({ deviceId, className }: { deviceId: stri
       const res = await fetch(`/api/devices/${deviceId}/credentials/${credentialId}/validate`, withClientApiToken({ method: "POST" }));
       const data = (await res.json()) as { error?: string };
       if (!res.ok) {
-        throw new Error(data.error ?? "Failed to validate credential");
+          throw new Error(data.error ?? "Failed to mark credential as validated");
       }
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to validate credential");
+      setError(err instanceof Error ? err.message : "Failed to mark credential as validated");
     } finally {
       setCredentialValidating((prev) => ({ ...prev, [credentialId]: false }));
     }
@@ -174,7 +172,7 @@ export function DeviceCredentialsPanel({ deviceId, className }: { deviceId: stri
         <div className="flex items-center justify-between gap-2">
           <div>
             <CardTitle className="text-base">Credentials</CardTitle>
-            <CardDescription>Add and validate credential access for this device</CardDescription>
+            <CardDescription>Add credential access for this device</CardDescription>
           </div>
           <div className="flex items-center gap-2">
             <Button size="sm" variant="outline" onClick={openCreateDialog}>Add Credential</Button>
@@ -211,7 +209,7 @@ export function DeviceCredentialsPanel({ deviceId, className }: { deviceId: stri
                     disabled={Boolean(credentialValidating[credential.id])}
                     onClick={() => void validateCredential(credential.id)}
                   >
-                    {credentialValidating[credential.id] ? "Validating..." : "Validate"}
+                    {credentialValidating[credential.id] ? "Marking..." : "Mark Validated"}
                   </Button>
                   <Button
                     size="sm"

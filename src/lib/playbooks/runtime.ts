@@ -102,7 +102,7 @@ export async function executePlaybook(
         ...run.evidence,
         logs: [
           ...run.evidence.logs,
-          `Execution blocked: missing validated credentials for ${missingCredentials.join(", ")}`,
+          `Execution blocked: missing stored credentials for ${missingCredentials.join(", ")}`,
         ],
       },
       failureCount: run.failureCount + 1,

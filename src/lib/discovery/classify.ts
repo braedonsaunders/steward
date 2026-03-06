@@ -2,19 +2,25 @@ import { randomUUID } from "node:crypto";
 import type { DiscoveryCandidate } from "@/lib/discovery/types";
 import { dedupeObservations } from "@/lib/discovery/evidence";
 import { lookupOuiVendor } from "@/lib/discovery/oui";
-import type { Device, DeviceStatus, DeviceType, ServiceFingerprint } from "@/lib/state/types";
+import { DEVICE_TYPE_VALUES, type Device, type DeviceStatus, type DeviceType, type ServiceFingerprint } from "@/lib/state/types";
 
 /* ---------- Helpers ---------- */
 
 const hasAny = (ports: number[], expected: number[]): boolean =>
   expected.some((port) => ports.includes(port));
 
-const AUTO_NAME_PATTERN = /^(server|workstation|router|firewall|switch|access-point|camera|nas|printer|iot|container-host|hypervisor|unknown|device)-\d+-\d+-\d+-\d+$/;
+const AUTO_NAME_PATTERN = new RegExp(
+  `^(?:${[...DEVICE_TYPE_VALUES, "device"].join("|")})-\\d+-\\d+-\\d+-\\d+$`,
+);
 const LEGACY_UNKNOWN_NAME_PATTERN = /^unknown-\d+-\d+-\d+-\d+$/;
 const UNKNOWN_SERVICE_NAMES = new Set(["", "unknown", "tcpwrapped", "generic"]);
+const SIP_PORTS = [5060, 5061, 4569, 8021, 10000, 2000];
 
 const normalizeMac = (mac: string): string =>
   mac.toLowerCase().replace(/-/g, ":").trim();
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const vendorSlug = (vendor: string): string =>
   (vendor
@@ -150,6 +156,15 @@ function signalsFromPorts(ports: number[], ip: string): ClassificationSignal[] {
   if (ports.includes(1883) || ports.includes(8883)) {
     signals.push({ source: "port", type: "iot", weight: 45, reason: "MQTT port open" });
   }
+  if (hasAny(ports, SIP_PORTS)) {
+    signals.push({ source: "port", type: "pbx", weight: 72, reason: "SIP/RTP telephony ports" });
+  }
+  if (ports.includes(623)) {
+    signals.push({ source: "port", type: "bmc", weight: 68, reason: "IPMI RMCP port" });
+  }
+  if (hasAny(ports, [5357, 631]) && !hasAny(ports, [9100])) {
+    signals.push({ source: "port", type: "scanner", weight: 38, reason: "Scanner discovery/IPP profile" });
+  }
 
   return signals;
 }
@@ -194,6 +209,18 @@ function signalsFromHostname(hostname: string | undefined): ClassificationSignal
   }
   if (/(esxi|vcenter|proxmox|hyperv|hyper-v)/i.test(h)) {
     signals.push({ source: "hostname", type: "hypervisor", weight: 65, reason: "Hypervisor hostname" });
+  }
+  if (/(pbx|freepbx|asterisk|3cx|voip)/i.test(h)) {
+    signals.push({ source: "hostname", type: "pbx", weight: 72, reason: "PBX/VoIP hostname" });
+  }
+  if (/(idrac|ilo|ipmi|bmc)/i.test(h)) {
+    signals.push({ source: "hostname", type: "bmc", weight: 70, reason: "Out-of-band management hostname" });
+  }
+  if (/(ups|apc|eaton|tripp-?lite|poweredge-?ups)/i.test(h)) {
+    signals.push({ source: "hostname", type: "ups", weight: 68, reason: "UPS hostname pattern" });
+  }
+  if (/(scanner|scan-)/i.test(h)) {
+    signals.push({ source: "hostname", type: "scanner", weight: 60, reason: "Scanner hostname pattern" });
   }
   if (/(docker|k8s|kube|rancher|container)/i.test(h)) {
     signals.push({ source: "hostname", type: "container-host", weight: 55, reason: "Container host hostname" });
@@ -279,6 +306,15 @@ function signalsFromVendor(vendor: string | undefined, ports: number[]): Classif
   }
   if (v.includes("brother") || v.includes("canon") || v.includes("epson") || v.includes("xerox") || v.includes("lexmark") || v.includes("ricoh") || v.includes("konica")) {
     signals.push({ source: "oui", type: "printer", weight: 65, reason: `Printer vendor: ${vendor}` });
+  }
+  if (v.includes("yealink") || v.includes("poly") || v.includes("polycom") || v.includes("avaya") || v.includes("mitel")) {
+    signals.push({ source: "oui", type: "voip-phone", weight: 68, reason: `VoIP vendor: ${vendor}` });
+  }
+  if (v.includes("grandstream") || v.includes("sangoma") || v.includes("digium") || v.includes("3cx")) {
+    signals.push({ source: "oui", type: "pbx", weight: 72, reason: `PBX vendor: ${vendor}` });
+  }
+  if (v.includes("apc") || v.includes("eaton") || v.includes("tripp lite")) {
+    signals.push({ source: "oui", type: "ups", weight: 70, reason: `Power vendor: ${vendor}` });
   }
 
   return signals;
@@ -505,6 +541,15 @@ function signalsFromServiceFingerprints(services: ServiceFingerprint[]): Classif
     if (/(windows|microsoft-httpapi|iis|winrm)/.test(combined)) {
       signals.push({ source: "service", type: "server", weight: 58, reason: `Windows stack signature on port ${service.port}` });
     }
+    if (/(sip|asterisk|freepbx|3cx|chan_sip|pjsip)/.test(combined) || SIP_PORTS.includes(service.port)) {
+      signals.push({ source: "service", type: "pbx", weight: 75, reason: `VoIP/PBX stack on port ${service.port}` });
+    }
+    if (/(idrac|ilo|ipmi|bmc)/.test(combined)) {
+      signals.push({ source: "service", type: "bmc", weight: 78, reason: `Out-of-band management stack on port ${service.port}` });
+    }
+    if (/(ups|network management card|powermanagement)/.test(combined)) {
+      signals.push({ source: "service", type: "ups", weight: 70, reason: `Power management service on port ${service.port}` });
+    }
   }
 
   return signals;
@@ -546,6 +591,15 @@ function signalsFromHttpServices(services: Array<{ port: number; httpInfo?: { se
       if (t.includes("switch") || t.includes("managed switch")) {
         signals.push({ source: "http", type: "switch", weight: 65, reason: `Switch web UI: ${httpInfo.title.slice(0, 60)}` });
       }
+      if (t.includes("freepbx") || t.includes("asterisk") || t.includes("3cx") || t.includes("pbx")) {
+        signals.push({ source: "http", type: "pbx", weight: 80, reason: `PBX web UI: ${httpInfo.title.slice(0, 60)}` });
+      }
+      if (t.includes("idrac") || t.includes("ilo") || t.includes("ipmi") || t.includes("bmc")) {
+        signals.push({ source: "http", type: "bmc", weight: 76, reason: `Management controller web UI: ${httpInfo.title.slice(0, 60)}` });
+      }
+      if (t.includes("ups") || t.includes("apc") || t.includes("eaton")) {
+        signals.push({ source: "http", type: "ups", weight: 72, reason: `UPS web UI: ${httpInfo.title.slice(0, 60)}` });
+      }
     }
   }
 
@@ -569,6 +623,12 @@ function signalsFromTlsServices(services: Array<{ port: number; tlsCert?: { subj
     if (combined.includes("paloalto")) signals.push({ source: "tls", type: "firewall", weight: 75, reason: "Palo Alto TLS cert" });
     if (combined.includes("esxi") || combined.includes("vmware")) signals.push({ source: "tls", type: "hypervisor", weight: 70, reason: "VMware TLS cert" });
     if (combined.includes("proxmox")) signals.push({ source: "tls", type: "hypervisor", weight: 70, reason: "Proxmox TLS cert" });
+    if (combined.includes("freepbx") || combined.includes("asterisk") || combined.includes("3cx") || combined.includes("pbx")) {
+      signals.push({ source: "tls", type: "pbx", weight: 72, reason: "PBX TLS cert" });
+    }
+    if (combined.includes("idrac") || combined.includes("ilo") || combined.includes("ipmi") || combined.includes("bmc")) {
+      signals.push({ source: "tls", type: "bmc", weight: 72, reason: "BMC TLS cert" });
+    }
   }
 
   return signals;
@@ -734,6 +794,7 @@ const inferProtocols = (ports: number[]): string[] => {
   if (ports.includes(2375) || ports.includes(2376)) protocols.add("docker");
   if (ports.includes(6443)) protocols.add("kubernetes");
   if (ports.includes(1883) || ports.includes(8883)) protocols.add("mqtt");
+  if (hasAny(ports, SIP_PORTS)) protocols.add("sip");
   if (ports.includes(3389) || ports.includes(445) || ports.includes(389) || ports.includes(5985) || ports.includes(5986)) {
     protocols.add("windows");
   }
@@ -776,10 +837,17 @@ const inferFallbackType = (
   if (ports.includes(1883) || ports.includes(8883)) {
     return "iot";
   }
+  if (hasAny(ports, SIP_PORTS)) {
+    return "pbx";
+  }
+  if (ports.includes(623)) {
+    return "bmc";
+  }
   if (ports.includes(22) || ports.includes(80) || ports.includes(443)) {
     return "server";
   }
-  if (candidate.source === "mdns" || candidate.source === "ssdp") {
+  const typeHintSource = String(candidate.metadata.typeHintSource ?? "").toLowerCase();
+  if (typeHintSource === "mdns" || typeHintSource === "ssdp") {
     return "iot";
   }
   if (candidate.vendor || candidate.mac) {
@@ -930,10 +998,14 @@ export const candidateToDevice = (
     : `${generatedTypeSlug}-${candidate.ip.replaceAll(".", "-")}`;
 
   const previousName = previous?.name;
+  const previousIdentity = isRecord(previous?.metadata?.identity) ? previous.metadata.identity : {};
+  const manualNameLocked = previousIdentity.nameManuallySet === true;
   const shouldRefreshAutoName = Boolean(previousName && AUTO_NAME_PATTERN.test(previousName) && previousName !== generatedName);
   const shouldRefreshLegacyUnknown = Boolean(previousName && LEGACY_UNKNOWN_NAME_PATTERN.test(previousName));
 
-  const nextName = shouldPreferHostnameName
+  const nextName = manualNameLocked && previousName
+    ? previousName
+    : shouldPreferHostnameName
     ? (hostname as string)
     : (
       shouldRefreshAutoName || shouldRefreshLegacyUnknown
@@ -945,7 +1017,7 @@ export const candidateToDevice = (
   const mdnsFriendlyName = candidate.metadata.mdnsFriendlyName as string | undefined;
   const ssdpFriendlyName = candidate.metadata.ssdpFriendlyName as string | undefined;
   const friendlyName = mdnsFriendlyName ?? ssdpFriendlyName;
-  const displayName = (friendlyName && (nextName === generatedName || shouldRefreshAutoName || shouldRefreshLegacyUnknown))
+  const displayName = (!manualNameLocked && friendlyName && (nextName === generatedName || shouldRefreshAutoName || shouldRefreshLegacyUnknown))
     ? friendlyName
     : nextName;
 

@@ -1,19 +1,50 @@
 export type AutonomyTier = 1 | 2 | 3;
 
-export type DeviceType =
-  | "server"
-  | "workstation"
-  | "router"
-  | "firewall"
-  | "switch"
-  | "access-point"
-  | "camera"
-  | "nas"
-  | "printer"
-  | "iot"
-  | "container-host"
-  | "hypervisor"
-  | "unknown";
+export const DEVICE_TYPE_VALUES = [
+  "server",
+  "workstation",
+  "laptop",
+  "smartphone",
+  "tablet",
+  "router",
+  "firewall",
+  "switch",
+  "access-point",
+  "modem",
+  "load-balancer",
+  "vpn-appliance",
+  "wan-optimizer",
+  "camera",
+  "nvr",
+  "dvr",
+  "nas",
+  "san",
+  "printer",
+  "scanner",
+  "pbx",
+  "voip-phone",
+  "conference-system",
+  "point-of-sale",
+  "badge-reader",
+  "door-controller",
+  "ups",
+  "pdu",
+  "bmc",
+  "iot",
+  "sensor",
+  "controller",
+  "smart-tv",
+  "media-streamer",
+  "game-console",
+  "container-host",
+  "hypervisor",
+  "vm-host",
+  "kubernetes-master",
+  "kubernetes-worker",
+  "unknown",
+] as const;
+
+export type DeviceType = (typeof DEVICE_TYPE_VALUES)[number];
 
 export type DeviceStatus = "online" | "offline" | "degraded" | "unknown";
 
@@ -167,6 +198,7 @@ export interface WebSocketBrokerRequest {
 export interface WinrmBrokerRequest {
   protocol: "winrm";
   command: string;
+  host?: string;
   port?: number;
   useSsl?: boolean;
   skipCertChecks?: boolean;
@@ -449,7 +481,7 @@ export interface CredentialAccessLog {
   adapterId?: string;
   actor: "steward" | "user";
   purpose: string;
-  result: "granted" | "missing_secret" | "no_validated_credential" | "skipped_unvalidated";
+  result: "granted" | "missing_secret" | "no_stored_credential" | "credential_unusable";
   details: Record<string, unknown>;
   accessedAt: string;
 }

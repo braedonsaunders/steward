@@ -207,6 +207,33 @@ type ToolInputPill = {
   value: string;
 };
 
+type BrowserStepPreview = {
+  action: string;
+  ok: boolean;
+  label?: string;
+  selector?: string;
+  url?: string;
+  text?: string;
+  result?: string;
+  screenshotBase64?: string;
+  mimeType?: string;
+};
+
+type BrowserToolPreview = {
+  ok: boolean;
+  url?: string;
+  finalUrl?: string;
+  title?: string;
+  contentPreview?: string;
+  stepsExecuted: number;
+  stepResults: BrowserStepPreview[];
+  diagnostics?: {
+    consoleErrors: string[];
+    requestFailures: string[];
+    pageErrors: string[];
+  };
+};
+
 type AssistantMessageBlock =
   | {
       type: "text";
@@ -290,6 +317,73 @@ function extractToolInputPills(inputPreview?: string): ToolInputPill[] {
   }
 
   return [{ label: "input", value: truncateInlineValue(trimmed.replace(/\s+/g, " "), 96) }];
+}
+
+function parseBrowserToolPreview(event: ChatToolEvent): BrowserToolPreview | null {
+  if (event.toolName !== "steward_browser_browse") {
+    return null;
+  }
+  if (!event.outputPreview) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(event.outputPreview) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return null;
+    }
+    const record = parsed as Record<string, unknown>;
+    const stepResults = Array.isArray(record.stepResults)
+      ? record.stepResults
+        .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null && !Array.isArray(item))
+        .map((item) => ({
+          action: typeof item.action === "string" ? item.action : "step",
+          ok: item.ok !== false,
+          label: typeof item.label === "string" ? item.label : undefined,
+          selector: typeof item.selector === "string" ? item.selector : undefined,
+          url: typeof item.url === "string" ? item.url : undefined,
+          text: typeof item.text === "string" ? item.text : undefined,
+          result: typeof item.result === "string" ? item.result : undefined,
+          screenshotBase64: typeof item.screenshotBase64 === "string" ? item.screenshotBase64 : undefined,
+          mimeType: typeof item.mimeType === "string" ? item.mimeType : undefined,
+        }))
+      : [];
+
+    const diagnosticsRecord = (
+      typeof record.diagnostics === "object"
+      && record.diagnostics !== null
+      && !Array.isArray(record.diagnostics)
+    )
+      ? record.diagnostics as Record<string, unknown>
+      : null;
+
+    const toStringArray = (value: unknown): string[] => (
+      Array.isArray(value)
+        ? value.filter((entry): entry is string => typeof entry === "string").slice(0, 12)
+        : []
+    );
+
+    return {
+      ok: record.ok !== false,
+      url: typeof record.url === "string" ? record.url : undefined,
+      finalUrl: typeof record.finalUrl === "string" ? record.finalUrl : undefined,
+      title: typeof record.title === "string" ? record.title : undefined,
+      contentPreview: typeof record.contentPreview === "string" ? record.contentPreview : undefined,
+      stepsExecuted: typeof record.stepsExecuted === "number"
+        ? record.stepsExecuted
+        : stepResults.length,
+      stepResults: stepResults.slice(0, 16),
+      diagnostics: diagnosticsRecord
+        ? {
+          consoleErrors: toStringArray(diagnosticsRecord.consoleErrors),
+          requestFailures: toStringArray(diagnosticsRecord.requestFailures),
+          pageErrors: toStringArray(diagnosticsRecord.pageErrors),
+        }
+        : undefined,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function clampAnchorOffset(anchorOffset: number | undefined, contentLength: number): number {
@@ -468,6 +562,7 @@ const ChatToolEventCard = memo(function ChatToolEventCard({
 }) {
   const running = event.status === "running";
   const terminalPreview = previewToolOutput(event.outputPreview);
+  const browserPreview = parseBrowserToolPreview(event);
   const accentClasses = event.status === "failed"
     ? "border-rose-500/25 bg-[radial-gradient(circle_at_top_left,rgba(244,63,94,0.14),transparent_60%)]"
     : running
@@ -539,6 +634,61 @@ const ChatToolEventCard = memo(function ChatToolEventCard({
       </div>
 
       <ChatToolInputPills inputPreview={event.inputPreview} />
+
+      {browserPreview && (
+        <div className="mt-3 space-y-2 rounded-2xl border border-border/60 bg-background/70 p-3">
+          <div className="flex flex-wrap items-center gap-2 text-[11px]">
+            {browserPreview.title ? <Badge variant="outline">{browserPreview.title}</Badge> : null}
+            <Badge variant="secondary">{browserPreview.stepsExecuted} step{browserPreview.stepsExecuted === 1 ? "" : "s"}</Badge>
+            {browserPreview.finalUrl ? <span className="truncate text-muted-foreground">{browserPreview.finalUrl}</span> : null}
+          </div>
+
+          {browserPreview.stepResults.find((step) => step.screenshotBase64)?.screenshotBase64 ? (
+            <div className="overflow-hidden rounded-xl border border-border/70 bg-muted/20">
+              <img
+                src={`data:${browserPreview.stepResults.find((step) => step.screenshotBase64)?.mimeType ?? "image/png"};base64,${browserPreview.stepResults.find((step) => step.screenshotBase64)?.screenshotBase64 ?? ""}`}
+                alt="Browser snapshot"
+                className="h-auto w-full object-cover"
+              />
+            </div>
+          ) : null}
+
+          {browserPreview.contentPreview ? (
+            <p className="line-clamp-4 text-[12px] leading-5 text-muted-foreground">{browserPreview.contentPreview}</p>
+          ) : null}
+
+          {browserPreview.stepResults.length > 0 ? (
+            <div className="space-y-1.5">
+              {browserPreview.stepResults.map((step, index) => (
+                <div key={`${step.action}-${index}`} className="flex items-start justify-between gap-2 rounded-md border border-border/60 bg-background/80 px-2 py-1.5 text-[11px]">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">{step.label ?? step.action}</p>
+                    <p className="truncate text-muted-foreground">{step.selector ?? step.url ?? step.text ?? step.result ?? ""}</p>
+                  </div>
+                  <Badge variant={step.ok ? "secondary" : "outline"}>{step.ok ? "ok" : "failed"}</Badge>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {browserPreview.diagnostics && (
+            <div className="grid gap-2 text-[11px] sm:grid-cols-3">
+              <div className="rounded-md border border-border/60 bg-background/80 px-2 py-1.5">
+                <p className="font-medium">Console</p>
+                <p className="text-muted-foreground">{browserPreview.diagnostics.consoleErrors.length} issue{browserPreview.diagnostics.consoleErrors.length === 1 ? "" : "s"}</p>
+              </div>
+              <div className="rounded-md border border-border/60 bg-background/80 px-2 py-1.5">
+                <p className="font-medium">Requests</p>
+                <p className="text-muted-foreground">{browserPreview.diagnostics.requestFailures.length} failed</p>
+              </div>
+              <div className="rounded-md border border-border/60 bg-background/80 px-2 py-1.5">
+                <p className="font-medium">Page Errors</p>
+                <p className="text-muted-foreground">{browserPreview.diagnostics.pageErrors.length}</p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {terminalPreview && event.kind === "terminal" && (
         <div className="relative mt-3 overflow-hidden rounded-2xl border border-slate-800/90 bg-slate-950 text-slate-100 shadow-inner">
@@ -710,6 +860,7 @@ export function ChatWorkspace({
   // Messages for active session
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
+  const [messagesLoadedSessionId, setMessagesLoadedSessionId] = useState<string | null>(null);
 
   // Chat input
   const [input, setInput] = useState("");
@@ -871,8 +1022,10 @@ export function ChatWorkspace({
   useEffect(() => {
     if (!activeSessionId) return;
     if (visibleSessions.some((session) => session.id === activeSessionId)) return;
+    if (sessionsLoading) return;
+    if (preferredSessionId && activeSessionId === preferredSessionId) return;
     setActiveSessionId(visibleSessions[0]?.id ?? null);
-  }, [activeSessionId, visibleSessions]);
+  }, [activeSessionId, preferredSessionId, sessionsLoading, visibleSessions]);
 
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
@@ -908,6 +1061,7 @@ export function ChatWorkspace({
         return [];
       } finally {
         if (!options?.silent && activeSessionIdRef.current === sessionId) {
+          setMessagesLoadedSessionId(sessionId);
           setMessagesLoading(false);
         }
       }
@@ -918,9 +1072,11 @@ export function ChatWorkspace({
   useEffect(() => {
     if (!activeSessionId) {
       setMessages([]);
+      setMessagesLoadedSessionId(null);
       return;
     }
 
+    setMessagesLoadedSessionId(null);
     void loadSessionMessages(activeSessionId);
   }, [activeSessionId, loadSessionMessages]);
 
@@ -1420,6 +1576,7 @@ export function ChatWorkspace({
   useEffect(() => {
     if (!activeSessionId || !activeSession || !isOnboardingChatSession(activeSession)) return;
     if (!activeSessionDevice) return;
+    if (messagesLoadedSessionId !== activeSessionId) return;
     if (messagesLoading || sending) return;
     if (messages.length > 0) return;
     if (enabledProviders.length === 0 || chatBlockReason) return;
@@ -1438,6 +1595,7 @@ export function ChatWorkspace({
     activeSessionId,
     chatBlockReason,
     enabledProviders.length,
+    messagesLoadedSessionId,
     messages,
     messagesLoading,
     sendMessage,
@@ -1459,11 +1617,11 @@ export function ChatWorkspace({
       {/* Sidebar */}
       <div
         className={cn(
-          "z-30 flex h-full shrink-0 flex-col border-r bg-card/40 transition-all duration-200",
+          "z-30 flex h-full min-w-0 shrink-0 flex-col overflow-x-hidden border-r bg-card/40 transition-all duration-200",
           sidebarOpen
             ? cn(
                 "absolute inset-y-0 left-0 md:relative",
-                compact ? "w-[min(82vw,300px)] md:w-[228px]" : "w-[min(86vw,320px)] md:w-[260px]",
+                compact ? "w-[min(82vw,300px)] md:w-[248px]" : "w-[min(86vw,320px)] md:w-[268px]",
               )
             : "w-0 -translate-x-full overflow-hidden border-r-0 md:translate-x-0",
         )}
@@ -1543,7 +1701,7 @@ export function ChatWorkspace({
         </div>
 
         {/* Session list */}
-        <ScrollArea className="flex-1">
+        <ScrollArea className="min-w-0 flex-1 overflow-x-hidden [&>[data-radix-scroll-area-viewport]]:overflow-x-hidden">
           <div className="space-y-0.5 p-2">
             {sessionsLoading && (
               <div className="flex items-center justify-center py-8">
@@ -1573,7 +1731,7 @@ export function ChatWorkspace({
                     <div
                       key={session.id}
                       className={cn(
-                        "group flex flex-col items-stretch gap-1.5 rounded-lg px-2 py-2 text-sm transition-colors",
+                        "group flex w-full min-w-0 flex-col items-stretch gap-1.5 rounded-lg px-2 py-2 text-sm transition-colors",
                         activeSessionId === session.id
                           ? "bg-primary/10 text-primary"
                           : "text-foreground/70 hover:bg-muted/50",
@@ -1581,7 +1739,7 @@ export function ChatWorkspace({
                     >
                       <button
                         type="button"
-                        className="min-w-0 text-left"
+                        className="w-full min-w-0 max-w-full overflow-hidden text-left"
                         onClick={() => setActiveSessionId(session.id)}
                         title={session.title}
                       >
@@ -1596,7 +1754,7 @@ export function ChatWorkspace({
                           </p>
                         )}
                       </button>
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
                         <Button
                           variant="ghost"
                           size="sm"

@@ -124,7 +124,6 @@ export function DeviceAccessPanel({
               protocol: credentialType,
               secret: password,
               accountLabel: username.trim() || undefined,
-              validateNow: true,
             }),
           }),
         );
@@ -140,7 +139,6 @@ export function DeviceAccessPanel({
             protocol: credentialType,
             secret: password,
             accountLabel: username.trim() || undefined,
-            validateNow: true,
           }),
         }));
         const data = (await res.json()) as { error?: string };
@@ -184,11 +182,11 @@ export function DeviceAccessPanel({
       const res = await fetch(`/api/devices/${deviceId}/credentials/${credentialId}/validate`, withClientApiToken({ method: "POST" }));
       const data = (await res.json()) as { error?: string };
       if (!res.ok) {
-        throw new Error(data.error ?? "Failed to validate credential");
+          throw new Error(data.error ?? "Failed to mark credential as validated");
       }
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to validate credential");
+      setError(err instanceof Error ? err.message : "Failed to mark credential as validated");
     } finally {
       setCredentialValidating((prev) => ({ ...prev, [credentialId]: false }));
     }
@@ -288,7 +286,7 @@ export function DeviceAccessPanel({
             <Button size="sm" variant="outline" onClick={openCreateDialog}>Add Credential</Button>
           </div>
         </div>
-        <CardDescription>Stored device credentials and their latest validation status</CardDescription>
+        <CardDescription>Stored device credentials and their latest access status</CardDescription>
       </CardHeader>
       <CardContent className="min-h-0 flex-1">
         {(snapshot?.credentials ?? []).length === 0 ? (
@@ -320,7 +318,7 @@ export function DeviceAccessPanel({
                     disabled={Boolean(credentialValidating[credential.id])}
                     onClick={() => void validateCredential(credential.id)}
                   >
-                    {credentialValidating[credential.id] ? "Validating..." : "Validate"}
+                    {credentialValidating[credential.id] ? "Marking..." : "Mark Validated"}
                   </Button>
                   <Button
                     size="sm"

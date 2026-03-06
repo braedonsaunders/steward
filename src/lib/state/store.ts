@@ -2603,7 +2603,7 @@ class StateStore {
         SELECT DISTINCT protocol
         FROM device_credentials
         WHERE deviceId = ?
-          AND status IN ('provided', 'validated')
+          AND status IN ('provided', 'validated', 'invalid')
       `).all(deviceId) as Array<{ protocol: string }>;
       return rows.map((row) => String(row.protocol));
     });
@@ -2786,6 +2786,12 @@ class StateStore {
   clearWorkloads(deviceId: string): void {
     this.withDbRecovery("StateStore.clearWorkloads", (db) => {
       db.prepare("DELETE FROM workloads WHERE deviceId = ?").run(deviceId);
+    });
+  }
+
+  deleteWorkload(workloadId: string): void {
+    this.withDbRecovery("StateStore.deleteWorkload", (db) => {
+      db.prepare("DELETE FROM workloads WHERE id = ?").run(workloadId);
     });
   }
 

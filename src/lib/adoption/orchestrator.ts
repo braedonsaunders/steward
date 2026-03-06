@@ -85,6 +85,24 @@ function scoreAdapterForProtocol(
     reasons.push(`matches-type:${device.type}`);
   }
 
+  const deviceType = device.type.trim().toLowerCase();
+  const workstationSignals = /(workstation|desktop|laptop)/.test(text);
+  const serverSignals = /server/.test(text);
+  if (deviceType === "server" && workstationSignals) {
+    score -= 0.4;
+    reasons.push("type-penalty:server-vs-workstation");
+  }
+  if (deviceType === "workstation" && serverSignals) {
+    score -= 0.3;
+    reasons.push("type-penalty:workstation-vs-server");
+  }
+
+  const hasDomainControllerPorts = device.services.some((service) => [53, 88, 389].includes(service.port));
+  if (hasDomainControllerPorts && workstationSignals) {
+    score -= 1;
+    reasons.push("role-penalty:directory-service-host");
+  }
+
   if (device.vendor) {
     const vendorToken = device.vendor.toLowerCase().split(/[^a-z0-9]+/).find((token) => token.length >= 4);
     if (vendorToken && text.includes(vendorToken)) {
@@ -363,7 +381,7 @@ export async function startDeviceAdoption(
   }
 
   const unresolvedRequired = questions.filter((question) => question.required && !question.answerJson).length;
-  const validatedProtocols = stateStore.getValidatedCredentialProtocols(deviceId);
+  const validatedProtocols = stateStore.getUsableCredentialProtocols(deviceId);
   const requiredProtocols = Array.from(new Set(profile.credentialIntents.map((intent) => intent.protocol)));
   const missingRequiredCredentials = requiredProtocols.filter(
     (protocol) => !validatedProtocols.includes(protocol),
@@ -482,10 +500,10 @@ export async function finalizeAdoptionRunIfReady(deviceId: string): Promise<Devi
   const requiredProtocols = Array.from(
     new Set(profileCredentialIntents.map((intent) => intent.protocol.trim().toLowerCase()).filter(Boolean)),
   );
-  const validatedProtocols = new Set(
-    stateStore.getValidatedCredentialProtocols(deviceId).map((protocol) => protocol.trim().toLowerCase()),
+  const usableProtocols = new Set(
+    stateStore.getUsableCredentialProtocols(deviceId).map((protocol) => protocol.trim().toLowerCase()),
   );
-  const missingRequiredCredentials = requiredProtocols.filter((protocol) => !validatedProtocols.has(protocol));
+  const missingRequiredCredentials = requiredProtocols.filter((protocol) => !usableProtocols.has(protocol));
   if (missingRequiredCredentials.length > 0) {
     const waiting: AdoptionRun = {
       ...run,

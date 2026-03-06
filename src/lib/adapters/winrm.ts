@@ -130,6 +130,36 @@ function observedWinrmPort(device: Device | undefined, secure: boolean): number 
   return secure ? 5986 : 5985;
 }
 
+function isIpLiteral(value: string): boolean {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return false;
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(trimmed)) {
+    return true;
+  }
+  return trimmed.includes(":");
+}
+
+function isSyntheticDiscoveryName(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return /^unknown-\d{1,3}(?:-\d{1,3}){3}$/.test(normalized)
+    || /^windows-\d{1,3}(?:-\d{1,3}){3}$/.test(normalized)
+    || /^linux-\d{1,3}(?:-\d{1,3}){3}$/.test(normalized)
+    || /^iot-\d{1,3}(?:-\d{1,3}){3}$/.test(normalized);
+}
+
+export function preferredWinrmHost(device: Device): string {
+  const hostname = device.hostname?.trim() ?? "";
+  const name = device.name.trim();
+
+  const candidates = [hostname, name]
+    .filter((value) => value.length > 0)
+    .filter((value) => !isIpLiteral(value))
+    .filter((value) => !isSyntheticDiscoveryName(value));
+
+  const fqdn = candidates.find((value) => value.includes("."));
+  return fqdn ?? candidates[0] ?? device.ip;
+}
+
 export async function resolvePowerShellRuntime(forceRefresh = false): Promise<PowerShellRuntimeResolution> {
   if (!forceRefresh && cachedRuntimePromise) {
     return cachedRuntimePromise;

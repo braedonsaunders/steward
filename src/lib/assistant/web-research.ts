@@ -51,6 +51,8 @@ const MAX_PAGE_HTML_CHARS = 450_000;
 const SEARCH_RESULT_SNIPPET_CHARS = 320;
 const PAGE_EXCERPT_CHARS = 1_800;
 const MIN_DIRECT_FETCH_TEXT_CHARS = 280;
+const MAX_RESULTS_LIMIT = 25;
+const MAX_DEEP_READ_PAGES_LIMIT = 12;
 const BLOCKED_HOST_SUFFIXES = [".local", ".internal", ".lan", ".home", ".home.arpa"];
 const NAMED_ENTITIES: Record<string, string> = {
   amp: "&",
@@ -364,8 +366,8 @@ export async function runWebResearch(
 ): Promise<WebResearchResult> {
   const trimmedQuery = query.trim();
   const timeoutMs = clampInt(options.timeoutMs, 3_000, 60_000, 18_000);
-  const maxResults = clampInt(options.maxResults, 1, 10, 5);
-  const deepReadPages = clampInt(options.deepReadPages, 0, 5, 2);
+  const maxResults = clampInt(options.maxResults, 1, MAX_RESULTS_LIMIT, 5);
+  const deepReadPages = clampInt(options.deepReadPages, 0, MAX_DEEP_READ_PAGES_LIMIT, 2);
 
   if (!trimmedQuery) {
     return {
@@ -421,7 +423,10 @@ export async function runWebResearch(
   const consultedPages: WebResearchPage[] = [];
   const warnings: string[] = [];
 
-  for (const result of results.slice(0, deepReadPages)) {
+  for (const result of results) {
+    if (consultedPages.length >= deepReadPages) {
+      break;
+    }
     const page = await readPublicPage(result.url, timeoutMs);
     if (!page) {
       warnings.push(`Could not read ${result.url}`);

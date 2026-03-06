@@ -2,11 +2,13 @@ import { randomUUID } from "node:crypto";
 import { dynamicTool, jsonSchema } from "ai";
 import { adapterRegistry } from "@/lib/adapters/registry";
 import { runWebResearch } from "@/lib/assistant/web-research";
+import { markCredentialValidatedFromUse } from "@/lib/adoption/credentials";
 import {
   computeDeviceStateHash,
   executeOperationWithGates,
 } from "@/lib/adapters/execution-kernel";
 import { observeBrowserSurfaces } from "@/lib/discovery/browser-observer";
+import { candidateToDevice } from "@/lib/discovery/classify";
 import { dedupeObservations } from "@/lib/discovery/evidence";
 import { fingerprintDevice } from "@/lib/discovery/fingerprint";
 import { runNmapDeepFingerprint } from "@/lib/discovery/nmap-deep";
@@ -16,6 +18,7 @@ import { getDefaultProvider } from "@/lib/llm/config";
 import { evaluatePolicy } from "@/lib/policy/engine";
 import { getAdoptionRecord, getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
 import { stateStore } from "@/lib/state/store";
+import { vault } from "@/lib/security/vault";
 import { runShell } from "@/lib/utils/shell";
 import { generateAndStoreDeviceWidget } from "@/lib/widgets/generator";
 import type {
@@ -80,6 +83,36 @@ const MUTATING_KINDS = new Set<OperationKind>([
   "network.config",
 ]);
 
+const WEB_RESEARCH_MAX_RESULTS_LIMIT = 25;
+const WEB_RESEARCH_DEEP_READ_LIMIT = 12;
+const WEB_RESEARCH_SECURITY_TERMS = [
+  "cve",
+  "cvss",
+  "vulnerability",
+  "vulnerabilities",
+  "security",
+  "exploit",
+  "advisory",
+  "patch",
+  "rce",
+  "xss",
+  "sqli",
+  "lpe",
+];
+const WEB_RESEARCH_BREADTH_TERMS = [
+  "compare",
+  "comparison",
+  "versus",
+  " vs ",
+  "alternatives",
+  "landscape",
+  "comprehensive",
+  "deep dive",
+  "timeline",
+  "history",
+  "best practices",
+];
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -90,6 +123,48 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
     return fallback;
   }
   return Math.max(min, Math.min(max, Math.floor(parsed)));
+}
+
+function countMatchingTerms(haystack: string, terms: readonly string[]): number {
+  return terms.reduce((count, term) => {
+    return haystack.includes(term) ? count + 1 : count;
+  }, 0);
+}
+
+function inferWebResearchBudget(
+  query: string,
+  timeoutMs: number,
+): { extraResults: number; extraDeepReads: number } {
+  const normalized = ` ${query.toLowerCase().replace(/\s+/g, " ").trim()} `;
+  const tokenCount = query.trim().split(/\s+/).filter(Boolean).length;
+  const securityMatches = countMatchingTerms(normalized, WEB_RESEARCH_SECURITY_TERMS);
+  const breadthMatches = countMatchingTerms(normalized, WEB_RESEARCH_BREADTH_TERMS);
+
+  let extraResults = 0;
+  let extraDeepReads = 0;
+
+  if (tokenCount >= 6) {
+    extraResults += 2;
+    extraDeepReads += 1;
+  }
+  if (securityMatches > 0) {
+    extraResults += 4;
+    extraDeepReads += 2;
+  }
+  if (breadthMatches > 0) {
+    extraResults += 3;
+    extraDeepReads += 1;
+  }
+
+  if (timeoutMs >= 24_000) {
+    extraResults += 2;
+    extraDeepReads += 1;
+  } else if (timeoutMs <= 10_000) {
+    extraResults = Math.max(0, extraResults - 1);
+    extraDeepReads = Math.max(0, extraDeepReads - 1);
+  }
+
+  return { extraResults, extraDeepReads };
 }
 
 function slugifyWidgetKey(value: string): string {
@@ -119,6 +194,13 @@ function toOperationKind(value: unknown): OperationKind | undefined {
 
 function shellEscapeSingleQuoted(value: string): string {
   return value.replace(/'/g, "'\"'\"'");
+}
+
+function sanitizeSnmpToken(value: string | undefined, fallback: string, pattern: RegExp): string {
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+  return pattern.test(trimmed) ? trimmed : fallback;
 }
 
 function normalizeCredentialProtocol(value: string): string {
@@ -359,6 +441,91 @@ function inputBoolean(input: Record<string, unknown>, ...keys: string[]): boolea
     }
   }
   return undefined;
+}
+
+interface PlaywrightChromium {
+  launch: (options: Record<string, unknown>) => Promise<{
+    newContext: (options: Record<string, unknown>) => Promise<{
+      newPage: () => Promise<{
+        on: (event: string, handler: (...args: unknown[]) => void) => void;
+        goto: (url: string, options?: Record<string, unknown>) => Promise<unknown>;
+        click: (selector: string, options?: Record<string, unknown>) => Promise<void>;
+        hover: (selector: string, options?: Record<string, unknown>) => Promise<void>;
+        fill: (selector: string, value: string, options?: Record<string, unknown>) => Promise<void>;
+        press: (selector: string, key: string, options?: Record<string, unknown>) => Promise<void>;
+        check: (selector: string, options?: Record<string, unknown>) => Promise<void>;
+        uncheck: (selector: string, options?: Record<string, unknown>) => Promise<void>;
+        selectOption: (selector: string, values: string | string[], options?: Record<string, unknown>) => Promise<void>;
+        waitForSelector: (selector: string, options?: Record<string, unknown>) => Promise<unknown>;
+        waitForURL: (urlOrRegex: string | RegExp, options?: Record<string, unknown>) => Promise<unknown>;
+        waitForTimeout: (timeout: number) => Promise<void>;
+        title: () => Promise<string>;
+        url: () => string;
+        content: () => Promise<string>;
+        screenshot: (options?: Record<string, unknown>) => Promise<Uint8Array>;
+        evaluate: <T>(fn: (...args: unknown[]) => T, arg?: unknown) => Promise<T>;
+        close: () => Promise<void>;
+      }>;
+      close: () => Promise<void>;
+    }>;
+    close: () => Promise<void>;
+  }>;
+}
+
+async function loadPlaywrightChromium(): Promise<PlaywrightChromium | null> {
+  try {
+    const moduleName = "playwright";
+    const mod = await import(moduleName);
+    const chromium = (mod as Record<string, unknown>).chromium;
+    if (chromium && typeof chromium === "object" && "launch" in chromium) {
+      return chromium as PlaywrightChromium;
+    }
+  } catch {
+    // Playwright may be unavailable in minimal installs.
+  }
+  return null;
+}
+
+async function resolveBrowserCredential(device: Device): Promise<{
+  credentialId?: string;
+  username?: string;
+  password?: string;
+}> {
+  const candidates = stateStore.getDeviceCredentials(device.id)
+    .filter((credential) => credential.protocol.toLowerCase() === "http-api");
+  if (candidates.length === 0) {
+    return {};
+  }
+  const priority = ["validated", "provided", "invalid", "pending"] as const;
+  const sorted = [...candidates].sort((a, b) => {
+    const aPriority = priority.indexOf(a.status as (typeof priority)[number]);
+    const bPriority = priority.indexOf(b.status as (typeof priority)[number]);
+    if (aPriority !== bPriority) {
+      return (aPriority === -1 ? 99 : aPriority) - (bPriority === -1 ? 99 : bPriority);
+    }
+    return b.updatedAt.localeCompare(a.updatedAt);
+  });
+  const selected = sorted[0];
+  if (!selected) {
+    return {};
+  }
+  const secret = await vault.getSecret(selected.vaultSecretRef);
+  if (!secret || secret.trim().length === 0) {
+    return { credentialId: selected.id, username: selected.accountLabel?.trim() };
+  }
+  return {
+    credentialId: selected.id,
+    username: selected.accountLabel?.trim(),
+    password: secret,
+  };
+}
+
+function hasSnmpInputHints(input: Record<string, unknown>): boolean {
+  const community = inputString(input, "community", "snmp_community");
+  const version = inputString(input, "snmp_version", "version");
+  const oid = inputString(input, "oid", "snmp_oid");
+  const port = coercePort(input.snmp_port) ?? coercePort(input.port);
+  return Boolean(community || version || oid || port === 161);
 }
 
 function inputObject(input: Record<string, unknown>, ...keys: string[]): Record<string, unknown> | undefined {
@@ -737,12 +904,24 @@ function defaultCommandTemplate(
       return `docker -H ${dockerHostTarget(device, input)} ${command}`;
     }
     if (adapterId === "snmp") {
-      const community = shellEscapeSingleQuoted(inputString(input, "community", "snmp_community") ?? "public");
-      const version = inputString(input, "snmp_version", "version") ?? "2c";
-      const oid = inputString(input, "oid", "snmp_oid") ?? "SNMPv2-MIB::sysDescr.0";
+      const community = sanitizeSnmpToken(
+        inputString(input, "community", "snmp_community"),
+        "public",
+        /^[A-Za-z0-9_.:@+-]{1,128}$/,
+      );
+      const version = sanitizeSnmpToken(
+        inputString(input, "snmp_version", "version"),
+        "2c",
+        /^(1|2c|3)$/i,
+      );
+      const oid = sanitizeSnmpToken(
+        inputString(input, "oid", "snmp_oid"),
+        "SNMPv2-MIB::sysDescr.0",
+        /^[A-Za-z0-9_.:-]+$/,
+      );
       const port = inputPort(input) ?? 161;
       const command = userCommand
-        || `snmpget -v${version} -c '${community}' {{host}}:${port} ${oid} 2>/dev/null`;
+        || `snmpget -v${version} -c ${community} {{host}}:${port} ${oid}`;
       return command;
     }
     const command = userCommand || "uname -a; uptime; df -h; free -m";
@@ -787,6 +966,7 @@ function defaultBrokerRequest(
     const authentication = winrmAuthenticationPreference(input);
     const port = preferredWinrmPort(device, inputPort(input), secure);
     const skipCertChecks = winrmSkipCertChecksPreference(input);
+    const host = inputString(input, "host", "computer_name", "winrm_host");
 
     if (kind === "shell.command") {
       const command = typeof input.command === "string" && input.command.trim().length > 0
@@ -795,6 +975,7 @@ function defaultBrokerRequest(
       return {
         protocol: "winrm",
         command,
+        ...(host ? { host } : {}),
         ...(port ? { port } : {}),
         ...(secure !== undefined ? { useSsl: secure } : {}),
         ...(skipCertChecks !== undefined ? { skipCertChecks } : {}),
@@ -808,6 +989,7 @@ function defaultBrokerRequest(
       return {
         protocol: "winrm",
         command: `${kind === "service.restart" ? "Restart-Service" : "Stop-Service"} -Name '${service}' -ErrorAction Stop`,
+        ...(host ? { host } : {}),
         ...(port ? { port } : {}),
         ...(secure !== undefined ? { useSsl: secure } : {}),
         ...(skipCertChecks !== undefined ? { skipCertChecks } : {}),
@@ -953,6 +1135,8 @@ function buildCommonToolArgumentProperties(): Record<string, unknown> {
     community: { type: "string", description: "Optional SNMP community string for this call." },
     snmp_version: { type: "string", description: "Optional SNMP version override such as 1, 2c, or 3." },
     oid: { type: "string", description: "Optional SNMP OID override." },
+    host: { type: "string", description: "Optional remote host override for brokered protocols such as WinRM." },
+    computer_name: { type: "string", description: "Alias for WinRM host override." },
     input: {
       type: "object",
       description: "Optional nested arguments object. Top-level arguments are also accepted.",
@@ -1044,9 +1228,19 @@ function buildOperationFromDescriptor(
   const kind = pickOperationKind(descriptor, input);
   const execution = descriptor.execution;
 
-  const adapterId = typeof input.adapter_id === "string"
+  const explicitAdapterId = typeof input.adapter_id === "string"
     ? input.adapter_id.trim()
-    : (execution.adapterId ?? inferAdapterForKind(kind, device));
+    : "";
+  const protocolHint = typeof input.protocol === "string"
+    ? normalizeCredentialProtocol(input.protocol)
+    : "";
+
+  const adapterId = explicitAdapterId
+    || protocolHint
+    || execution.adapterId
+    || (kind === "shell.command" && hasSnmpInputHints(input)
+      ? "snmp"
+      : inferAdapterForKind(kind, device));
 
   const mode = resolveMode(kind, input.mode ?? execution.mode);
 
@@ -1441,6 +1635,8 @@ export async function buildAdapterSkillTools(
         deviceId: device.id,
         deviceName: device.name,
         adapterId,
+        summary: execution.summary,
+        reason: execution.ok ? undefined : execution.summary,
         output: execution.output,
         gates: execution.gateResults,
       };
@@ -1698,13 +1894,11 @@ export async function buildAdapterSkillTools(
         stateStore.addDiscoveryObservations(mergedObservations);
       }
 
+      const reclassified = candidateToDevice(candidate, device);
       const updatedDevice: Device = {
-        ...device,
-        services: mergeServiceSet(device.services, candidate.services),
-        hostname: device.hostname ?? candidate.hostname,
-        os: device.os ?? candidate.os,
+        ...reclassified,
         metadata: {
-          ...device.metadata,
+          ...reclassified.metadata,
           deepProbe: {
             lastRunAt: nowIso(),
             summary,
@@ -1714,6 +1908,13 @@ export async function buildAdapterSkillTools(
         lastChangedAt: nowIso(),
       };
       await stateStore.upsertDevice(updatedDevice);
+      if (updatedDevice.name !== device.name) {
+        for (const session of stateStore.getChatSessions()) {
+          if (session.deviceId === device.id && session.title.startsWith("[Onboarding]")) {
+            stateStore.updateChatSessionTitle(session.id, `[Onboarding] ${updatedDevice.name}`);
+          }
+        }
+      }
 
       await stateStore.addAction({
         actor: "user",
@@ -1721,6 +1922,10 @@ export async function buildAdapterSkillTools(
         message: `Deep probe completed for ${device.name}`,
         context: {
           deviceId: device.id,
+          nameBefore: device.name,
+          nameAfter: updatedDevice.name,
+          typeBefore: device.type,
+          typeAfter: updatedDevice.type,
           servicesBefore: device.services.length,
           servicesAfter: updatedDevice.services.length,
           observations: mergedObservations.length,
@@ -1731,7 +1936,8 @@ export async function buildAdapterSkillTools(
       return {
         ok: true,
         deviceId: device.id,
-        deviceName: device.name,
+        deviceName: updatedDevice.name,
+        deviceType: updatedDevice.type,
         observations: mergedObservations.length,
         services: updatedDevice.services.map((service) => `${service.name}:${service.port}`),
         summary,
@@ -1776,16 +1982,33 @@ export async function buildAdapterSkillTools(
         };
       }
 
+      const hasMaxResultsArg = Number.isFinite(Number(args.max_results));
+      const hasDeepReadArg = Number.isFinite(Number(args.deep_read_pages));
+      const inferredBudget = inferWebResearchBudget(query, runtime.webResearchTimeoutMs);
+
+      const maxResults = hasMaxResultsArg
+        ? clampInt(args.max_results, 1, WEB_RESEARCH_MAX_RESULTS_LIMIT, runtime.webResearchMaxResults)
+        : clampInt(
+          runtime.webResearchMaxResults + inferredBudget.extraResults,
+          1,
+          WEB_RESEARCH_MAX_RESULTS_LIMIT,
+          runtime.webResearchMaxResults,
+        );
+
+      const requestedDeepReads = hasDeepReadArg
+        ? clampInt(args.deep_read_pages, 0, WEB_RESEARCH_DEEP_READ_LIMIT, runtime.webResearchDeepReadPages)
+        : clampInt(
+          runtime.webResearchDeepReadPages + inferredBudget.extraDeepReads,
+          0,
+          WEB_RESEARCH_DEEP_READ_LIMIT,
+          runtime.webResearchDeepReadPages,
+        );
+      const deepReadPages = Math.min(requestedDeepReads, maxResults);
+
       const result = await runWebResearch(query, {
         timeoutMs: runtime.webResearchTimeoutMs,
-        maxResults: Math.min(
-          runtime.webResearchMaxResults,
-          clampInt(args.max_results, 1, 10, runtime.webResearchMaxResults),
-        ),
-        deepReadPages: Math.min(
-          runtime.webResearchDeepReadPages,
-          clampInt(args.deep_read_pages, 0, 5, runtime.webResearchDeepReadPages),
-        ),
+        maxResults,
+        deepReadPages,
       });
 
       await stateStore.addAction({
@@ -1803,6 +2026,436 @@ export async function buildAdapterSkillTools(
       });
 
       return result;
+    },
+  });
+
+  tools.steward_browser_browse = dynamicTool({
+    description: "Browse web UIs with Playwright as a first-class tool for login, navigation, diagnostics, and interactive changes.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        url: {
+          type: "string",
+          description: "Absolute URL to open.",
+        },
+        device_id: {
+          type: "string",
+          description: "Optional device id/name/IP for using stored credentials and logging context.",
+        },
+        username: {
+          type: "string",
+          description: "Optional username for login form fill.",
+        },
+        password: {
+          type: "string",
+          description: "Optional password for login form fill.",
+        },
+        use_stored_credentials: {
+          type: "boolean",
+          description: "When true, use stored http-api credential for the device if username/password are not provided.",
+        },
+        username_selector: {
+          type: "string",
+          description: "CSS selector for username field.",
+        },
+        password_selector: {
+          type: "string",
+          description: "CSS selector for password field.",
+        },
+        submit_selector: {
+          type: "string",
+          description: "Optional CSS selector for login submit button.",
+        },
+        wait_for_selector: {
+          type: "string",
+          description: "Optional CSS selector expected after actions complete.",
+        },
+        post_login_wait_ms: {
+          type: "integer",
+          description: "Optional wait after login submit.",
+        },
+        collect_diagnostics: {
+          type: "boolean",
+          description: "Capture browser console errors and failed network requests.",
+        },
+        include_html: {
+          type: "boolean",
+          description: "Include final page HTML snapshot in the response.",
+        },
+        mark_credential_validated: {
+          type: "boolean",
+          description: "When true, mark the stored credential validated after successful browser-authenticated access.",
+        },
+        steps: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              action: {
+                type: "string",
+                enum: [
+                  "goto",
+                  "click",
+                  "hover",
+                  "fill",
+                  "press",
+                  "check",
+                  "uncheck",
+                  "select",
+                  "wait_for_selector",
+                  "wait_for_url",
+                  "wait_for_timeout",
+                  "extract_text",
+                  "extract_html",
+                  "expect_text",
+                  "evaluate",
+                  "screenshot",
+                ],
+              },
+              selector: { type: "string" },
+              value: { type: "string" },
+              url: { type: "string" },
+              script: { type: "string" },
+              label: { type: "string" },
+              full_page: { type: "boolean" },
+              path: { type: "string" },
+              timeout_ms: { type: "integer" },
+            },
+            required: ["action"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["url"],
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const targetUrl = inputString(args, "url");
+      if (!targetUrl) {
+        return { ok: false, error: "url is required." };
+      }
+      let parsedUrl: URL;
+      try {
+        parsedUrl = new URL(targetUrl);
+      } catch {
+        return { ok: false, error: "url must be an absolute URL." };
+      }
+
+      const device = await resolveDeviceByTarget(inputString(args, "device_id"), options?.attachedDeviceId);
+      const useStoredCredentials = args.use_stored_credentials !== false;
+      const markCredentialValidated = args.mark_credential_validated !== false;
+      const chromium = await loadPlaywrightChromium();
+      if (!chromium) {
+        return {
+          ok: false,
+          error: "Playwright is not available on this Steward host.",
+        };
+      }
+
+      const timeoutMs = clampInt(args.post_login_wait_ms, 0, 60_000, 1_000);
+      const providedUsername = inputString(args, "username");
+      const providedPassword = inputString(args, "password");
+      const stored = device && useStoredCredentials
+        ? await resolveBrowserCredential(device)
+        : {};
+      const username = providedUsername ?? stored.username;
+      const password = providedPassword ?? stored.password;
+
+      const usernameSelector = inputString(args, "username_selector");
+      const passwordSelector = inputString(args, "password_selector");
+      const submitSelector = inputString(args, "submit_selector");
+      const waitForSelector = inputString(args, "wait_for_selector");
+      const collectDiagnostics = inputBoolean(args, "collect_diagnostics") !== false;
+      const includeHtml = inputBoolean(args, "include_html") === true;
+      const rawSteps = Array.isArray(args.steps) ? args.steps.filter(isRecord) : [];
+
+      let browser: Awaited<ReturnType<PlaywrightChromium["launch"]>> | null = null;
+      let context: Awaited<ReturnType<Awaited<ReturnType<PlaywrightChromium["launch"]>>["newContext"]>> | null = null;
+      let page: Awaited<ReturnType<Awaited<ReturnType<Awaited<ReturnType<PlaywrightChromium["launch"]>>["newContext"]>>["newPage"]>> | null = null;
+      try {
+        browser = await chromium.launch({ headless: true });
+        context = await browser.newContext({
+          ignoreHTTPSErrors: true,
+        });
+        page = await context.newPage();
+
+        const consoleErrors: string[] = [];
+        const requestFailures: string[] = [];
+        const pageErrors: string[] = [];
+        const stepResults: Array<Record<string, unknown>> = [];
+        if (collectDiagnostics) {
+          page.on("console", (...args) => {
+            const message = args[0] as { type?: () => string; text?: () => string } | undefined;
+            const type = message?.type?.() ?? "log";
+            const text = message?.text?.() ?? "";
+            if ((type === "error" || type === "warning") && text.trim().length > 0) {
+              consoleErrors.push(`${type}: ${text.trim()}`);
+            }
+          });
+          page.on("requestfailed", (...args) => {
+            const request = args[0] as {
+              method?: () => string;
+              url?: () => string;
+              failure?: () => { errorText?: string } | null;
+            } | undefined;
+            const method = request?.method?.() ?? "REQUEST";
+            const url = request?.url?.() ?? "unknown-url";
+            const failure = request?.failure?.()?.errorText ?? "request failed";
+            requestFailures.push(`${method} ${url} :: ${failure}`);
+          });
+          page.on("pageerror", (...args) => {
+            const err = args[0];
+            const text = err instanceof Error ? err.message : String(err);
+            if (text.trim().length > 0) {
+              pageErrors.push(text.trim());
+            }
+          });
+        }
+
+        await page.goto(parsedUrl.toString(), { waitUntil: "domcontentloaded", timeout: 30_000 });
+
+        let usedStoredCredential = false;
+        if (usernameSelector && passwordSelector && username && password) {
+          await page.fill(usernameSelector, username, { timeout: 15_000 });
+          await page.fill(passwordSelector, password, { timeout: 15_000 });
+          if (submitSelector) {
+            await page.click(submitSelector, { timeout: 15_000 });
+          } else {
+            await page.press(passwordSelector, "Enter", { timeout: 15_000 });
+          }
+          if (timeoutMs > 0) {
+            await page.waitForTimeout(timeoutMs);
+          }
+          usedStoredCredential = Boolean(stored.credentialId) && !providedPassword;
+        }
+
+        for (const step of rawSteps) {
+          const action = typeof step.action === "string" ? step.action : "";
+          const selector = typeof step.selector === "string" ? step.selector : "";
+          const value = typeof step.value === "string" ? step.value : "";
+          const url = typeof step.url === "string" ? step.url : "";
+          const script = typeof step.script === "string" ? step.script : "";
+          const label = typeof step.label === "string" ? step.label : undefined;
+          const screenshotPath = typeof step.path === "string" ? step.path : undefined;
+          const fullPage = typeof step.full_page === "boolean" ? step.full_page : true;
+          const stepTimeout = clampInt(step.timeout_ms, 200, 120_000, 15_000);
+          try {
+            if (action === "goto") {
+              const destination = url || value;
+              if (!destination) {
+                throw new Error("goto requires url or value");
+              }
+              await page.goto(destination, { waitUntil: "domcontentloaded", timeout: stepTimeout });
+              stepResults.push({ action, label, ok: true, url: page.url() });
+            } else if (action === "click") {
+              if (!selector) throw new Error("click requires selector");
+              await page.click(selector, { timeout: stepTimeout });
+              stepResults.push({ action, label, ok: true, selector });
+            } else if (action === "hover") {
+              if (!selector) throw new Error("hover requires selector");
+              await page.hover(selector, { timeout: stepTimeout });
+              stepResults.push({ action, label, ok: true, selector });
+            } else if (action === "fill") {
+              if (!selector) throw new Error("fill requires selector");
+              await page.fill(selector, value, { timeout: stepTimeout });
+              stepResults.push({ action, label, ok: true, selector });
+            } else if (action === "press") {
+              if (!selector) throw new Error("press requires selector");
+              await page.press(selector, value || "Enter", { timeout: stepTimeout });
+              stepResults.push({ action, label, ok: true, selector, key: value || "Enter" });
+            } else if (action === "check") {
+              if (!selector) throw new Error("check requires selector");
+              await page.check(selector, { timeout: stepTimeout });
+              stepResults.push({ action, label, ok: true, selector });
+            } else if (action === "uncheck") {
+              if (!selector) throw new Error("uncheck requires selector");
+              await page.uncheck(selector, { timeout: stepTimeout });
+              stepResults.push({ action, label, ok: true, selector });
+            } else if (action === "select") {
+              if (!selector) throw new Error("select requires selector");
+              const values = value.includes("|")
+                ? value.split("|").map((item) => item.trim()).filter(Boolean)
+                : value;
+              await page.selectOption(selector, values, { timeout: stepTimeout });
+              stepResults.push({ action, label, ok: true, selector, value });
+            } else if (action === "wait_for_selector") {
+              if (!selector) throw new Error("wait_for_selector requires selector");
+              await page.waitForSelector(selector, { timeout: stepTimeout });
+              stepResults.push({ action, label, ok: true, selector });
+            } else if (action === "wait_for_url") {
+              const destination = url || value;
+              if (!destination) throw new Error("wait_for_url requires url or value");
+              await page.waitForURL(destination, { timeout: stepTimeout });
+              stepResults.push({ action, label, ok: true, url: page.url() });
+            } else if (action === "wait_for_timeout") {
+              const waitMs = clampInt(step.timeout_ms, 0, 120_000, 1_000);
+              await page.waitForTimeout(waitMs);
+              stepResults.push({ action, label, ok: true, waitMs });
+            } else if (action === "extract_text") {
+              const extracted = await page.evaluate((args) => {
+                const s = typeof args === "object" && args !== null && "selector" in args
+                  ? String((args as Record<string, unknown>).selector ?? "")
+                  : "";
+                if (!s) {
+                  return document.body?.innerText ?? "";
+                }
+                const element = document.querySelector(s);
+                return element?.textContent ?? "";
+              }, { selector });
+              stepResults.push({ action, label, ok: true, selector: selector || "body", text: String(extracted).trim().slice(0, 2_000) });
+            } else if (action === "extract_html") {
+              const extracted = await page.evaluate((args) => {
+                const s = typeof args === "object" && args !== null && "selector" in args
+                  ? String((args as Record<string, unknown>).selector ?? "")
+                  : "";
+                if (!s) {
+                  return document.documentElement?.outerHTML ?? "";
+                }
+                const element = document.querySelector(s);
+                return element?.outerHTML ?? "";
+              }, { selector });
+              stepResults.push({ action, label, ok: true, selector: selector || "html", htmlPreview: String(extracted).trim().slice(0, 2_000) });
+            } else if (action === "expect_text") {
+              if (!value) throw new Error("expect_text requires value");
+              const matched = await page.evaluate((args) => {
+                const input = args as Record<string, unknown>;
+                const selectorValue = typeof input.selector === "string" ? input.selector : "";
+                const expected = typeof input.expected === "string" ? input.expected : "";
+                const text = selectorValue
+                  ? (document.querySelector(selectorValue)?.textContent ?? "")
+                  : (document.body?.innerText ?? "");
+                return text.includes(expected);
+              }, { selector, expected: value });
+              if (!matched) {
+                throw new Error(`Expected text not found: ${value}`);
+              }
+              stepResults.push({ action, label, ok: true, selector: selector || "body", expected: value });
+            } else if (action === "evaluate") {
+              if (!script) throw new Error("evaluate requires script");
+              const evalResult = await page.evaluate((source) => {
+                const executable = new Function(`return (${source});`)();
+                if (typeof executable === "function") {
+                  return executable();
+                }
+                return executable;
+              }, script);
+              stepResults.push({
+                action,
+                label,
+                ok: true,
+                result: typeof evalResult === "string"
+                  ? evalResult.slice(0, 2_000)
+                  : JSON.stringify(evalResult).slice(0, 2_000),
+              });
+            } else if (action === "screenshot") {
+              const shot = await page.screenshot({
+                ...(screenshotPath ? { path: screenshotPath } : {}),
+                fullPage,
+              });
+              const screenshotBase64 = screenshotPath
+                ? undefined
+                : Buffer.from(shot).toString("base64");
+              stepResults.push({
+                action,
+                label,
+                ok: true,
+                ...(screenshotPath
+                  ? { path: screenshotPath }
+                  : {
+                    screenshotBase64,
+                    mimeType: "image/png",
+                  }),
+                bytes: shot.byteLength,
+              });
+            } else {
+              throw new Error(`Unsupported step action: ${action}`);
+            }
+          } catch (stepError) {
+            const message = stepError instanceof Error ? stepError.message : String(stepError);
+            throw new Error(`Browser step failed (${action || "unknown"}${label ? `:${label}` : ""}): ${message}`);
+          }
+        }
+
+        if (waitForSelector) {
+          await page.waitForSelector(waitForSelector, { timeout: 15_000 });
+        }
+
+        const finalUrl = page.url();
+        const title = await page.title();
+        const text = await page.evaluate(() => document.body?.innerText ?? "");
+        const contentPreview = text.trim().replace(/\s+/g, " ").slice(0, 1_200);
+        const htmlPreview = includeHtml
+          ? (await page.content()).slice(0, 6_000)
+          : undefined;
+
+        if (device && usedStoredCredential && markCredentialValidated && stored.credentialId) {
+          await markCredentialValidatedFromUse({
+            deviceId: device.id,
+            credentialId: stored.credentialId,
+            actor: "user",
+            method: "playwright.browser",
+            details: {
+              url: parsedUrl.toString(),
+              finalUrl,
+              title,
+            },
+          });
+        }
+
+        return {
+          ok: true,
+          deviceId: device?.id,
+          deviceName: device?.name,
+          url: parsedUrl.toString(),
+          finalUrl,
+          title,
+          usedStoredCredential,
+          credentialId: usedStoredCredential ? stored.credentialId : undefined,
+          contentPreview,
+          htmlPreview,
+          stepsExecuted: stepResults.length,
+          stepResults,
+          diagnostics: collectDiagnostics
+            ? {
+              consoleErrors: consoleErrors.slice(0, 40),
+              requestFailures: requestFailures.slice(0, 40),
+              pageErrors: pageErrors.slice(0, 20),
+            }
+            : undefined,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          ok: false,
+          error: `Playwright browser flow failed: ${message}`,
+          url: parsedUrl.toString(),
+          deviceId: device?.id,
+          deviceName: device?.name,
+        };
+      } finally {
+        if (page) {
+          try {
+            await page.close();
+          } catch {
+            // ignore
+          }
+        }
+        if (context) {
+          try {
+            await context.close();
+          } catch {
+            // ignore
+          }
+        }
+        if (browser) {
+          try {
+            await browser.close();
+          } catch {
+            // ignore
+          }
+        }
+      }
     },
   });
 

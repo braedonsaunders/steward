@@ -1,4 +1,6 @@
 import { exec, execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
 
 export interface ShellResult {
   ok: boolean;
@@ -7,12 +9,43 @@ export interface ShellResult {
   code: number;
 }
 
+function buildShellEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (process.platform !== "win32") {
+    return baseEnv;
+  }
+
+  const toolDirs = [
+    process.env.ProgramFiles ? path.join(process.env.ProgramFiles, "Nmap") : "",
+    process.env["ProgramFiles(x86)"] ? path.join(process.env["ProgramFiles(x86)"], "Nmap") : "",
+    process.env.ProgramFiles ? path.join(process.env.ProgramFiles, "Wireshark") : "",
+    process.env["ProgramFiles(x86)"] ? path.join(process.env["ProgramFiles(x86)"], "Wireshark") : "",
+    process.env.ProgramFiles ? path.join(process.env.ProgramFiles, "Net-SNMP", "bin") : "",
+    process.env["ProgramFiles(x86)"] ? path.join(process.env["ProgramFiles(x86)"], "Net-SNMP", "bin") : "",
+    "C:\\usr\\bin",
+    "C:\\usr\\sbin",
+    "C:\\ProgramData\\chocolatey\\bin",
+  ].filter((candidate) => candidate.length > 0 && existsSync(candidate));
+
+  const currentPath = baseEnv.PATH ?? "";
+  const existing = new Set(currentPath.split(path.delimiter).map((entry) => entry.toLowerCase()));
+  const missing = toolDirs.filter((entry) => !existing.has(entry.toLowerCase()));
+  if (missing.length === 0) {
+    return baseEnv;
+  }
+
+  return {
+    ...baseEnv,
+    PATH: `${currentPath}${currentPath.length > 0 ? path.delimiter : ""}${missing.join(path.delimiter)}`,
+  };
+}
+
 export const runShell = (
   command: string,
   timeoutMs = 15_000,
 ): Promise<ShellResult> => {
+  const env = buildShellEnv(process.env);
   return new Promise((resolve) => {
-    exec(command, { timeout: timeoutMs }, (error, stdout, stderr) => {
+    exec(command, { timeout: timeoutMs, env }, (error, stdout, stderr) => {
       if (!error) {
         resolve({
           ok: true,
@@ -39,8 +72,9 @@ export const runCommand = (
   args: string[],
   timeoutMs = 15_000,
 ): Promise<ShellResult> => {
+  const env = buildShellEnv(process.env);
   return new Promise((resolve) => {
-    execFile(file, args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => {
+    execFile(file, args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, env }, (error, stdout, stderr) => {
       if (!error) {
         resolve({
           ok: true,

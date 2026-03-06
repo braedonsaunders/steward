@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { withClientApiToken } from "@/lib/auth/client-token";
 import { useSteward } from "@/lib/hooks/use-steward";
-import type { DeviceType } from "@/lib/state/types";
+import { DEVICE_TYPE_VALUES, type DeviceType } from "@/lib/state/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -13,34 +13,17 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
 
-const DEVICE_TYPE_OPTIONS: DeviceType[] = [
-  "server",
-  "workstation",
-  "router",
-  "firewall",
-  "switch",
-  "access-point",
-  "camera",
-  "nas",
-  "printer",
-  "iot",
-  "container-host",
-  "hypervisor",
-  "unknown",
-];
+const DEVICE_TYPE_OPTIONS: DeviceType[] = [...DEVICE_TYPE_VALUES];
 
 export function DeviceSettingsPanel({ deviceId }: { deviceId: string }) {
-  const { devices, renameDevice, setDeviceAdoptionStatus, refresh } = useSteward();
+  const { devices, setDeviceAdoptionStatus, refresh } = useSteward();
   const device = devices.find((item) => item.id === deviceId);
 
   const [renameValue, setRenameValue] = useState(device?.name ?? "");
   const [categoryValue, setCategoryValue] = useState<DeviceType>(device?.type ?? "unknown");
   const [operatorNotes, setOperatorNotes] = useState("");
   const [structuredMemoryJson, setStructuredMemoryJson] = useState("{}");
-  const [savingRename, setSavingRename] = useState(false);
-  const [savingCategory, setSavingCategory] = useState(false);
-  const [savingNotes, setSavingNotes] = useState(false);
-  const [savingStructuredMemory, setSavingStructuredMemory] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
   const [savingAdoption, setSavingAdoption] = useState(false);
   const [confirmAdoptionOpen, setConfirmAdoptionOpen] = useState(false);
   const [pendingAdoptionStatus, setPendingAdoptionStatus] = useState<"discovered" | "ignored" | null>(null);
@@ -65,14 +48,18 @@ export function DeviceSettingsPanel({ deviceId }: { deviceId: string }) {
     && (device.metadata.notes as Record<string, unknown>).structuredContext !== null
     ? (device.metadata.notes as Record<string, unknown>).structuredContext as Record<string, unknown>
     : {}), [device]);
+  const existingStructuredContextJson = useMemo(() => JSON.stringify(existingStructuredContext, null, 2), [existingStructuredContext]);
+  const currentDeviceId = device?.id;
+  const currentDeviceName = device?.name ?? "";
+  const currentDeviceType = device?.type ?? "unknown";
 
   useEffect(() => {
-    if (!device) return;
-    setRenameValue(device.name);
-    setCategoryValue(device.type);
+    if (!currentDeviceId) return;
+    setRenameValue(currentDeviceName);
+    setCategoryValue(currentDeviceType);
     setOperatorNotes(existingOperatorNotes);
-    setStructuredMemoryJson(JSON.stringify(existingStructuredContext, null, 2));
-  }, [device, existingOperatorNotes, existingStructuredContext]);
+    setStructuredMemoryJson(existingStructuredContextJson);
+  }, [currentDeviceId, currentDeviceName, currentDeviceType, existingOperatorNotes, existingStructuredContextJson]);
 
   if (!device) {
     return null;
@@ -80,40 +67,13 @@ export function DeviceSettingsPanel({ deviceId }: { deviceId: string }) {
 
   const adoptionStatus = getDeviceAdoptionStatus(device);
 
-  const saveRename = async () => {
-    if (!renameValue.trim() || renameValue.trim() === device.name) return;
-    setSavingRename(true);
-    try {
-      await renameDevice(device.id, renameValue.trim());
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to rename device");
-    } finally {
-      setSavingRename(false);
-    }
-  };
-
-  const saveCategory = async () => {
-    if (categoryValue === device.type) return;
-    setSavingCategory(true);
-    try {
-      const res = await fetch(`/api/devices/${device.id}`, withClientApiToken({
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ type: categoryValue }),
-      }));
-      const data = (await res.json()) as { error?: string };
-      if (!res.ok) {
-        throw new Error(data.error ?? "Failed to update category");
-      }
-      await refresh();
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update category");
-    } finally {
-      setSavingCategory(false);
-    }
-  };
+  const trimmedRenameValue = renameValue.trim();
+  const hasRenameChange = trimmedRenameValue.length > 0 && trimmedRenameValue !== device.name;
+  const hasCategoryChange = categoryValue !== device.type;
+  const trimmedOperatorNotes = operatorNotes.trim();
+  const hasOperatorNotesChange = trimmedOperatorNotes !== existingOperatorNotes.trim();
+  const hasStructuredMemoryEdit = structuredMemoryJson.trim() !== existingStructuredContextJson.trim();
+  const hasPendingChanges = hasRenameChange || hasCategoryChange || hasOperatorNotesChange || hasStructuredMemoryEdit;
 
   const saveAdoption = async (status: "discovered" | "adopted" | "ignored"): Promise<boolean> => {
     if (status === adoptionStatus) return true;
@@ -148,52 +108,51 @@ export function DeviceSettingsPanel({ deviceId }: { deviceId: string }) {
     setPendingAdoptionStatus(null);
   };
 
-  const saveOperatorNotes = async () => {
-    setSavingNotes(true);
+  const saveSettings = async () => {
+    if (!hasPendingChanges) return;
+    setSavingSettings(true);
     try {
-      const res = await fetch(`/api/devices/${device.id}`, withClientApiToken({
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ operatorNotes: operatorNotes.trim() || null }),
-      }));
-      const data = (await res.json()) as { error?: string };
-      if (!res.ok) {
-        throw new Error(data.error ?? "Failed to save notes");
+      const patchPayload: Record<string, unknown> = {};
+      if (hasRenameChange) {
+        patchPayload.name = trimmedRenameValue;
       }
+      if (hasCategoryChange) {
+        patchPayload.type = categoryValue;
+      }
+      if (hasOperatorNotesChange) {
+        patchPayload.operatorNotes = trimmedOperatorNotes || null;
+      }
+      if (hasStructuredMemoryEdit) {
+        const parsed = structuredMemoryJson.trim().length > 0
+          ? JSON.parse(structuredMemoryJson)
+          : {};
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          throw new Error("Structured memory must be a JSON object.");
+        }
+
+        if (JSON.stringify(parsed) !== JSON.stringify(existingStructuredContext)) {
+          patchPayload.operatorMemoryJson = parsed;
+        }
+      }
+
+      if (Object.keys(patchPayload).length > 0) {
+        const res = await fetch(`/api/devices/${device.id}`, withClientApiToken({
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(patchPayload),
+        }));
+        const data = (await res.json()) as { error?: string };
+        if (!res.ok) {
+          throw new Error(data.error ?? "Failed to save device settings");
+        }
+      }
+
       await refresh();
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save notes");
+      setError(err instanceof Error ? err.message : "Failed to save device settings");
     } finally {
-      setSavingNotes(false);
-    }
-  };
-
-  const saveStructuredMemory = async () => {
-    setSavingStructuredMemory(true);
-    try {
-      const parsed = structuredMemoryJson.trim().length > 0
-        ? JSON.parse(structuredMemoryJson)
-        : {};
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-        throw new Error("Structured memory must be a JSON object.");
-      }
-
-      const res = await fetch(`/api/devices/${device.id}`, withClientApiToken({
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ operatorMemoryJson: parsed }),
-      }));
-      const data = (await res.json()) as { error?: string };
-      if (!res.ok) {
-        throw new Error(data.error ?? "Failed to save structured memory");
-      }
-      await refresh();
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save structured memory");
-    } finally {
-      setSavingStructuredMemory(false);
+      setSavingSettings(false);
     }
   };
 
@@ -206,31 +165,21 @@ export function DeviceSettingsPanel({ deviceId }: { deviceId: string }) {
       <CardContent className="space-y-4">
         <div className="space-y-2">
           <Label>Display Name</Label>
-          <div className="flex gap-2">
-            <Input value={renameValue} onChange={(e) => setRenameValue(e.target.value)} />
-            <Button onClick={() => void saveRename()} disabled={savingRename || !renameValue.trim()}>
-              {savingRename ? "Saving..." : "Save"}
-            </Button>
-          </div>
+          <Input value={renameValue} onChange={(event) => setRenameValue(event.target.value)} />
         </div>
 
         <div className="space-y-2">
           <Label>Category</Label>
-          <div className="flex gap-2">
-            <Select value={categoryValue} onValueChange={(value) => setCategoryValue(value as DeviceType)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {DEVICE_TYPE_OPTIONS.map((type) => (
-                  <SelectItem key={type} value={type}>{type}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button onClick={() => void saveCategory()} disabled={savingCategory}>
-              {savingCategory ? "Saving..." : "Save"}
-            </Button>
-          </div>
+          <Select value={categoryValue} onValueChange={(value) => setCategoryValue(value as DeviceType)}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {DEVICE_TYPE_OPTIONS.map((type) => (
+                <SelectItem key={type} value={type}>{type}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
 
         <div className="space-y-2">
@@ -276,11 +225,6 @@ export function DeviceSettingsPanel({ deviceId }: { deviceId: string }) {
             placeholder="Write key facts Steward should remember about this device (workload role, dependencies, caveats)."
             className="min-h-28"
           />
-          <div className="flex justify-end">
-            <Button onClick={() => void saveOperatorNotes()} disabled={savingNotes}>
-              {savingNotes ? "Saving..." : "Save Notes"}
-            </Button>
-          </div>
         </div>
 
         <div className="space-y-2">
@@ -291,11 +235,12 @@ export function DeviceSettingsPanel({ deviceId }: { deviceId: string }) {
             placeholder={`{\n  "appName": "AdminApp",\n  "runtime": "laravel"\n}`}
             className="min-h-36 font-mono text-xs"
           />
-          <div className="flex justify-end">
-            <Button onClick={() => void saveStructuredMemory()} disabled={savingStructuredMemory}>
-              {savingStructuredMemory ? "Saving..." : "Save Structured Memory"}
-            </Button>
-          </div>
+        </div>
+
+        <div className="flex justify-end">
+          <Button onClick={() => void saveSettings()} disabled={savingSettings || !hasPendingChanges}>
+            {savingSettings ? "Saving..." : "Save Changes"}
+          </Button>
         </div>
 
         {error ? <p className="text-xs text-destructive">{error}</p> : null}

@@ -2,10 +2,12 @@ import { interpolateOperationValue } from "@/lib/adapters/execution-template";
 import {
   buildWinrmPowerShellScript,
   powerShellInstallHint,
+  preferredWinrmHost,
   resolvePowerShellRuntime,
   resolveWinrmConnection,
 } from "@/lib/adapters/winrm";
 import { requestText } from "@/lib/network/http-client";
+import { markCredentialValidatedFromUse } from "@/lib/adoption/credentials";
 import { vault } from "@/lib/security/vault";
 import { stateStore } from "@/lib/state/store";
 import { runCommand } from "@/lib/utils/shell";
@@ -89,8 +91,18 @@ function getCredentialForBroker(
   const candidates = stateStore.getDeviceCredentials(deviceId)
     .filter((credential) => protocols.includes(credential.protocol.toLowerCase()));
 
+  const priority = ["validated", "provided", "invalid", "pending"] as const;
+  const sorted = [...candidates].sort((a, b) => {
+    const aPriority = priority.indexOf(a.status as (typeof priority)[number]);
+    const bPriority = priority.indexOf(b.status as (typeof priority)[number]);
+    if (aPriority !== bPriority) {
+      return (aPriority === -1 ? 99 : aPriority) - (bPriority === -1 ? 99 : bPriority);
+    }
+    return b.updatedAt.localeCompare(a.updatedAt);
+  });
+
   return {
-    credential: candidates.find((credential) => credential.status === "validated")
+    credential: sorted[0]
       ?? (allowProvidedCredentials ? candidates.find((credential) => credential.status === "provided") : undefined),
     availableStatuses: Array.from(new Set(candidates.map((credential) => credential.status))),
   };
@@ -101,7 +113,7 @@ function logCredentialAccess(
   operation: OperationSpec,
   device: Device,
   protocol: string,
-  result: "granted" | "missing_secret" | "no_validated_credential" | "skipped_unvalidated",
+  result: "granted" | "missing_secret" | "no_stored_credential" | "credential_unusable",
   details: Record<string, unknown>,
   credentialId?: string,
 ): void {
@@ -152,9 +164,9 @@ async function executeSshBroker(
       operation,
       device,
       "ssh",
-      availableStatuses.length > 0 ? "skipped_unvalidated" : "no_validated_credential",
+      availableStatuses.length > 0 ? "credential_unusable" : "no_stored_credential",
       {
-        allowedStatuses: context.allowProvidedCredentials ? ["provided", "validated"] : ["validated"],
+        allowedStatuses: ["pending", "provided", "validated", "invalid"],
         availableStatuses,
       },
     );
@@ -173,9 +185,7 @@ async function executeSshBroker(
       phase: "not-started",
       proof: "none",
       summary: "SSH credential required",
-      output: context.allowProvidedCredentials
-        ? "SSH broker requires a stored SSH credential with status provided or validated"
-        : "SSH broker requires a validated SSH credential",
+      output: "SSH broker requires a stored SSH credential",
       details: { availableStatuses },
     });
   }
@@ -220,7 +230,7 @@ async function executeSshBroker(
   }, credential.id);
 
   if (process.platform === "win32") {
-    return formatCommandOutput(await runCommand(
+    const result = formatCommandOutput(await runCommand(
       "plink",
       [
         "-batch",
@@ -233,9 +243,19 @@ async function executeSshBroker(
       ],
       operation.timeoutMs,
     ));
+    if (result.ok) {
+      await markCredentialValidatedFromUse({
+        deviceId: device.id,
+        credentialId: credential.id,
+        actor: context.actor,
+        method: "ssh.command",
+        details: { adapterId: operation.adapterId, operationId: operation.id },
+      });
+    }
+    return result;
   }
 
-  return formatCommandOutput(await runCommand(
+  const result = formatCommandOutput(await runCommand(
     "sshpass",
     [
       "-p",
@@ -249,6 +269,16 @@ async function executeSshBroker(
     ],
     operation.timeoutMs,
   ));
+  if (result.ok) {
+    await markCredentialValidatedFromUse({
+      deviceId: device.id,
+      credentialId: credential.id,
+      actor: context.actor,
+      method: "ssh.command",
+      details: { adapterId: operation.adapterId, operationId: operation.id },
+    });
+  }
+  return result;
 }
 
 async function executeWinrmBroker(
@@ -290,9 +320,7 @@ async function executeWinrmBroker(
       phase: "not-started",
       proof: "none",
       summary: "WinRM credential required",
-      output: context.allowProvidedCredentials
-        ? "WinRM broker requires a stored WinRM credential with status provided or validated"
-        : "WinRM broker requires a validated WinRM credential",
+      output: "WinRM broker requires a stored WinRM credential",
       details: { availableStatuses },
     });
   }
@@ -337,7 +365,10 @@ async function executeWinrmBroker(
     });
   }
 
-  const command = interpolateOperationValue(broker.command, device.ip, params);
+  const brokerHost = typeof broker.host === "string" && broker.host.trim().length > 0
+    ? broker.host.trim()
+    : undefined;
+  const targetHost = brokerHost ?? preferredWinrmHost(device);
   const connection = resolveWinrmConnection(device, broker);
   if (!connection.ok) {
     return brokerResult({
@@ -366,16 +397,11 @@ async function executeWinrmBroker(
     });
   }
 
-  const script = buildWinrmPowerShellScript({
-    host: device.ip,
-    username: accountLabel,
-    password: secret,
-    command,
-    connection: connection.value,
-  });
+  const hostCandidates = Array.from(new Set([targetHost, device.ip].filter((value) => value.length > 0)));
 
   logCredentialAccess(context, operation, device, "winrm", "granted", {
     accountLabel,
+    host: hostCandidates[0],
     credentialStatus: credential.status,
     port: connection.value.port,
     useSsl: connection.value.useSsl,
@@ -384,34 +410,79 @@ async function executeWinrmBroker(
   }, credential.id);
 
   const executableUsed = runtime.executable;
-  const result = await runCommand(
-    executableUsed,
-    ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodePowerShellScript(script)],
-    operation.timeoutMs,
-  );
-  const output = `${result.stdout}${result.stderr ? `\n[stderr] ${result.stderr}` : ""}`.trim();
+  const failures: Array<{ host: string; output: string; code: number }> = [];
+  let successfulHost: string | null = null;
+  let output = "";
 
-  if (!result.ok) {
+  for (const hostCandidate of hostCandidates) {
+    const command = interpolateOperationValue(broker.command, hostCandidate, params);
+    const script = buildWinrmPowerShellScript({
+      host: hostCandidate,
+      username: accountLabel,
+      password: secret,
+      command,
+      connection: connection.value,
+    });
+
+    const attempt = await runCommand(
+      executableUsed,
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodePowerShellScript(script)],
+      operation.timeoutMs,
+    );
+    output = `${attempt.stdout}${attempt.stderr ? `\n[stderr] ${attempt.stderr}` : ""}`.trim();
+    if (attempt.ok) {
+      successfulHost = hostCandidate;
+      break;
+    }
+    failures.push({
+      host: hostCandidate,
+      output,
+      code: attempt.code,
+    });
+  }
+
+  if (!successfulHost) {
+    const wsmanScheme = connection.value.useSsl ? "https" : "http";
+    const wsmanProbe = await requestText(new URL(`${wsmanScheme}://${device.ip}:${connection.value.port}/wsman`), {
+      method: "GET",
+      timeoutMs: 4_000,
+      insecureSkipVerify: connection.value.skipCertChecks,
+    });
+    const listenerReachable = wsmanProbe.statusCode === 405 || wsmanProbe.statusCode === 401 || wsmanProbe.ok;
+    const failureOutput = failures.map((failure) => `host=${failure.host}\n${failure.output}\n[exit code: ${failure.code}]`).join("\n\n");
+    const diagnostic = listenerReachable
+      ? `[diagnostic] WinRM listener reachable at ${device.ip}:${connection.value.port} (HTTP ${wsmanProbe.statusCode}), but remoting session negotiation failed.`
+      : `[diagnostic] WinRM listener probe failed at ${device.ip}:${connection.value.port} (${wsmanProbe.error ?? `HTTP ${wsmanProbe.statusCode}`}).`;
     return brokerResult({
       status: "failed",
       phase: "executed",
       proof: "process",
-      summary: `WinRM command failed via ${executableUsed}`,
-      output: `${output}\n[exit code: ${result.code}]`.trim(),
+      summary: listenerReachable
+        ? `WinRM session negotiation failed via ${executableUsed}`
+        : `WinRM transport connection failed via ${executableUsed}`,
+      output: `${failureOutput}\n\n${diagnostic}`.trim(),
       details: {
         executable: executableUsed,
         powerShellVersion: runtime.version ?? null,
+        host: hostCandidates[0],
+        attemptedHosts: hostCandidates,
         port: connection.value.port,
         useSsl: connection.value.useSsl,
         skipCertChecks: connection.value.skipCertChecks,
         authentication: connection.value.authentication,
+        wsmanProbe: {
+          url: `${wsmanScheme}://${device.ip}:${connection.value.port}/wsman`,
+          statusCode: wsmanProbe.statusCode,
+          ok: wsmanProbe.ok,
+          error: wsmanProbe.error ?? null,
+        },
         matchedExpectation: false,
       },
     });
   }
 
   if (broker.expectRegex) {
-    const matched = new RegExp(broker.expectRegex, "i").test(result.stdout);
+    const matched = new RegExp(broker.expectRegex, "i").test(output);
     if (!matched) {
       return brokerResult({
         status: "failed",
@@ -422,6 +493,7 @@ async function executeWinrmBroker(
         details: {
           executable: executableUsed,
           powerShellVersion: runtime.version ?? null,
+          host: successfulHost,
           port: connection.value.port,
           useSsl: connection.value.useSsl,
           skipCertChecks: connection.value.skipCertChecks,
@@ -433,7 +505,7 @@ async function executeWinrmBroker(
     }
   }
 
-  return brokerResult({
+  const winrmResult = brokerResult({
     status: "succeeded",
     phase: broker.expectRegex ? "verified" : "executed",
     proof: broker.expectRegex ? "expectation" : "process",
@@ -442,6 +514,8 @@ async function executeWinrmBroker(
     details: {
       executable: executableUsed,
       powerShellVersion: runtime.version ?? null,
+      host: successfulHost,
+      attemptedHosts: hostCandidates,
       port: connection.value.port,
       useSsl: connection.value.useSsl,
       skipCertChecks: connection.value.skipCertChecks,
@@ -449,6 +523,20 @@ async function executeWinrmBroker(
       matchedExpectation: Boolean(broker.expectRegex),
     },
   });
+  await markCredentialValidatedFromUse({
+    deviceId: device.id,
+    credentialId: credential.id,
+    actor: context.actor,
+    method: "winrm.command",
+      details: {
+        adapterId: operation.adapterId,
+        operationId: operation.id,
+        host: successfulHost,
+        port: connection.value.port,
+        useSsl: connection.value.useSsl,
+      },
+  });
+  return winrmResult;
 }
 
 async function executeHttpBroker(
@@ -506,8 +594,8 @@ async function executeHttpBroker(
       }, credential.id);
     }
   } else if (availableStatuses.length > 0) {
-    logCredentialAccess(context, operation, device, "http-api", "skipped_unvalidated", {
-      allowedStatuses: context.allowProvidedCredentials ? ["provided", "validated"] : ["validated"],
+    logCredentialAccess(context, operation, device, "http-api", "credential_unusable", {
+      allowedStatuses: ["pending", "provided", "validated", "invalid"],
       availableStatuses,
     });
   }
@@ -552,7 +640,7 @@ async function executeHttpBroker(
       }
     }
 
-    return brokerResult({
+    const httpResult = brokerResult({
       status: "succeeded",
       phase: broker.expectRegex ? "verified" : "responded",
       proof: broker.expectRegex ? "expectation" : "response",
@@ -565,6 +653,21 @@ async function executeHttpBroker(
         matchedExpectation: Boolean(broker.expectRegex),
       },
     });
+    if (credential) {
+      await markCredentialValidatedFromUse({
+        deviceId: device.id,
+        credentialId: credential.id,
+        actor: context.actor,
+        method: "http.response",
+        details: {
+          adapterId: operation.adapterId,
+          operationId: operation.id,
+          url: url.toString(),
+          statusCode: response.statusCode,
+        },
+      });
+    }
+    return httpResult;
   }
 
   return brokerResult({

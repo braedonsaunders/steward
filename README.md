@@ -158,7 +158,8 @@ chmod +x ./scripts/run-prod.sh
 ```
 
 Both launch scripts automatically verify/install Playwright Chromium before building.
-They also verify/install required network tools (`nmap`, `tshark`).
+They also verify/install required network tools (`nmap`, `tshark`, `snmpget`, `snmpwalk`).
+On Windows, if package-manager install is unavailable, Steward falls back to the Net-SNMP upstream installer and prompts for elevation when needed.
 To manage Windows endpoints over WinRM from Linux or macOS, install PowerShell 7 (`pwsh`) on the Steward host.
 
 ### PM2

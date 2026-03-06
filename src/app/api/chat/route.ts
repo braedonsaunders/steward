@@ -16,6 +16,7 @@ import { buildLanguageModel } from "@/lib/llm/providers";
 import { getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
 import { stateStore } from "@/lib/state/store";
 import type { ChatMessageMetadata, ChatToolEvent, ChatToolEventKind, LLMProvider } from "@/lib/state/types";
+import { generateAndStoreDeviceWidget } from "@/lib/widgets/generator";
 
 const CHAT_MAX_OUTPUT_TOKENS = 8_000;
 const ONBOARDING_MAX_OUTPUT_TOKENS = 12_000;
@@ -120,6 +121,172 @@ function buildWidgetToolDirective(plan: WidgetRoutePlan | null, attachedDeviceId
   ].join("\n");
 }
 
+function inferDeterministicWidgetRoute(args: {
+  input: string;
+  attachedDeviceId: string;
+}): WidgetRoutePlan | null {
+  const text = args.input.trim();
+  if (!text) {
+    return null;
+  }
+  const lowered = text.toLowerCase();
+
+  const widgetSignal = /(widget|dashboard|control panel|panel|remote|device page)/i.test(lowered);
+  if (!widgetSignal) {
+    return null;
+  }
+
+  const asksList = /(list|show|what.*widgets|which.*widgets|saved widgets)/i.test(lowered);
+  if (asksList) {
+    return {
+      route: "widget",
+      reason: "deterministic-widget-list",
+      toolArgs: { action: "list" },
+    };
+  }
+
+  const latestWidget = stateStore.getDeviceWidgets(args.attachedDeviceId)[0] ?? null;
+  const asksInspect = /(inspect|get widget|show widget source|debug widget|widget state|widget runs)/i.test(lowered);
+  if (asksInspect && latestWidget) {
+    return {
+      route: "widget",
+      reason: "deterministic-widget-inspect",
+      toolArgs: {
+        action: "get",
+        widget_id: latestWidget.id,
+      },
+    };
+  }
+
+  const wantsNew = /(new widget|separate widget|another widget|from scratch|fresh widget)/i.test(lowered);
+  return {
+    route: "widget",
+    reason: "deterministic-widget-generate",
+    toolArgs: {
+      action: "generate",
+      widget_id: wantsNew ? undefined : latestWidget?.id,
+      prompt: clampText(text.replace(/\s+/g, " "), 500),
+    },
+  };
+}
+
+async function executePlannedWidgetAction(args: {
+  plan: WidgetRoutePlan;
+  attachedDeviceId: string;
+  attachedDeviceName: string;
+  provider: LLMProvider;
+  model?: string;
+}): Promise<unknown> {
+  if (args.plan.route !== "widget") {
+    throw new Error("Widget route plan is not executable.");
+  }
+
+  const toolArgs = args.plan.toolArgs;
+  const resolveWidget = (widgetId?: string, widgetSlug?: string) => {
+    if (widgetId) {
+      const widget = stateStore.getDeviceWidgetById(widgetId);
+      return widget && widget.deviceId === args.attachedDeviceId ? widget : null;
+    }
+    if (widgetSlug) {
+      return stateStore.getDeviceWidgetBySlug(args.attachedDeviceId, widgetSlug);
+    }
+    return null;
+  };
+
+  if (toolArgs.action === "list") {
+    const widgets = stateStore.getDeviceWidgets(args.attachedDeviceId);
+    return {
+      ok: true,
+      deviceId: args.attachedDeviceId,
+      deviceName: args.attachedDeviceName,
+      count: widgets.length,
+      widgets: widgets.map((widget) => ({
+        id: widget.id,
+        slug: widget.slug,
+        name: widget.name,
+        description: widget.description,
+        status: widget.status,
+        revision: widget.revision,
+        capabilities: widget.capabilities,
+        updatedAt: widget.updatedAt,
+      })),
+    };
+  }
+
+  if (toolArgs.action === "get") {
+    const widget = resolveWidget(toolArgs.widget_id, toolArgs.widget_slug);
+    if (!widget) {
+      return { ok: false, error: "Existing widget not found for this device." };
+    }
+    return {
+      ok: true,
+      deviceId: args.attachedDeviceId,
+      deviceName: args.attachedDeviceName,
+      widget,
+      runtimeState: stateStore.getDeviceWidgetRuntimeState(widget.id)?.stateJson ?? {},
+      recentOperationRuns: stateStore.getDeviceWidgetOperationRuns(widget.id, 15),
+    };
+  }
+
+  if (toolArgs.action === "generate") {
+    const widget = resolveWidget(toolArgs.widget_id, toolArgs.widget_slug);
+    const generated = await generateAndStoreDeviceWidget({
+      deviceId: args.attachedDeviceId,
+      prompt: toolArgs.prompt,
+      provider: args.provider,
+      model: args.model,
+      actor: "steward",
+      targetWidgetId: widget?.id,
+      targetWidgetSlug: widget ? undefined : toolArgs.widget_slug,
+    });
+    await stateStore.addAction({
+      actor: "steward",
+      kind: "config",
+      message: `${generated.updatedExisting ? "Updated" : "Created"} widget ${generated.widget.name} for ${args.attachedDeviceName}`,
+      context: {
+        deviceId: args.attachedDeviceId,
+        widgetId: generated.widget.id,
+        widgetSlug: generated.widget.slug,
+        updatedExisting: generated.updatedExisting,
+        viaTool: "steward_manage_widget",
+      },
+    });
+    return {
+      ok: true,
+      deviceId: args.attachedDeviceId,
+      deviceName: args.attachedDeviceName,
+      updatedExisting: generated.updatedExisting,
+      summary: generated.summary,
+      widget: generated.widget,
+    };
+  }
+
+  return { ok: false, error: `Unsupported widget action: ${String((toolArgs as { action?: unknown }).action)}` };
+}
+
+function buildDirectWidgetResponse(output: unknown, fallbackSummary: string): string {
+  if (!isRecord(output)) {
+    return fallbackSummary;
+  }
+
+  const widgetRecord = isRecord(output.widget) ? output.widget : null;
+  const widgetName = widgetRecord && typeof widgetRecord.name === "string"
+    ? widgetRecord.name.trim()
+    : "";
+  const summary = typeof output.summary === "string" ? output.summary.trim() : "";
+
+  if (widgetName && summary) {
+    return `${fallbackSummary}. ${summary}`;
+  }
+  if (widgetName) {
+    return fallbackSummary;
+  }
+  if (summary) {
+    return summary;
+  }
+  return fallbackSummary;
+}
+
 function previewValue(value: unknown, maxChars = 900): string | undefined {
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -153,12 +320,92 @@ function inferToolKind(toolName: string, inputPreview?: string, outputPreview?: 
   return "tool";
 }
 
-function summarizeToolExecution(output: unknown): {
+function firstFailedGateMessage(output: Record<string, unknown>): string | undefined {
+  const gates = Array.isArray(output.gates) ? output.gates : [];
+  for (const gate of gates) {
+    if (!isRecord(gate) || gate.passed !== false) {
+      continue;
+    }
+    if (typeof gate.message === "string" && gate.message.trim().length > 0) {
+      return gate.message.trim();
+    }
+  }
+  return undefined;
+}
+
+function summarizeBrowserOutputPreview(output: Record<string, unknown>): string | undefined {
+  const stepResults = Array.isArray(output.stepResults) ? output.stepResults : [];
+  const normalizedSteps = stepResults
+    .filter(isRecord)
+    .slice(0, 40)
+    .map((step) => {
+      const action = typeof step.action === "string" ? step.action : "step";
+      const label = typeof step.label === "string" ? step.label : undefined;
+      const ok = typeof step.ok === "boolean" ? step.ok : true;
+      const compact: Record<string, unknown> = { action, ok, ...(label ? { label } : {}) };
+      if (typeof step.selector === "string") compact.selector = step.selector;
+      if (typeof step.url === "string") compact.url = step.url;
+      if (typeof step.path === "string") compact.path = step.path;
+      if (typeof step.text === "string") compact.text = clampText(step.text, 800);
+      if (typeof step.result === "string") compact.result = clampText(step.result, 800);
+      if (typeof step.screenshotBase64 === "string" && step.screenshotBase64.length > 0) {
+        compact.screenshotBase64 = step.screenshotBase64.slice(0, 200_000);
+      }
+      if (typeof step.mimeType === "string") compact.mimeType = step.mimeType;
+      return compact;
+    });
+
+  const diagnostics = isRecord(output.diagnostics) ? output.diagnostics : undefined;
+  const compact: Record<string, unknown> = {
+    ok: output.ok === false ? false : true,
+    url: typeof output.url === "string" ? output.url : undefined,
+    finalUrl: typeof output.finalUrl === "string" ? output.finalUrl : undefined,
+    title: typeof output.title === "string" ? output.title : undefined,
+    contentPreview: typeof output.contentPreview === "string" ? clampText(output.contentPreview, 2000) : undefined,
+    stepsExecuted: typeof output.stepsExecuted === "number" ? output.stepsExecuted : normalizedSteps.length,
+    stepResults: normalizedSteps,
+    diagnostics: diagnostics
+      ? {
+        consoleErrors: Array.isArray(diagnostics.consoleErrors) ? diagnostics.consoleErrors.slice(0, 20) : undefined,
+        requestFailures: Array.isArray(diagnostics.requestFailures) ? diagnostics.requestFailures.slice(0, 20) : undefined,
+        pageErrors: Array.isArray(diagnostics.pageErrors) ? diagnostics.pageErrors.slice(0, 10) : undefined,
+      }
+      : undefined,
+  };
+
+  return previewValue(compact, 240_000);
+}
+
+function summarizeToolExecution(output: unknown, toolName?: string): {
   status: ChatToolEvent["status"];
   summary: string;
   outputPreview?: string;
 } {
   if (isRecord(output)) {
+    if (toolName === "steward_browser_browse") {
+      const browserPreview = summarizeBrowserOutputPreview(output);
+      const failedText = typeof output.error === "string" ? output.error.trim() : "";
+      if (output.ok === false || failedText.length > 0) {
+        return {
+          status: "failed",
+          summary: failedText || "Browser flow failed.",
+          outputPreview: browserPreview ?? previewValue(output, 1200),
+        };
+      }
+      const summaryParts: string[] = [];
+      if (typeof output.title === "string" && output.title.trim().length > 0) {
+        summaryParts.push(output.title.trim());
+      }
+      if (typeof output.stepsExecuted === "number") {
+        summaryParts.push(`${output.stepsExecuted} step${output.stepsExecuted === 1 ? "" : "s"}`);
+      }
+      return {
+        status: "completed",
+        summary: summaryParts.join(" • ") || "Browser flow completed.",
+        outputPreview: browserPreview ?? previewValue(output, 1200),
+      };
+    }
+
     const widgetRecord = isRecord(output.widget) ? output.widget : null;
     const widgetName = widgetRecord && typeof widgetRecord.name === "string"
       ? widgetRecord.name.trim()
@@ -202,7 +449,7 @@ function summarizeToolExecution(output: unknown): {
       return {
         status: "failed",
         summary: errorText,
-        outputPreview: previewValue(output.output ?? output, 1200),
+        outputPreview: previewValue(output, 1200),
       };
     }
 
@@ -215,12 +462,16 @@ function summarizeToolExecution(output: unknown): {
     );
 
     if (explicitOk === false) {
+      const failedSummary =
+        (typeof output.reason === "string" && output.reason.trim().length > 0 ? output.reason.trim() : "")
+        || (typeof output.summary === "string" && output.summary.trim().length > 0 ? output.summary.trim() : "")
+        || firstFailedGateMessage(output)
+        || (typeof output.output === "string" && output.output.trim().length > 0 ? output.output.trim() : "")
+        || "Tool execution failed.";
       return {
         status: "failed",
-        summary: typeof output.reason === "string" && output.reason.trim().length > 0
-          ? output.reason.trim()
-          : "Tool execution failed.",
-        outputPreview: preview,
+        summary: failedSummary,
+        outputPreview: previewValue(output, 1200),
       };
     }
 
@@ -549,6 +800,163 @@ export async function POST(request: NextRequest) {
       ? persistedHistory.slice(0, -1)
       : persistedHistory;
 
+    const widgetRoutePlan = attachedDevice && !onboardingSession
+      ? (
+          inferDeterministicWidgetRoute({
+            input: payload.data.input,
+            attachedDeviceId: attachedDevice.id,
+          })
+          ?? await planWidgetRoute({
+            provider,
+            model: payload.data.model,
+            attachedDevice,
+            history: historyExcludingCurrent,
+            userInput: payload.data.input,
+          })
+        )
+      : null;
+
+    if (widgetRoutePlan?.route === "widget" && attachedDevice) {
+      const startedAt = new Date().toISOString();
+      const toolEventId = `direct-widget-${randomUUID()}`;
+      const inputPreview = previewValue({
+        ...widgetRoutePlan.toolArgs,
+        device_id: attachedDevice.id,
+      }, 700);
+
+      try {
+        const output = await executePlannedWidgetAction({
+          plan: widgetRoutePlan,
+          attachedDeviceId: attachedDevice.id,
+          attachedDeviceName: attachedDevice.name,
+          provider,
+          model: payload.data.model,
+        });
+
+        const execution = summarizeToolExecution(output, "steward_manage_widget");
+        const toolEvent: ChatToolEvent = {
+          id: toolEventId,
+          toolName: "steward_manage_widget",
+          label: "Manage Widget",
+          kind: "tool",
+          status: execution.status,
+          startedAt,
+          finishedAt: new Date().toISOString(),
+          inputPreview,
+          summary: execution.summary,
+          outputPreview: execution.outputPreview,
+          error: execution.status === "failed" ? execution.summary : undefined,
+        };
+
+        const assistantText = buildDirectWidgetResponse(output, execution.summary);
+        const metadata: ChatMessageMetadata = { toolEvents: [toolEvent] };
+
+        if (sessionId) {
+          stateStore.addChatMessage({
+            id: randomUUID(),
+            sessionId,
+            role: "assistant",
+            content: assistantText,
+            provider: "steward-widget",
+            error: execution.status === "failed",
+            createdAt: new Date().toISOString(),
+            metadata,
+          });
+        }
+
+        if (attachedDevice) {
+          await maybeUpdateOperatorNotes({
+            device: attachedDevice,
+            provider,
+            model: payload.data.model,
+            userInput: payload.data.input,
+            assistantOutput: assistantText,
+            sessionId,
+            onboarding: onboardingSession,
+            toolEvents: [toolEvent],
+          });
+        }
+
+        if (payload.data.stream) {
+          return ndjsonStreamFromEvents([
+            { type: "start", provider: "steward-widget" },
+            {
+              type: "tool-event",
+              event: {
+                ...toolEvent,
+                status: "running",
+                finishedAt: undefined,
+                summary: "Running live...",
+                outputPreview: undefined,
+                error: undefined,
+              },
+            },
+            { type: "tool-event", event: toolEvent },
+            {
+              type: "finish",
+              provider: "steward-widget",
+              text: assistantText,
+              reasoning: `[tool] steward_manage_widget: ${execution.summary}\n`,
+              metadata,
+            },
+          ]);
+        }
+
+        if (execution.status === "failed") {
+          return NextResponse.json({
+            provider: "steward-widget",
+            error: assistantText,
+            metadata,
+          }, { status: 500 });
+        }
+
+        return NextResponse.json({
+          provider: "steward-widget",
+          response: assistantText,
+          metadata,
+        });
+      } catch (widgetError) {
+        const rawMessage = widgetError instanceof Error ? widgetError.message : String(widgetError);
+        const friendlyMessage = toFriendlyChatError(rawMessage, provider);
+        const failedToolEvent: ChatToolEvent = {
+          id: toolEventId,
+          toolName: "steward_manage_widget",
+          label: "Manage Widget",
+          kind: "tool",
+          status: "failed",
+          startedAt,
+          finishedAt: new Date().toISOString(),
+          inputPreview,
+          summary: friendlyMessage,
+          error: friendlyMessage,
+        };
+        const metadata: ChatMessageMetadata = { toolEvents: [failedToolEvent] };
+
+        if (sessionId) {
+          stateStore.addChatMessage({
+            id: randomUUID(),
+            sessionId,
+            role: "assistant",
+            content: friendlyMessage,
+            provider: "steward-widget",
+            error: true,
+            createdAt: new Date().toISOString(),
+            metadata,
+          });
+        }
+
+        if (payload.data.stream) {
+          return ndjsonStreamFromEvents([
+            { type: "start", provider: "steward-widget" },
+            { type: "tool-event", event: failedToolEvent },
+            { type: "error", error: friendlyMessage, provider: "steward-widget" },
+          ]);
+        }
+
+        return NextResponse.json({ error: friendlyMessage, metadata }, { status: 500 });
+      }
+    }
+
     const context = await buildAssistantContext();
     const model = await buildLanguageModel(provider, payload.data.model);
     const operatorNotes = attachedDevice
@@ -567,15 +975,6 @@ export async function POST(request: NextRequest) {
     const attachedDeviceWidgetPrompt = attachedDevice
       ? buildAttachedDeviceWidgetPrompt(attachedDevice.id)
       : "";
-    const widgetRoutePlan = attachedDevice && !onboardingSession
-      ? await planWidgetRoute({
-        provider,
-        model: payload.data.model,
-        attachedDevice,
-        history: historyExcludingCurrent,
-        userInput: payload.data.input,
-      })
-      : null;
     const widgetToolDirective = buildWidgetToolDirective(widgetRoutePlan, attachedDevice?.id);
     const systemPrompt = onboardingSession && attachedDevice
       ? buildOnboardingSystemPrompt(attachedDevice)
@@ -760,7 +1159,7 @@ export async function POST(request: NextRequest) {
                 reasoningText += line;
                 send({ type: "reasoning-delta", text: line });
               } else if (part.type === "tool-result") {
-                const execution = summarizeToolExecution(part.output);
+                const execution = summarizeToolExecution(part.output, part.toolName);
                 const inputPreview = previewValue(part.input, 700);
                 const current = currentToolEvent(part.toolCallId);
                 const label = current?.label

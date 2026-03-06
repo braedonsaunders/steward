@@ -30,17 +30,50 @@ const DEVICE_TYPE_MAP: Record<string, DeviceType> = {
   server: "server",
   workstation: "workstation",
   desktop: "workstation",
-  laptop: "workstation",
+  laptop: "laptop",
+  notebook: "laptop",
+  smartphone: "smartphone",
+  phone: "smartphone",
+  tablet: "tablet",
   router: "router",
   firewall: "firewall",
   switch: "switch",
   "access-point": "access-point",
   ap: "access-point",
+  modem: "modem",
+  "load-balancer": "load-balancer",
+  "vpn-appliance": "vpn-appliance",
+  "wan-optimizer": "wan-optimizer",
   camera: "camera",
+  nvr: "nvr",
+  dvr: "dvr",
   nas: "nas",
+  san: "san",
   printer: "printer",
+  scanner: "scanner",
+  pbx: "pbx",
+  freepbx: "pbx",
+  asterisk: "pbx",
+  "voip-phone": "voip-phone",
+  sip: "voip-phone",
+  "conference-system": "conference-system",
+  "point-of-sale": "point-of-sale",
+  pos: "point-of-sale",
+  "badge-reader": "badge-reader",
+  "door-controller": "door-controller",
+  ups: "ups",
+  pdu: "pdu",
+  bmc: "bmc",
   iot: "iot",
+  sensor: "sensor",
+  controller: "controller",
+  "smart-tv": "smart-tv",
+  "media-streamer": "media-streamer",
+  "game-console": "game-console",
   "container-host": "container-host",
+  "vm-host": "vm-host",
+  "kubernetes-master": "kubernetes-master",
+  "kubernetes-worker": "kubernetes-worker",
   hypervisor: "hypervisor",
   unknown: "unknown",
 };
@@ -131,6 +164,19 @@ async function handleDeviceSettingsRequest(
     ...device,
     name: suggestedName ?? device.name,
     type: suggestedType ?? device.type,
+    metadata: suggestedName
+      ? {
+        ...device.metadata,
+        identity: {
+          ...(typeof device.metadata.identity === "object" && device.metadata.identity !== null
+            ? device.metadata.identity as Record<string, unknown>
+            : {}),
+          nameManuallySet: true,
+          nameManuallySetAt: new Date().toISOString(),
+          nameSetBy: "user_chat",
+        },
+      }
+      : device.metadata,
     lastChangedAt: new Date().toISOString(),
   };
   await stateStore.upsertDevice(updated);
@@ -389,8 +435,8 @@ async function handleMonitorRequest(
   stateStore.upsertAssurance(draft.contract);
 
   const requiredProtocols = getRequiredProtocolsForServiceContract(draft.contract);
-  const validated = new Set(stateStore.getValidatedCredentialProtocols(device.id).map((item) => item.toLowerCase()));
-  const missing = requiredProtocols.filter((protocol) => !validated.has(protocol));
+  const usable = new Set(stateStore.getUsableCredentialProtocols(device.id).map((item) => item.toLowerCase()));
+  const missing = requiredProtocols.filter((protocol) => !usable.has(protocol));
 
   if (missing.length > 0) {
     stateStore.upsertDeviceFindingByDedupe({

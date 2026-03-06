@@ -5,6 +5,7 @@ import { isAuthorized } from "@/lib/auth/guard";
 import { startDeviceAdoption } from "@/lib/adoption/orchestrator";
 import { graphStore } from "@/lib/state/graph";
 import { stateStore } from "@/lib/state/store";
+import { DEVICE_TYPE_VALUES } from "@/lib/state/types";
 
 export const runtime = "nodejs";
 
@@ -12,21 +13,7 @@ const createDeviceSchema = z.object({
   name: z.string().min(1),
   ip: z.string().min(3),
   type: z
-    .enum([
-      "server",
-      "workstation",
-      "router",
-      "firewall",
-      "switch",
-      "access-point",
-      "camera",
-      "nas",
-      "printer",
-      "iot",
-      "container-host",
-      "hypervisor",
-      "unknown",
-    ])
+    .enum(DEVICE_TYPE_VALUES)
     .optional(),
   autonomyTier: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
 });
@@ -73,6 +60,14 @@ export async function POST(request: NextRequest) {
     metadata: {
       ...(existing?.metadata ?? {}),
       source: "manual",
+      identity: {
+        ...(typeof existing?.metadata?.identity === "object" && existing.metadata.identity !== null
+          ? (existing.metadata.identity as Record<string, unknown>)
+          : {}),
+        nameManuallySet: true,
+        nameManuallySetAt: now,
+        nameSetBy: "user",
+      },
       ...(existing?.hostname ? { hostname: existing.hostname } : {}),
       adoption: {
         ...(typeof existing?.metadata?.adoption === "object" && existing.metadata.adoption !== null
