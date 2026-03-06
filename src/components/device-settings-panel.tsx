@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { withClientApiToken } from "@/lib/auth/client-token";
 import { useSteward } from "@/lib/hooks/use-steward";
 import { DEVICE_TYPE_VALUES, type DeviceType } from "@/lib/state/types";
@@ -15,8 +15,31 @@ import { getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
 
 const DEVICE_TYPE_OPTIONS: DeviceType[] = [...DEVICE_TYPE_VALUES];
 
+const CategorySelect = memo(function CategorySelect({
+  value,
+  onValueChange,
+  onOpenChange,
+}: {
+  value: DeviceType;
+  onValueChange: (value: DeviceType) => void;
+  onOpenChange: (open: boolean) => void;
+}) {
+  return (
+    <Select value={value} onOpenChange={onOpenChange} onValueChange={(next) => onValueChange(next as DeviceType)}>
+      <SelectTrigger>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {DEVICE_TYPE_OPTIONS.map((type) => (
+          <SelectItem key={type} value={type}>{type}</SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+});
+
 export function DeviceSettingsPanel({ deviceId }: { deviceId: string }) {
-  const { devices, setDeviceAdoptionStatus, refresh } = useSteward();
+  const { devices, setDeviceAdoptionStatus } = useSteward();
   const device = devices.find((item) => item.id === deviceId);
 
   const [renameValue, setRenameValue] = useState(device?.name ?? "");
@@ -27,7 +50,12 @@ export function DeviceSettingsPanel({ deviceId }: { deviceId: string }) {
   const [savingAdoption, setSavingAdoption] = useState(false);
   const [confirmAdoptionOpen, setConfirmAdoptionOpen] = useState(false);
   const [pendingAdoptionStatus, setPendingAdoptionStatus] = useState<"discovered" | "ignored" | null>(null);
+  const [categoryOpen, setCategoryOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const handleCategoryValueChange = useCallback((value: DeviceType) => {
+    setCategoryValue(value);
+  }, []);
 
   const existingOperatorNotes = device
     && typeof device.metadata.notes === "object"
@@ -54,12 +82,19 @@ export function DeviceSettingsPanel({ deviceId }: { deviceId: string }) {
   const currentDeviceType = device?.type ?? "unknown";
 
   useEffect(() => {
-    if (!currentDeviceId) return;
-    setRenameValue(currentDeviceName);
-    setCategoryValue(currentDeviceType);
-    setOperatorNotes(existingOperatorNotes);
-    setStructuredMemoryJson(existingStructuredContextJson);
-  }, [currentDeviceId, currentDeviceName, currentDeviceType, existingOperatorNotes, existingStructuredContextJson]);
+    if (!currentDeviceId || categoryOpen) return;
+    setRenameValue((prev) => (prev === currentDeviceName ? prev : currentDeviceName));
+    setCategoryValue((prev) => (prev === currentDeviceType ? prev : currentDeviceType));
+    setOperatorNotes((prev) => (prev === existingOperatorNotes ? prev : existingOperatorNotes));
+    setStructuredMemoryJson((prev) => (prev === existingStructuredContextJson ? prev : existingStructuredContextJson));
+  }, [
+    categoryOpen,
+    currentDeviceId,
+    currentDeviceName,
+    currentDeviceType,
+    existingOperatorNotes,
+    existingStructuredContextJson,
+  ]);
 
   if (!device) {
     return null;
@@ -147,7 +182,6 @@ export function DeviceSettingsPanel({ deviceId }: { deviceId: string }) {
         }
       }
 
-      await refresh();
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save device settings");
@@ -170,16 +204,11 @@ export function DeviceSettingsPanel({ deviceId }: { deviceId: string }) {
 
         <div className="space-y-2">
           <Label>Category</Label>
-          <Select value={categoryValue} onValueChange={(value) => setCategoryValue(value as DeviceType)}>
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {DEVICE_TYPE_OPTIONS.map((type) => (
-                <SelectItem key={type} value={type}>{type}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <CategorySelect
+            value={categoryValue}
+            onOpenChange={setCategoryOpen}
+            onValueChange={handleCategoryValueChange}
+          />
         </div>
 
         <div className="space-y-2">

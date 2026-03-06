@@ -1284,6 +1284,20 @@ export function ChatWorkspace({
     setStickToBottom(true);
   }, []);
 
+  useEffect(() => {
+    if (!activeSessionId) return;
+    if (messagesLoading) return;
+    if (messagesLoadedSessionId !== activeSessionId) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      jumpToBottom("auto");
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [activeSessionId, jumpToBottom, messagesLoadedSessionId, messagesLoading]);
+
   const stopStreaming = useCallback(() => {
     activeStreamAbortRef.current?.abort();
   }, []);

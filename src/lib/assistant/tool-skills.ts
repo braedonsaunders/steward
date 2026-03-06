@@ -83,35 +83,10 @@ const MUTATING_KINDS = new Set<OperationKind>([
   "network.config",
 ]);
 
-const WEB_RESEARCH_MAX_RESULTS_LIMIT = 25;
-const WEB_RESEARCH_DEEP_READ_LIMIT = 12;
-const WEB_RESEARCH_SECURITY_TERMS = [
-  "cve",
-  "cvss",
-  "vulnerability",
-  "vulnerabilities",
-  "security",
-  "exploit",
-  "advisory",
-  "patch",
-  "rce",
-  "xss",
-  "sqli",
-  "lpe",
-];
-const WEB_RESEARCH_BREADTH_TERMS = [
-  "compare",
-  "comparison",
-  "versus",
-  " vs ",
-  "alternatives",
-  "landscape",
-  "comprehensive",
-  "deep dive",
-  "timeline",
-  "history",
-  "best practices",
-];
+const WEB_RESEARCH_MAX_RESULTS_LIMIT = 80;
+const WEB_RESEARCH_DEEP_READ_LIMIT = 40;
+const WEB_RESEARCH_SEARCH_PAGE_LIMIT = 10;
+const WEB_RESEARCH_RESULTS_PER_PAGE_HINT = 8;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -123,48 +98,6 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
     return fallback;
   }
   return Math.max(min, Math.min(max, Math.floor(parsed)));
-}
-
-function countMatchingTerms(haystack: string, terms: readonly string[]): number {
-  return terms.reduce((count, term) => {
-    return haystack.includes(term) ? count + 1 : count;
-  }, 0);
-}
-
-function inferWebResearchBudget(
-  query: string,
-  timeoutMs: number,
-): { extraResults: number; extraDeepReads: number } {
-  const normalized = ` ${query.toLowerCase().replace(/\s+/g, " ").trim()} `;
-  const tokenCount = query.trim().split(/\s+/).filter(Boolean).length;
-  const securityMatches = countMatchingTerms(normalized, WEB_RESEARCH_SECURITY_TERMS);
-  const breadthMatches = countMatchingTerms(normalized, WEB_RESEARCH_BREADTH_TERMS);
-
-  let extraResults = 0;
-  let extraDeepReads = 0;
-
-  if (tokenCount >= 6) {
-    extraResults += 2;
-    extraDeepReads += 1;
-  }
-  if (securityMatches > 0) {
-    extraResults += 4;
-    extraDeepReads += 2;
-  }
-  if (breadthMatches > 0) {
-    extraResults += 3;
-    extraDeepReads += 1;
-  }
-
-  if (timeoutMs >= 24_000) {
-    extraResults += 2;
-    extraDeepReads += 1;
-  } else if (timeoutMs <= 10_000) {
-    extraResults = Math.max(0, extraResults - 1);
-    extraDeepReads = Math.max(0, extraDeepReads - 1);
-  }
-
-  return { extraResults, extraDeepReads };
 }
 
 function slugifyWidgetKey(value: string): string {
@@ -1946,7 +1879,7 @@ export async function buildAdapterSkillTools(
   });
 
   tools.steward_web_research = dynamicTool({
-    description: "Search the public web for current or external information and optionally read top result pages. Use this for research, vendor docs, CVEs, current guidance, and anything Steward cannot verify from local state alone.",
+    description: "Search the public web for current or external information and optionally read result pages. The model should decide breadth/depth per task, then iterate: first pass, inspect findings, optionally read more via read_from_result, or re-run with a refined query.",
     inputSchema: jsonSchema({
       type: "object",
       properties: {
@@ -1961,6 +1894,14 @@ export async function buildAdapterSkillTools(
         deep_read_pages: {
           type: "integer",
           description: "Optional number of top results to open and extract. Defaults to runtime settings.",
+        },
+        search_pages: {
+          type: "integer",
+          description: "Optional number of search result pages to traverse.",
+        },
+        read_from_result: {
+          type: "integer",
+          description: "Optional 1-based result rank to start deep reads from. Use this with nextReadFromResult to continue reading additional results without re-reading earlier ones.",
         },
       },
       required: ["query"],
@@ -1984,31 +1925,35 @@ export async function buildAdapterSkillTools(
 
       const hasMaxResultsArg = Number.isFinite(Number(args.max_results));
       const hasDeepReadArg = Number.isFinite(Number(args.deep_read_pages));
-      const inferredBudget = inferWebResearchBudget(query, runtime.webResearchTimeoutMs);
+      const hasSearchPagesArg = Number.isFinite(Number(args.search_pages));
+      const hasReadFromResultArg = Number.isFinite(Number(args.read_from_result));
 
       const maxResults = hasMaxResultsArg
         ? clampInt(args.max_results, 1, WEB_RESEARCH_MAX_RESULTS_LIMIT, runtime.webResearchMaxResults)
-        : clampInt(
-          runtime.webResearchMaxResults + inferredBudget.extraResults,
-          1,
-          WEB_RESEARCH_MAX_RESULTS_LIMIT,
-          runtime.webResearchMaxResults,
-        );
+        : clampInt(runtime.webResearchMaxResults, 1, WEB_RESEARCH_MAX_RESULTS_LIMIT, runtime.webResearchMaxResults);
 
       const requestedDeepReads = hasDeepReadArg
         ? clampInt(args.deep_read_pages, 0, WEB_RESEARCH_DEEP_READ_LIMIT, runtime.webResearchDeepReadPages)
-        : clampInt(
-          runtime.webResearchDeepReadPages + inferredBudget.extraDeepReads,
-          0,
-          WEB_RESEARCH_DEEP_READ_LIMIT,
-          runtime.webResearchDeepReadPages,
-        );
+        : clampInt(runtime.webResearchDeepReadPages, 0, WEB_RESEARCH_DEEP_READ_LIMIT, runtime.webResearchDeepReadPages);
       const deepReadPages = Math.min(requestedDeepReads, maxResults);
+      const searchPages = hasSearchPagesArg
+        ? clampInt(args.search_pages, 1, WEB_RESEARCH_SEARCH_PAGE_LIMIT, 1)
+        : clampInt(
+          Math.ceil(maxResults / WEB_RESEARCH_RESULTS_PER_PAGE_HINT),
+          1,
+          WEB_RESEARCH_SEARCH_PAGE_LIMIT,
+          1,
+        );
+      const readFromResult = hasReadFromResultArg
+        ? clampInt(args.read_from_result, 1, WEB_RESEARCH_MAX_RESULTS_LIMIT, 1)
+        : 1;
 
       const result = await runWebResearch(query, {
         timeoutMs: runtime.webResearchTimeoutMs,
         maxResults,
         deepReadPages,
+        searchPages,
+        readFromResult,
       });
 
       await stateStore.addAction({

@@ -139,6 +139,10 @@ function isIpLiteral(value: string): boolean {
   return trimmed.includes(":");
 }
 
+export function isWinrmIpLiteral(value: string): boolean {
+  return isIpLiteral(value);
+}
+
 function isSyntheticDiscoveryName(value: string): boolean {
   const normalized = value.trim().toLowerCase();
   return /^unknown-\d{1,3}(?:-\d{1,3}){3}$/.test(normalized)
@@ -280,6 +284,9 @@ export function buildWinrmPowerShellScript(input: {
   connection: ResolvedWinrmConnection;
 }): string {
   const { connection } = input;
+  const shouldSeedTrustedHost = connection.hostPlatform === "win32"
+    && !connection.useSsl
+    && isIpLiteral(input.host);
   return [
     "$ErrorActionPreference = 'Stop'",
     "$ProgressPreference = 'SilentlyContinue'",
@@ -290,6 +297,42 @@ export function buildWinrmPowerShellScript(input: {
     connection.useSsl ? "$invokeParams.UseSSL = $true" : "",
     connection.skipCertChecks
       ? "$invokeParams.SessionOption = New-PSSessionOption -SkipCACheck -SkipCNCheck -SkipRevocationCheck"
+      : "",
+    shouldSeedTrustedHost
+      ? "$trustedHostsPath = 'WSMan:\\localhost\\Client\\TrustedHosts'"
+      : "",
+    shouldSeedTrustedHost
+      ? `$targetHostLiteral = '${escapePowerShellSingleQuoted(input.host)}'`
+      : "",
+    shouldSeedTrustedHost
+      ? "$trustedHostsCurrent = ''"
+      : "",
+    shouldSeedTrustedHost
+      ? "try { $trustedHostsCurrent = (Get-Item -Path $trustedHostsPath -ErrorAction Stop).Value } catch { $trustedHostsCurrent = '' }"
+      : "",
+    shouldSeedTrustedHost
+      ? "$trustedHostList = @()"
+      : "",
+    shouldSeedTrustedHost
+      ? "if ($trustedHostsCurrent) { $trustedHostList = $trustedHostsCurrent -split '\\s*,\\s*' | Where-Object { $_ -and $_.Trim().Length -gt 0 } }"
+      : "",
+    shouldSeedTrustedHost
+      ? "if ($trustedHostList -notcontains '*' -and $trustedHostList -notcontains $targetHostLiteral) {"
+      : "",
+    shouldSeedTrustedHost
+      ? "  $trustedHostsNext = if ($trustedHostsCurrent) { \"$trustedHostsCurrent,$targetHostLiteral\" } else { $targetHostLiteral }"
+      : "",
+    shouldSeedTrustedHost
+      ? "  try { Set-Item -Path $trustedHostsPath -Value $trustedHostsNext -Force -ErrorAction Stop | Out-Null } catch {"
+      : "",
+    shouldSeedTrustedHost
+      ? "    $trustedHostsError = $_.Exception.Message"
+      : "",
+    shouldSeedTrustedHost
+      ? "    throw \"Unable to add $targetHostLiteral to WSMan TrustedHosts on the Steward host. Run this process elevated or use HTTPS WinRM (5986). Details: $trustedHostsError\""
+      : "",
+    shouldSeedTrustedHost
+      ? "}"
       : "",
     "$scriptText = @'",
     input.command,
@@ -322,5 +365,75 @@ export function parseWinrmCommandTemplate(template: string): WinrmBrokerRequest 
     ...(portMatch ? { port: Number(portMatch[1]) } : {}),
     ...(/-UseSSL\b/i.test(unwrapped) ? { useSsl: true } : {}),
     ...(authMatch ? { authentication: normalizeAuthentication(authMatch[1]) } : {}),
+  };
+}
+
+function decodeClixmlEncodedBreaks(value: string): string {
+  return value.replace(/_x000D__x000A_/gi, "\n").replace(/_x000A_/gi, "\n").replace(/_x000D_/gi, "");
+}
+
+function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+export function normalizeWinrmOutput(raw: string): string {
+  if (!raw) return "";
+  const prepared = decodeClixmlEncodedBreaks(raw);
+
+  if (!prepared.includes("<Objs") || !prepared.includes('xmlns="http://schemas.microsoft.com/powershell/2004/04"')) {
+    return prepared;
+  }
+
+  const matches = Array.from(prepared.matchAll(/<S\s+S="Error">([\s\S]*?)<\/S>/gi));
+  if (matches.length === 0) {
+    return prepared;
+  }
+
+  const cleaned = matches
+    .map((match) => decodeXmlEntities(match[1] ?? "").replace(/\s+/g, " ").trim())
+    .filter((line) => line.length > 0)
+    .join("\n");
+
+  return cleaned || prepared;
+}
+
+export interface WinrmFailureAnalysis {
+  categories: string[];
+  hints: string[];
+}
+
+export function analyzeWinrmFailure(output: string): WinrmFailureAnalysis {
+  const categories = new Set<string>();
+  const hints: string[] = [];
+  const normalized = output.toLowerCase();
+
+  if (normalized.includes("cannotuseipaddress") || normalized.includes("default authentication may be used with an ip address")) {
+    categories.add("cannot_use_ip_address");
+    hints.push("IP-based WinRM over HTTP requires TrustedHosts or HTTPS (5986). Prefer hostname/FQDN when possible.");
+  }
+
+  if (normalized.includes("winrmoperationtimeout") || normalized.includes("winrm cannot complete the operation")) {
+    categories.add("operation_timeout_or_firewall");
+    hints.push("WinRM reached the listener but remoting negotiation timed out. Verify Windows Firewall WinRM rules and network profile.");
+  }
+
+  if (normalized.includes("access is denied")) {
+    categories.add("access_denied");
+    hints.push("Credentials were accepted for transport but rejected for remote execution. Verify account rights for WinRM remote management.");
+  }
+
+  if (normalized.includes("kerberos") && normalized.includes("cannot")) {
+    categories.add("kerberos_negotiation");
+    hints.push("Kerberos negotiation failed. Confirm DNS/SPN alignment and that Steward can resolve the host FQDN.");
+  }
+
+  return {
+    categories: Array.from(categories),
+    hints,
   };
 }

@@ -1,6 +1,9 @@
 import { interpolateOperationValue } from "@/lib/adapters/execution-template";
 import {
+  analyzeWinrmFailure,
   buildWinrmPowerShellScript,
+  isWinrmIpLiteral,
+  normalizeWinrmOutput,
   powerShellInstallHint,
   preferredWinrmHost,
   resolvePowerShellRuntime,
@@ -107,6 +110,52 @@ function getCredentialForBroker(
     availableStatuses: Array.from(new Set(candidates.map((credential) => credential.status))),
   };
 }
+
+function winrmFailureCacheKey(input: {
+  deviceId: string;
+  host: string;
+  ip: string;
+  port: number;
+  useSsl: boolean;
+  authentication: string;
+}): string {
+  return [
+    input.deviceId,
+    input.host.toLowerCase(),
+    input.ip,
+    String(input.port),
+    input.useSsl ? "ssl" : "plain",
+    input.authentication.toLowerCase(),
+  ].join("|");
+}
+
+function getCachedWinrmNegotiationFailure(cacheKey: string): CachedWinrmFailure | null {
+  const cached = winrmNegotiationFailureCache.get(cacheKey);
+  if (!cached) return null;
+  if (Date.now() - cached.cachedAt > WINRM_NEGOTIATION_FAILURE_TTL_MS) {
+    winrmNegotiationFailureCache.delete(cacheKey);
+    return null;
+  }
+  return cached;
+}
+
+function formatWinrmRemediationHints(output: string): string {
+  const analysis = analyzeWinrmFailure(output);
+  if (analysis.hints.length === 0) {
+    return "";
+  }
+  return ["[remediation]", ...analysis.hints.map((hint) => `- ${hint}`)].join("\n");
+}
+
+interface CachedWinrmFailure {
+  output: string;
+  details: Record<string, unknown>;
+  summary: string;
+  cachedAt: number;
+}
+
+const WINRM_NEGOTIATION_FAILURE_TTL_MS = 20_000;
+const winrmNegotiationFailureCache = new Map<string, CachedWinrmFailure>();
 
 function logCredentialAccess(
   context: BrokerExecutionContext,
@@ -369,6 +418,7 @@ async function executeWinrmBroker(
     ? broker.host.trim()
     : undefined;
   const targetHost = brokerHost ?? preferredWinrmHost(device);
+  const targetHostIsIp = isWinrmIpLiteral(targetHost);
   const connection = resolveWinrmConnection(device, broker);
   if (!connection.ok) {
     return brokerResult({
@@ -397,11 +447,51 @@ async function executeWinrmBroker(
     });
   }
 
-  const hostCandidates = Array.from(new Set([targetHost, device.ip].filter((value) => value.length > 0)));
+  const failureCacheKey = winrmFailureCacheKey({
+    deviceId: device.id,
+    host: targetHost,
+    ip: device.ip,
+    port: connection.value.port,
+    useSsl: connection.value.useSsl,
+    authentication: connection.value.authentication,
+  });
+  const cachedNegotiationFailure = getCachedWinrmNegotiationFailure(failureCacheKey);
+  if (cachedNegotiationFailure) {
+    return brokerResult({
+      status: "failed",
+      phase: "executed",
+      proof: "process",
+      summary: `${cachedNegotiationFailure.summary} (cached)`,
+      output: cachedNegotiationFailure.output,
+      details: {
+        ...cachedNegotiationFailure.details,
+        cached: true,
+      },
+    });
+  }
+
+  const allowIpFallback = connection.value.useSsl || targetHostIsIp;
+  const hostCandidates = Array.from(new Set([
+    targetHost,
+    ...(allowIpFallback ? [device.ip] : []),
+  ].filter((value) => value.length > 0)));
+  const wsmanScheme = connection.value.useSsl ? "https" : "http";
+  const hostCandidateScores = await Promise.all(hostCandidates.map(async (hostCandidate) => {
+    const probe = await requestText(new URL(`${wsmanScheme}://${hostCandidate}:${connection.value.port}/wsman`), {
+      method: "GET",
+      timeoutMs: 2_000,
+      insecureSkipVerify: connection.value.skipCertChecks,
+    });
+    const reachable = probe.statusCode === 405 || probe.statusCode === 401 || probe.ok;
+    return { host: hostCandidate, reachable };
+  }));
+  const orderedHostCandidates = hostCandidateScores
+    .sort((a, b) => Number(b.reachable) - Number(a.reachable))
+    .map((candidate) => candidate.host);
 
   logCredentialAccess(context, operation, device, "winrm", "granted", {
     accountLabel,
-    host: hostCandidates[0],
+    host: orderedHostCandidates[0],
     credentialStatus: credential.status,
     port: connection.value.port,
     useSsl: connection.value.useSsl,
@@ -414,7 +504,7 @@ async function executeWinrmBroker(
   let successfulHost: string | null = null;
   let output = "";
 
-  for (const hostCandidate of hostCandidates) {
+  for (const hostCandidate of orderedHostCandidates) {
     const command = interpolateOperationValue(broker.command, hostCandidate, params);
     const script = buildWinrmPowerShellScript({
       host: hostCandidate,
@@ -429,7 +519,7 @@ async function executeWinrmBroker(
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodePowerShellScript(script)],
       operation.timeoutMs,
     );
-    output = `${attempt.stdout}${attempt.stderr ? `\n[stderr] ${attempt.stderr}` : ""}`.trim();
+    output = normalizeWinrmOutput(`${attempt.stdout}${attempt.stderr ? `\n[stderr] ${attempt.stderr}` : ""}`).trim();
     if (attempt.ok) {
       successfulHost = hostCandidate;
       break;
@@ -442,7 +532,6 @@ async function executeWinrmBroker(
   }
 
   if (!successfulHost) {
-    const wsmanScheme = connection.value.useSsl ? "https" : "http";
     const wsmanProbe = await requestText(new URL(`${wsmanScheme}://${device.ip}:${connection.value.port}/wsman`), {
       method: "GET",
       timeoutMs: 4_000,
@@ -453,33 +542,49 @@ async function executeWinrmBroker(
     const diagnostic = listenerReachable
       ? `[diagnostic] WinRM listener reachable at ${device.ip}:${connection.value.port} (HTTP ${wsmanProbe.statusCode}), but remoting session negotiation failed.`
       : `[diagnostic] WinRM listener probe failed at ${device.ip}:${connection.value.port} (${wsmanProbe.error ?? `HTTP ${wsmanProbe.statusCode}`}).`;
+    const remediation = formatWinrmRemediationHints(failureOutput);
+    const summary = listenerReachable
+      ? `WinRM session negotiation failed via ${executableUsed}`
+      : `WinRM transport connection failed via ${executableUsed}`;
+    const details = {
+      executable: executableUsed,
+      powerShellVersion: runtime.version ?? null,
+      host: orderedHostCandidates[0],
+      attemptedHosts: orderedHostCandidates,
+      port: connection.value.port,
+      useSsl: connection.value.useSsl,
+      skipCertChecks: connection.value.skipCertChecks,
+      authentication: connection.value.authentication,
+      wsmanProbe: {
+        url: `${wsmanScheme}://${device.ip}:${connection.value.port}/wsman`,
+        statusCode: wsmanProbe.statusCode,
+        ok: wsmanProbe.ok,
+        error: wsmanProbe.error ?? null,
+      },
+      matchedExpectation: false,
+      ipFallbackEnabled: allowIpFallback,
+      targetHost,
+      targetHostIsIp,
+    };
+    if (listenerReachable) {
+      winrmNegotiationFailureCache.set(failureCacheKey, {
+        summary,
+        output: `${failureOutput}\n\n${diagnostic}${remediation ? `\n\n${remediation}` : ""}`.trim(),
+        details,
+        cachedAt: Date.now(),
+      });
+    }
     return brokerResult({
       status: "failed",
       phase: "executed",
       proof: "process",
-      summary: listenerReachable
-        ? `WinRM session negotiation failed via ${executableUsed}`
-        : `WinRM transport connection failed via ${executableUsed}`,
-      output: `${failureOutput}\n\n${diagnostic}`.trim(),
-      details: {
-        executable: executableUsed,
-        powerShellVersion: runtime.version ?? null,
-        host: hostCandidates[0],
-        attemptedHosts: hostCandidates,
-        port: connection.value.port,
-        useSsl: connection.value.useSsl,
-        skipCertChecks: connection.value.skipCertChecks,
-        authentication: connection.value.authentication,
-        wsmanProbe: {
-          url: `${wsmanScheme}://${device.ip}:${connection.value.port}/wsman`,
-          statusCode: wsmanProbe.statusCode,
-          ok: wsmanProbe.ok,
-          error: wsmanProbe.error ?? null,
-        },
-        matchedExpectation: false,
-      },
+      summary,
+      output: `${failureOutput}\n\n${diagnostic}${remediation ? `\n\n${remediation}` : ""}`.trim(),
+      details,
     });
   }
+
+  winrmNegotiationFailureCache.delete(failureCacheKey);
 
   if (broker.expectRegex) {
     const matched = new RegExp(broker.expectRegex, "i").test(output);
@@ -515,7 +620,7 @@ async function executeWinrmBroker(
       executable: executableUsed,
       powerShellVersion: runtime.version ?? null,
       host: successfulHost,
-      attemptedHosts: hostCandidates,
+      attemptedHosts: orderedHostCandidates,
       port: connection.value.port,
       useSsl: connection.value.useSsl,
       skipCertChecks: connection.value.skipCertChecks,

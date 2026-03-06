@@ -31,6 +31,10 @@ export interface WebResearchResult {
   query: string;
   resultCount: number;
   consultedCount: number;
+  readStartIndex: number;
+  readEndIndex: number;
+  hasMoreResultsToRead: boolean;
+  nextReadFromResult: number | null;
   summary: string;
   results: WebResearchHit[];
   consultedPages: WebResearchPage[];
@@ -41,6 +45,8 @@ export interface WebResearchOptions {
   timeoutMs?: number;
   maxResults?: number;
   deepReadPages?: number;
+  searchPages?: number;
+  readFromResult?: number;
 }
 
 const BRAVE_SEARCH_URL = "https://search.brave.com/search";
@@ -51,8 +57,11 @@ const MAX_PAGE_HTML_CHARS = 450_000;
 const SEARCH_RESULT_SNIPPET_CHARS = 320;
 const PAGE_EXCERPT_CHARS = 1_800;
 const MIN_DIRECT_FETCH_TEXT_CHARS = 280;
-const MAX_RESULTS_LIMIT = 25;
-const MAX_DEEP_READ_PAGES_LIMIT = 12;
+const MAX_RESULTS_LIMIT = 80;
+const MAX_DEEP_READ_PAGES_LIMIT = 40;
+const MAX_SEARCH_PAGES_LIMIT = 10;
+const DEFAULT_RESULTS_PER_PAGE_HINT = 8;
+const MAX_DEEP_READ_CONCURRENCY = 4;
 const BLOCKED_HOST_SUFFIXES = [".local", ".internal", ".lan", ".home", ".home.arpa"];
 const NAMED_ENTITIES: Record<string, string> = {
   amp: "&",
@@ -273,6 +282,54 @@ function parseBraveSearchResults(html: string, maxResults: number): WebResearchH
   return results;
 }
 
+function parseBraveNextPageUrl(html: string): string | null {
+  const nextHref =
+    html.match(/<a[^>]+href="([^"]+)"[^>]*aria-label="Next"/i)?.[1]
+    ?? html.match(/<a[^>]+aria-label="Next"[^>]*href="([^"]+)"/i)?.[1]
+    ?? html.match(/<a[^>]+href="([^"]+)"[^>]*rel="next"/i)?.[1]
+    ?? html.match(/<a[^>]+rel="next"[^>]*href="([^"]+)"/i)?.[1];
+  return toPublicUrl(nextHref);
+}
+
+function buildBraveSearchUrl(query: string, page: number): string {
+  const searchUrl = new URL(BRAVE_SEARCH_URL);
+  searchUrl.searchParams.set("q", query);
+  searchUrl.searchParams.set("source", "web");
+  searchUrl.searchParams.set("summary", "0");
+  if (page > 1) {
+    searchUrl.searchParams.set("page", String(page));
+  }
+  return searchUrl.toString();
+}
+
+async function mapWithConcurrency<T, R>(
+  values: readonly T[],
+  concurrency: number,
+  mapper: (value: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (values.length === 0) {
+    return [];
+  }
+
+  const limit = Math.max(1, Math.min(concurrency, values.length));
+  const results = new Array<R>(values.length);
+  let cursor = 0;
+
+  const workers = Array.from({ length: limit }, async () => {
+    while (true) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= values.length) {
+        return;
+      }
+      results[index] = await mapper(values[index], index);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+}
+
 async function loadPlaywright(): Promise<PlaywrightModule | null> {
   try {
     const moduleName = "playwright";
@@ -368,6 +425,13 @@ export async function runWebResearch(
   const timeoutMs = clampInt(options.timeoutMs, 3_000, 60_000, 18_000);
   const maxResults = clampInt(options.maxResults, 1, MAX_RESULTS_LIMIT, 5);
   const deepReadPages = clampInt(options.deepReadPages, 0, MAX_DEEP_READ_PAGES_LIMIT, 2);
+  const searchPages = clampInt(
+    options.searchPages,
+    1,
+    MAX_SEARCH_PAGES_LIMIT,
+    Math.min(MAX_SEARCH_PAGES_LIMIT, Math.max(1, Math.ceil(maxResults / DEFAULT_RESULTS_PER_PAGE_HINT))),
+  );
+  const readFromResult = clampInt(options.readFromResult, 1, MAX_RESULTS_LIMIT, 1);
 
   if (!trimmedQuery) {
     return {
@@ -376,6 +440,10 @@ export async function runWebResearch(
       query: "",
       resultCount: 0,
       consultedCount: 0,
+      readStartIndex: 0,
+      readEndIndex: 0,
+      hasMoreResultsToRead: false,
+      nextReadFromResult: null,
       summary: "Web research query was empty.",
       results: [],
       consultedPages: [],
@@ -383,29 +451,71 @@ export async function runWebResearch(
     };
   }
 
-  const searchUrl = new URL(BRAVE_SEARCH_URL);
-  searchUrl.searchParams.set("q", trimmedQuery);
-  searchUrl.searchParams.set("source", "web");
-  searchUrl.searchParams.set("summary", "0");
+  const results: WebResearchHit[] = [];
+  const seenUrls = new Set<string>();
+  const warnings: string[] = [];
+  let searchedPages = 0;
+  let page = 1;
+  let searchUrl = buildBraveSearchUrl(trimmedQuery, page);
 
-  const searchResponse = await fetchText(searchUrl.toString(), timeoutMs);
-  if (!searchResponse.ok) {
-    return {
-      ok: false,
-      engine: "brave",
-      query: trimmedQuery,
-      resultCount: 0,
-      consultedCount: 0,
-      summary: searchResponse.error
-        ? `Web search failed: ${searchResponse.error}`
-        : `Web search failed with status ${searchResponse.status}.`,
-      results: [],
-      consultedPages: [],
-      warnings: ["Search request failed."],
-    };
+  while (searchedPages < searchPages && results.length < maxResults) {
+    const searchResponse = await fetchText(searchUrl, timeoutMs);
+    if (!searchResponse.ok) {
+      if (searchedPages === 0) {
+        return {
+          ok: false,
+          engine: "brave",
+          query: trimmedQuery,
+          resultCount: 0,
+          consultedCount: 0,
+          readStartIndex: 0,
+          readEndIndex: 0,
+          hasMoreResultsToRead: false,
+          nextReadFromResult: null,
+          summary: searchResponse.error
+            ? `Web search failed: ${searchResponse.error}`
+            : `Web search failed with status ${searchResponse.status}.`,
+          results: [],
+          consultedPages: [],
+          warnings: ["Search request failed."],
+        };
+      }
+      warnings.push(
+        searchResponse.error
+          ? `Search page ${page} failed: ${searchResponse.error}`
+          : `Search page ${page} failed with status ${searchResponse.status}.`,
+      );
+      break;
+    }
+
+    searchedPages += 1;
+    const pageResults = parseBraveSearchResults(searchResponse.text.slice(0, MAX_RESULT_HTML_CHARS), maxResults);
+    for (const parsed of pageResults) {
+      if (results.length >= maxResults) {
+        break;
+      }
+      if (seenUrls.has(parsed.url)) {
+        continue;
+      }
+      seenUrls.add(parsed.url);
+      results.push({
+        ...parsed,
+        position: results.length + 1,
+      });
+    }
+
+    if (results.length >= maxResults) {
+      break;
+    }
+
+    const hintedNext = parseBraveNextPageUrl(searchResponse.text);
+    page += 1;
+    searchUrl = hintedNext ?? buildBraveSearchUrl(trimmedQuery, page);
+    if (!hintedNext && page > searchPages) {
+      break;
+    }
   }
 
-  const results = parseBraveSearchResults(searchResponse.text.slice(0, MAX_RESULT_HTML_CHARS), maxResults);
   if (results.length === 0) {
     return {
       ok: false,
@@ -413,31 +523,48 @@ export async function runWebResearch(
       query: trimmedQuery,
       resultCount: 0,
       consultedCount: 0,
+      readStartIndex: 0,
+      readEndIndex: 0,
+      hasMoreResultsToRead: false,
+      nextReadFromResult: null,
       summary: "Search completed but no usable public-web results were parsed.",
       results: [],
       consultedPages: [],
-      warnings: ["No usable public search results."],
+      warnings: warnings.length > 0 ? warnings : ["No usable public search results."],
     };
   }
 
   const consultedPages: WebResearchPage[] = [];
-  const warnings: string[] = [];
+  const readStartOffset = Math.min(Math.max(0, readFromResult - 1), Math.max(0, results.length - 1));
+  const resultsToRead = results.slice(readStartOffset, readStartOffset + deepReadPages);
+  const readOutcomes = await mapWithConcurrency(
+    resultsToRead,
+    Math.min(MAX_DEEP_READ_CONCURRENCY, deepReadPages || 1),
+    async (result) => {
+      const pageResult = await readPublicPage(result.url, timeoutMs);
+      return { result, pageResult };
+    },
+  );
 
-  for (const result of results) {
-    if (consultedPages.length >= deepReadPages) {
-      break;
-    }
-    const page = await readPublicPage(result.url, timeoutMs);
-    if (!page) {
+  for (const { result, pageResult } of readOutcomes) {
+    if (!pageResult) {
       warnings.push(`Could not read ${result.url}`);
       continue;
     }
     consultedPages.push({
-      ...page,
+      ...pageResult,
       position: result.position,
-      title: page.title || result.title,
+      title: pageResult.title || result.title,
     });
   }
+
+  const readStartIndex = resultsToRead.length > 0 ? resultsToRead[0].position : 0;
+  const readEndIndex = resultsToRead.length > 0 ? resultsToRead[resultsToRead.length - 1].position : 0;
+  const hasMoreResultsToRead = readEndIndex > 0 && readEndIndex < results.length;
+  const nextReadFromResult = hasMoreResultsToRead ? readEndIndex + 1 : null;
+  const readSummary = readStartIndex > 0
+    ? `read result slots ${readStartIndex}-${readEndIndex}`
+    : "did not deep-read result pages";
 
   return {
     ok: true,
@@ -445,7 +572,11 @@ export async function runWebResearch(
     query: trimmedQuery,
     resultCount: results.length,
     consultedCount: consultedPages.length,
-    summary: `Found ${results.length} public web result${results.length === 1 ? "" : "s"} and read ${consultedPages.length} page${consultedPages.length === 1 ? "" : "s"}.`,
+    readStartIndex,
+    readEndIndex,
+    hasMoreResultsToRead,
+    nextReadFromResult,
+    summary: `Found ${results.length} public web result${results.length === 1 ? "" : "s"} across ${searchedPages} search page${searchedPages === 1 ? "" : "s"}; ${readSummary} and extracted ${consultedPages.length} page${consultedPages.length === 1 ? "" : "s"}.`,
     results,
     consultedPages,
     warnings,

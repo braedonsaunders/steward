@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -277,6 +278,7 @@ export function StewardProvider({ children }: { children: ReactNode }) {
   const [authStatus, setAuthStatus] = useState<AuthClientStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const hasLoadedStateRef = useRef(false);
 
   const clearProtectedState = useCallback(() => {
     setState(null);
@@ -287,13 +289,14 @@ export function StewardProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const loadState = useCallback(async () => {
-    setLoading(true);
+    setLoading(!hasLoadedStateRef.current);
     try {
       const nextAuthStatus = await fetchAuthStatus();
       setAuthStatus(nextAuthStatus);
       if (requiresInteractiveAuth(nextAuthStatus)) {
         clearProtectedState();
         setError(null);
+        hasLoadedStateRef.current = true;
         return;
       }
 
@@ -310,6 +313,7 @@ export function StewardProvider({ children }: { children: ReactNode }) {
       setLatestDigest(digest);
       setAdapters(adapterList);
       setError(null);
+      hasLoadedStateRef.current = true;
     } catch (err) {
       if (err instanceof UnauthorizedError) {
         try {
