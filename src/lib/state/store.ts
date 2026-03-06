@@ -55,6 +55,20 @@ import type {
   Workload,
 } from "@/lib/state/types";
 
+const WEB_RESEARCH_PROVIDER_VALUES: RuntimeSettings["webResearchProvider"][] = [
+  "brave_scrape",
+  "duckduckgo_scrape",
+  "brave_api",
+  "serper",
+  "serpapi",
+];
+
+const WEB_RESEARCH_FALLBACK_STRATEGY_VALUES: RuntimeSettings["webResearchFallbackStrategy"][] = [
+  "prefer_non_key",
+  "key_only",
+  "selected_only",
+];
+
 /* ---------- Row <-> Domain helpers ---------- */
 
 function deviceFromRow(row: Record<string, unknown>): Device {
@@ -708,6 +722,14 @@ class StateStore {
         defaults.browserObservationCaptureScreenshots,
       ),
       enableWebResearch: asBool(raw.enableWebResearch, defaults.enableWebResearch),
+      webResearchProvider: WEB_RESEARCH_PROVIDER_VALUES.includes(raw.webResearchProvider as RuntimeSettings["webResearchProvider"])
+        ? raw.webResearchProvider as RuntimeSettings["webResearchProvider"]
+        : defaults.webResearchProvider,
+      webResearchFallbackStrategy: WEB_RESEARCH_FALLBACK_STRATEGY_VALUES.includes(
+        raw.webResearchFallbackStrategy as RuntimeSettings["webResearchFallbackStrategy"],
+      )
+        ? raw.webResearchFallbackStrategy as RuntimeSettings["webResearchFallbackStrategy"]
+        : defaults.webResearchFallbackStrategy,
       webResearchTimeoutMs: asPositiveInt(raw.webResearchTimeoutMs, defaults.webResearchTimeoutMs),
       webResearchMaxResults: Math.max(
         1,
@@ -977,6 +999,8 @@ class StateStore {
       deepBrowserObservationTargets: map.get("runtime.deepBrowserObservationTargets"),
       browserObservationCaptureScreenshots: map.get("runtime.browserObservationCaptureScreenshots"),
       enableWebResearch: map.get("runtime.enableWebResearch"),
+      webResearchProvider: map.get("runtime.webResearchProvider"),
+      webResearchFallbackStrategy: map.get("runtime.webResearchFallbackStrategy"),
       webResearchTimeoutMs: map.get("runtime.webResearchTimeoutMs"),
       webResearchMaxResults: map.get("runtime.webResearchMaxResults"),
       webResearchDeepReadPages: map.get("runtime.webResearchDeepReadPages"),
@@ -1138,6 +1162,8 @@ class StateStore {
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.deepBrowserObservationTargets', ?)").run(String(state.runtimeSettings.deepBrowserObservationTargets));
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.browserObservationCaptureScreenshots', ?)").run(state.runtimeSettings.browserObservationCaptureScreenshots ? "true" : "false");
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.enableWebResearch', ?)").run(state.runtimeSettings.enableWebResearch ? "true" : "false");
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.webResearchProvider', ?)").run(String(state.runtimeSettings.webResearchProvider));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.webResearchFallbackStrategy', ?)").run(String(state.runtimeSettings.webResearchFallbackStrategy));
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.webResearchTimeoutMs', ?)").run(String(state.runtimeSettings.webResearchTimeoutMs));
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.webResearchMaxResults', ?)").run(String(state.runtimeSettings.webResearchMaxResults));
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.webResearchDeepReadPages', ?)").run(String(state.runtimeSettings.webResearchDeepReadPages));
@@ -1726,6 +1752,8 @@ class StateStore {
         put.run("runtime.deepBrowserObservationTargets", String(normalized.deepBrowserObservationTargets));
         put.run("runtime.browserObservationCaptureScreenshots", String(normalized.browserObservationCaptureScreenshots));
         put.run("runtime.enableWebResearch", String(normalized.enableWebResearch));
+        put.run("runtime.webResearchProvider", String(normalized.webResearchProvider));
+        put.run("runtime.webResearchFallbackStrategy", String(normalized.webResearchFallbackStrategy));
         put.run("runtime.webResearchTimeoutMs", String(normalized.webResearchTimeoutMs));
         put.run("runtime.webResearchMaxResults", String(normalized.webResearchMaxResults));
         put.run("runtime.webResearchDeepReadPages", String(normalized.webResearchDeepReadPages));

@@ -19,6 +19,11 @@ import {
 } from "lucide-react";
 import { useSteward } from "@/lib/hooks/use-steward";
 import { PROVIDER_REGISTRY, type ProviderMeta } from "@/lib/llm/registry";
+import {
+  requiresWebResearchApiKey,
+  WEB_RESEARCH_PROVIDER_META,
+  WEB_RESEARCH_PROVIDER_ORDER,
+} from "@/lib/assistant/web-research-config";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -49,7 +54,7 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import type { LLMProvider, RuntimeSettings } from "@/lib/state/types";
+import type { LLMProvider, RuntimeSettings, WebResearchProvider } from "@/lib/state/types";
 import { formatIncidentType } from "@/lib/incidents/utils";
 import { cn } from "@/lib/utils";
 import { withApiTokenQuery, withClientApiToken } from "@/lib/auth/client-token";
@@ -100,6 +105,15 @@ const groupedProviders = PROVIDER_REGISTRY.reduce(
 );
 
 const categoryOrder = ["cloud", "local", "aggregator"] as const;
+
+const webResearchFallbackStrategyOptions: Array<{
+  value: RuntimeSettings["webResearchFallbackStrategy"];
+  label: string;
+}> = [
+  { value: "prefer_non_key", label: "Auto (prefer no-key fallbacks)" },
+  { value: "key_only", label: "Auto (keyed providers only)" },
+  { value: "selected_only", label: "Selected provider only" },
+];
 
 // ---------------------------------------------------------------------------
 // Providers Section
@@ -1141,6 +1155,22 @@ function GeneralSection({ forcedTab }: { forcedTab?: GeneralTabValue }) {
   const [systemDraft, setSystemDraft] = useState(systemSettings);
   const [apiTokenDraft, setApiTokenDraft] = useState("");
   const [activeTab, setActiveTab] = useState<GeneralTabValue>(forcedTab ?? "agent");
+  const [webResearchKeyStatus, setWebResearchKeyStatus] = useState<Record<WebResearchProvider, boolean>>({
+    brave_scrape: false,
+    duckduckgo_scrape: false,
+    brave_api: false,
+    serper: false,
+    serpapi: false,
+  });
+  const [webResearchKeyDrafts, setWebResearchKeyDrafts] = useState<Record<WebResearchProvider, string>>({
+    brave_scrape: "",
+    duckduckgo_scrape: "",
+    brave_api: "",
+    serper: "",
+    serpapi: "",
+  });
+  const [loadingWebResearchKeys, setLoadingWebResearchKeys] = useState(false);
+  const [savingWebResearchKeyFor, setSavingWebResearchKeyFor] = useState<WebResearchProvider | null>(null);
 
   useEffect(() => {
     setRuntimeDraft(runtimeSettings);
@@ -1155,6 +1185,37 @@ function GeneralSection({ forcedTab }: { forcedTab?: GeneralTabValue }) {
       setActiveTab(forcedTab);
     }
   }, [forcedTab]);
+
+  const loadWebResearchCredentials = useCallback(async () => {
+    setLoadingWebResearchKeys(true);
+    try {
+      const response = await fetch("/api/settings/web-research/credentials", withClientApiToken());
+      const data = (await response.json()) as {
+        error?: string;
+        hasApiKey?: Partial<Record<WebResearchProvider, boolean>>;
+      };
+      if (!response.ok) {
+        throw new Error(data.error ?? "Failed to load web research provider keys.");
+      }
+      setWebResearchKeyStatus((current) => ({
+        ...current,
+        brave_api: Boolean(data.hasApiKey?.brave_api),
+        serper: Boolean(data.hasApiKey?.serper),
+        serpapi: Boolean(data.hasApiKey?.serpapi),
+      }));
+    } catch (err) {
+      setFeedback({
+        type: "error",
+        message: err instanceof Error ? err.message : "Failed to load web research provider keys.",
+      });
+    } finally {
+      setLoadingWebResearchKeys(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadWebResearchCredentials();
+  }, [loadWebResearchCredentials]);
 
   const lastRun = useMemo(() => {
     if (agentRuns.length === 0) return null;
@@ -1211,6 +1272,60 @@ function GeneralSection({ forcedTab }: { forcedTab?: GeneralTabValue }) {
   const setRuntimeToggleField = (key: RuntimeBooleanField, value: boolean) => {
     setRuntimeDraft((current) => ({ ...current, [key]: value }));
   };
+
+  const setWebResearchProvider = (provider: WebResearchProvider) => {
+    setRuntimeDraft((current) => ({ ...current, webResearchProvider: provider }));
+  };
+
+  const setWebResearchFallbackStrategy = (strategy: RuntimeSettings["webResearchFallbackStrategy"]) => {
+    setRuntimeDraft((current) => ({ ...current, webResearchFallbackStrategy: strategy }));
+  };
+
+  const setWebResearchKeyDraft = (provider: WebResearchProvider, value: string) => {
+    setWebResearchKeyDrafts((current) => ({
+      ...current,
+      [provider]: value,
+    }));
+  };
+
+  const saveWebResearchApiKey = useCallback(async (provider: WebResearchProvider) => {
+    if (!requiresWebResearchApiKey(provider)) {
+      return;
+    }
+
+    setSavingWebResearchKeyFor(provider);
+    try {
+      const trimmed = webResearchKeyDrafts[provider].trim();
+      const response = await fetch("/api/settings/web-research/credentials", withClientApiToken({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          provider,
+          apiKey: trimmed.length > 0 ? trimmed : null,
+        }),
+      }));
+      const data = (await response.json()) as { error?: string; hasApiKey?: boolean };
+      if (!response.ok) {
+        throw new Error(data.error ?? `Failed to update API key for ${provider}.`);
+      }
+
+      setWebResearchKeyStatus((current) => ({ ...current, [provider]: Boolean(data.hasApiKey) }));
+      setWebResearchKeyDrafts((current) => ({ ...current, [provider]: "" }));
+      setFeedback({
+        type: "ok",
+        message: data.hasApiKey
+          ? `${WEB_RESEARCH_PROVIDER_META[provider].label} API key saved.`
+          : `${WEB_RESEARCH_PROVIDER_META[provider].label} API key cleared.`,
+      });
+    } catch (err) {
+      setFeedback({
+        type: "error",
+        message: err instanceof Error ? err.message : `Failed to update API key for ${provider}.`,
+      });
+    } finally {
+      setSavingWebResearchKeyFor(null);
+    }
+  }, [webResearchKeyDrafts]);
 
   const removeIgnoredIncidentType = (incidentType: string) => {
     setRuntimeDraft((current) => ({
@@ -1470,10 +1585,91 @@ function GeneralSection({ forcedTab }: { forcedTab?: GeneralTabValue }) {
                   <Label className="text-xs text-muted-foreground">Web research deep-read pages</Label>
                   <Input type="number" value={runtimeDraft.webResearchDeepReadPages} onChange={(e) => setDraftField("webResearchDeepReadPages", Number(e.target.value))} />
                 </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Web research provider</Label>
+                  <Select
+                    value={runtimeDraft.webResearchProvider}
+                    onValueChange={(value) => setWebResearchProvider(value as WebResearchProvider)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {WEB_RESEARCH_PROVIDER_ORDER.map((provider) => (
+                        <SelectItem key={provider} value={provider}>
+                          {WEB_RESEARCH_PROVIDER_META[provider].label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Web research fallback strategy</Label>
+                  <Select
+                    value={runtimeDraft.webResearchFallbackStrategy}
+                    onValueChange={(value) =>
+                      setWebResearchFallbackStrategy(value as RuntimeSettings["webResearchFallbackStrategy"])}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {webResearchFallbackStrategyOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
                 <div className="space-y-1.5 md:col-span-2">
                   <Label className="text-xs text-muted-foreground">DHCP lease command timeout (ms)</Label>
                   <Input type="number" value={runtimeDraft.dhcpLeaseCommandTimeoutMs} onChange={(e) => setDraftField("dhcpLeaseCommandTimeoutMs", Number(e.target.value))} />
                 </div>
+              </div>
+
+              <div className="space-y-3 rounded-md border border-border/60 bg-muted/30 p-3">
+                <p className="text-xs text-muted-foreground">
+                  Web research provider API keys are stored in the vault and never in runtime settings.
+                </p>
+                {WEB_RESEARCH_PROVIDER_ORDER.filter((provider) => requiresWebResearchApiKey(provider)).map((provider) => (
+                  <div key={provider} className="rounded-md border border-border/50 bg-background/60 p-3">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-medium">{WEB_RESEARCH_PROVIDER_META[provider].label}</p>
+                        <p className="text-xs text-muted-foreground">{WEB_RESEARCH_PROVIDER_META[provider].description}</p>
+                      </div>
+                      <Badge variant={webResearchKeyStatus[provider] ? "default" : "outline"} className="text-[10px]">
+                        {webResearchKeyStatus[provider] ? "API key set" : "No key"}
+                      </Badge>
+                    </div>
+                    <div className="flex flex-wrap items-end gap-2">
+                      <div className="min-w-[220px] flex-1 space-y-1">
+                        <Label className="text-xs text-muted-foreground">API key</Label>
+                        <Input
+                          type="password"
+                          value={webResearchKeyDrafts[provider]}
+                          placeholder="Enter new key or leave blank to clear"
+                          onChange={(e) => setWebResearchKeyDraft(provider, e.target.value)}
+                        />
+                      </div>
+                      <Button
+                        variant="outline"
+                        disabled={loadingWebResearchKeys || savingWebResearchKeyFor === provider}
+                        onClick={() => void saveWebResearchApiKey(provider)}
+                      >
+                        {savingWebResearchKeyFor === provider
+                          ? (
+                            <>
+                              <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                              Saving...
+                            </>
+                          )
+                          : "Save key"}
+                      </Button>
+                    </div>
+                  </div>
+                ))}
               </div>
 
               <div className="space-y-3 rounded-md border border-border/60 bg-muted/30 p-3">

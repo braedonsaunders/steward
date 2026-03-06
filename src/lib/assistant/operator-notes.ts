@@ -1,4 +1,5 @@
-import { generateText } from "ai";
+import { generateObject } from "ai";
+import { z } from "zod";
 import { getDeviceIdentityDescription, looksLikeScannedDeviceName } from "@/lib/devices/identity";
 import { buildLanguageModel } from "@/lib/llm/providers";
 import { stateStore } from "@/lib/state/store";
@@ -6,24 +7,6 @@ import { DEVICE_TYPE_VALUES, type ChatToolEvent, type Device, type DeviceType, t
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function extractJsonObject(raw: string): Record<string, unknown> | null {
-  const trimmed = raw.trim();
-  const fenced = trimmed.match(/```json\s*([\s\S]+?)```/i);
-  const candidate = fenced?.[1]?.trim() ?? trimmed;
-  const firstBrace = candidate.indexOf("{");
-  const lastBrace = candidate.lastIndexOf("}");
-  if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(candidate.slice(firstBrace, lastBrace + 1));
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
 }
 
 function clampText(value: string, maxChars: number): string {
@@ -110,6 +93,73 @@ function buildToolEventDigest(toolEvents: ChatToolEvent[] | undefined): Array<Re
     }));
 }
 
+const operatorNotesUpdateSchema = z.object({
+  shouldUpdate: z.boolean().optional(),
+  operatorNotes: z.string().optional(),
+  structuredContext: z.record(z.string(), z.unknown()).optional(),
+  identity: z.object({
+    shouldRename: z.boolean().optional(),
+    name: z.string().optional(),
+    description: z.string().optional(),
+    role: z.string().optional(),
+    type: z.string().optional(),
+  }).optional(),
+  reason: z.string().optional(),
+});
+
+function summarizeServiceSurface(device: Device): string {
+  const topServices = device.services
+    .slice(0, 6)
+    .map((service) => `${service.name || service.transport}/${service.port}`);
+  return topServices.length > 0 ? topServices.join(", ") : "no confirmed services yet";
+}
+
+function buildFallbackOperatorNotes(device: Device, toolEvents: Array<Record<string, unknown>>): string {
+  const role = typeof device.role === "string" && device.role.trim().length > 0
+    ? device.role.trim()
+    : "unspecified role";
+  const typeLabel = device.type === "unknown" ? "unknown type" : device.type;
+  const base = `${device.name} (${device.ip}) is a ${typeLabel} with ${role}. Surface: ${summarizeServiceSurface(device)}.`;
+  const latestToolSummary = toolEvents
+    .map((event) => (typeof event.summary === "string" ? event.summary.trim() : ""))
+    .find((summary) => summary.length > 0);
+  if (!latestToolSummary) {
+    return clampText(base, 1200);
+  }
+  return clampText(`${base} Latest evidence: ${latestToolSummary}.`, 1200);
+}
+
+function buildFallbackStructuredContext(device: Device, toolEvents: Array<Record<string, unknown>>): Record<string, unknown> {
+  const successfulToolSignals = toolEvents
+    .filter((event) => event.status === "completed")
+    .map((event) => ({
+      label: typeof event.label === "string" ? event.label : "tool",
+      summary: typeof event.summary === "string" ? event.summary : "",
+    }))
+    .filter((event) => event.summary.trim().length > 0)
+    .slice(0, 6);
+
+  return {
+    observed: {
+      name: device.name,
+      ip: device.ip,
+      type: device.type,
+      vendor: device.vendor ?? null,
+      os: device.os ?? null,
+      role: device.role ?? null,
+      protocols: device.protocols.slice(0, 12),
+      services: device.services.slice(0, 12).map((service) => ({
+        name: service.name,
+        transport: service.transport,
+        port: service.port,
+        product: service.product ?? null,
+        version: service.version ?? null,
+      })),
+    },
+    recentToolSignals: successfulToolSignals,
+  };
+}
+
 function normalizeName(value: unknown): string {
   if (typeof value !== "string") {
     return "";
@@ -184,54 +234,66 @@ export async function maybeUpdateOperatorNotes(args: {
     const identityRecord = currentIdentityRecord(latestDevice);
     const manualNameLocked = identityRecord.nameManuallySet === true;
     const languageModel = await buildLanguageModel(args.provider, args.model);
-    const result = await generateText({
-      model: languageModel,
-      temperature: 0,
-      maxOutputTokens: 700,
-      prompt: [
-        "You maintain concise durable operator notes and identity metadata for a managed device.",
-        "Return JSON only:",
-        '{"shouldUpdate": boolean, "operatorNotes": string, "structuredContext": object, "identity": {"shouldRename": boolean, "name": string, "description": string, "role": string, "type": string}, "reason": string}',
-        "Rules:",
-        "- Update notes only when stable operational facts were learned.",
-        "- Keep operatorNotes under 1200 chars and focused on durable facts: role, dependencies, auth surface, ports, caveats, consumers, update posture.",
-        "- structuredContext should contain durable machine-readable facts only.",
-        "- If onboarding is active and the current name looks autogenerated, you may rename the device to a concise operator-friendly name.",
-        "- Never rename a device whose current name already looks intentional.",
-        "- identity.description must be 1-2 sentences, plain language, and under 280 chars.",
-        "- Exclude temporary noise, speculation, and transient probe errors.",
-        "",
-        `Onboarding session: ${args.onboarding ? "yes" : "no"}`,
-        `Current autogenerated-looking name: ${autogeneratedName ? "yes" : "no"}`,
-        `Name manually set by user: ${manualNameLocked ? "yes" : "no"}`,
-        `Current notes: ${currentNotes || "(empty)"}`,
-        `Current description: ${currentDescription || "(empty)"}`,
-        `Latest user message: ${args.userInput}`,
-        `Latest assistant response: ${args.assistantOutput}`,
-        `Recent conversation: ${conversationSlice || "(none)"}`,
-        `Device snapshot: ${JSON.stringify(deviceSnapshot)}`,
-        `Latest tool evidence: ${toolEvidence.length > 0 ? JSON.stringify(toolEvidence) : "(none)"}`,
-      ].join("\n"),
-    });
+    const fallbackNotes = buildFallbackOperatorNotes(latestDevice, toolEvidence);
+    const fallbackStructuredContext = buildFallbackStructuredContext(latestDevice, toolEvidence);
 
-    const parsed = extractJsonObject(result.text);
-    if (!parsed) {
-      return;
+    let generated: z.infer<typeof operatorNotesUpdateSchema> | null = null;
+    try {
+      const result = await generateObject({
+        model: languageModel,
+        temperature: 0,
+        maxOutputTokens: 700,
+        schema: operatorNotesUpdateSchema,
+        schemaName: "operator_notes_update",
+        schemaDescription: "Durable operator note and structured memory updates for a managed device.",
+        prompt: [
+          "You maintain concise durable operator notes and identity metadata for a managed device.",
+          "Rules:",
+          "- Update notes when stable operational facts were learned.",
+          "- Keep operatorNotes under 1200 chars and focused on durable facts: role, dependencies, auth surface, ports, caveats, consumers, update posture.",
+          "- structuredContext should contain durable machine-readable facts only.",
+          "- If onboarding is active and the current name looks autogenerated, you may rename the device to a concise operator-friendly name.",
+          "- Never rename a device whose current name already looks intentional.",
+          "- identity.description must be 1-2 sentences, plain language, and under 280 chars.",
+          "- Exclude temporary noise, speculation, and transient probe errors.",
+          "",
+          `Onboarding session: ${args.onboarding ? "yes" : "no"}`,
+          `Current autogenerated-looking name: ${autogeneratedName ? "yes" : "no"}`,
+          `Name manually set by user: ${manualNameLocked ? "yes" : "no"}`,
+          `Current notes: ${currentNotes || "(empty)"}`,
+          `Current description: ${currentDescription || "(empty)"}`,
+          `Latest user message: ${args.userInput}`,
+          `Latest assistant response: ${args.assistantOutput}`,
+          `Recent conversation: ${conversationSlice || "(none)"}`,
+          `Device snapshot: ${JSON.stringify(deviceSnapshot)}`,
+          `Latest tool evidence: ${toolEvidence.length > 0 ? JSON.stringify(toolEvidence) : "(none)"}`,
+          `Fallback operator notes baseline: ${fallbackNotes}`,
+          `Fallback structured context baseline: ${JSON.stringify(fallbackStructuredContext)}`,
+        ].join("\n"),
+      });
+      generated = result.object;
+    } catch {
+      generated = null;
     }
 
-    const shouldUpdate = parsed.shouldUpdate === true;
-    const nextNotes = typeof parsed.operatorNotes === "string"
-      ? parsed.operatorNotes.trim()
-      : (typeof parsed.notes === "string" ? parsed.notes.trim() : "");
-    const nextStructuredContext = isRecord(parsed.structuredContext)
-      ? parsed.structuredContext
-      : undefined;
-    const identity = isRecord(parsed.identity) ? parsed.identity : {};
+    const shouldUpdate = generated?.shouldUpdate === true;
+    const generatedNotes = typeof generated?.operatorNotes === "string"
+      ? generated.operatorNotes.trim()
+      : "";
+    const nextNotes = generatedNotes.length > 0
+      ? generatedNotes
+      : (currentNotes.length === 0 || toolEvidence.length > 0 ? fallbackNotes : "");
+    const generatedStructuredContext = generated?.structuredContext;
+    const nextStructuredContext = generatedStructuredContext && isRecord(generatedStructuredContext)
+      ? generatedStructuredContext
+      : (Object.keys(currentStructuredContext).length === 0 || toolEvidence.length > 0
+        ? fallbackStructuredContext
+        : undefined);
+    const identity = isRecord(generated?.identity) ? generated.identity : {};
     const renameRequested = args.onboarding && autogeneratedName
       && !manualNameLocked
       && (
         identity.shouldRename === true
-        || identity.rename === true
         || (typeof identity.name === "string" && identity.name.trim().length > 0)
       );
     const nextName = renameRequested ? normalizeName(identity.name) : "";
@@ -319,9 +381,9 @@ export async function maybeUpdateOperatorNotes(args: {
         sessionId: args.sessionId ?? null,
         onboarding: args.onboarding,
         changedFields,
-        reason: typeof parsed.reason === "string" ? parsed.reason : undefined,
-      },
-    });
+         reason: typeof generated?.reason === "string" ? generated.reason : undefined,
+       },
+     });
   } catch {
     // best-effort background note maintenance
   }

@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { generateText, stepCountIs, streamText } from "ai";
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
@@ -13,6 +15,7 @@ import { planWidgetRoute, type WidgetRoutePlan } from "@/lib/assistant/widget-ro
 import { buildOnboardingSystemPrompt, isOnboardingSession } from "@/lib/adoption/conversation";
 import { getDefaultProvider } from "@/lib/llm/config";
 import { buildLanguageModel } from "@/lib/llm/providers";
+import { getDataDir } from "@/lib/state/db";
 import { getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
 import { stateStore } from "@/lib/state/store";
 import type { ChatMessageMetadata, ChatToolEvent, ChatToolEventKind, LLMProvider } from "@/lib/state/types";
@@ -22,6 +25,9 @@ const CHAT_MAX_OUTPUT_TOKENS = 8_000;
 const ONBOARDING_MAX_OUTPUT_TOKENS = 12_000;
 const CHAT_MAX_STEPS = 16;
 const CHAT_MAX_AUTO_CONTINUATIONS = 3;
+const CHAT_AUTO_CONTINUE_FINISH_REASONS = new Set(["length", "tool-calls", "max-steps"]);
+const BROWSER_PREVIEW_MAX_CHARS = 240_000;
+const CHAT_BROWSER_ARTIFACT_DIR = path.join(getDataDir(), "artifacts", "browser-browse");
 
 export const runtime = "nodejs";
 
@@ -349,7 +355,13 @@ function summarizeBrowserOutputPreview(output: Record<string, unknown>): string 
       if (typeof step.text === "string") compact.text = clampText(step.text, 800);
       if (typeof step.result === "string") compact.result = clampText(step.result, 800);
       if (typeof step.screenshotBase64 === "string" && step.screenshotBase64.length > 0) {
-        compact.screenshotBase64 = step.screenshotBase64.slice(0, 200_000);
+        const mimeType = typeof step.mimeType === "string" ? step.mimeType : "image/png";
+        const persistedPath = persistChatBrowserInlineScreenshot(step.screenshotBase64, mimeType);
+        if (persistedPath) {
+          compact.path = persistedPath;
+        } else {
+          compact.screenshotBase64 = step.screenshotBase64;
+        }
       }
       if (typeof step.mimeType === "string") compact.mimeType = step.mimeType;
       return compact;
@@ -373,7 +385,87 @@ function summarizeBrowserOutputPreview(output: Record<string, unknown>): string 
       : undefined,
   };
 
-  return previewValue(compact, 240_000);
+  const stringifyPreview = (value: Record<string, unknown>): string | undefined => {
+    try {
+      const serialized = JSON.stringify(value);
+      return serialized.length <= BROWSER_PREVIEW_MAX_CHARS ? serialized : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const direct = stringifyPreview(compact);
+  if (direct) {
+    return direct;
+  }
+
+  const withoutInlineScreenshots: Record<string, unknown> = {
+    ...compact,
+    stepResults: normalizedSteps.map((step) => {
+      if (typeof step.screenshotBase64 !== "string") {
+        return step;
+      }
+      const bytes = Math.floor((step.screenshotBase64.length * 3) / 4);
+      const rest = { ...step };
+      delete rest.screenshotBase64;
+      return {
+        ...rest,
+        screenshotOmitted: true,
+        screenshotBytesEstimate: bytes,
+      };
+    }),
+  };
+
+  const withoutScreenshots = stringifyPreview(withoutInlineScreenshots);
+  if (withoutScreenshots) {
+    return withoutScreenshots;
+  }
+
+  const minimal: Record<string, unknown> = {
+    ok: compact.ok,
+    url: compact.url,
+    finalUrl: compact.finalUrl,
+    title: compact.title,
+    stepsExecuted: compact.stepsExecuted,
+    stepResults: Array.isArray(withoutInlineScreenshots.stepResults)
+      ? (withoutInlineScreenshots.stepResults as unknown[]).slice(0, 12)
+      : [],
+  };
+  return previewValue(minimal, 8_000);
+}
+
+function persistChatBrowserInlineScreenshot(base64: string, mimeType: string): string | undefined {
+  const normalizedMime = mimeType.toLowerCase();
+  const ext = normalizedMime.includes("jpeg") || normalizedMime.includes("jpg")
+    ? "jpg"
+    : normalizedMime.includes("webp")
+      ? "webp"
+      : "png";
+  try {
+    const bytes = Buffer.from(base64, "base64");
+    if (bytes.byteLength === 0) {
+      return undefined;
+    }
+    mkdirSync(CHAT_BROWSER_ARTIFACT_DIR, { recursive: true });
+    const fileName = `${Date.now()}-${randomUUID()}.${ext}`;
+    const absolutePath = path.join(CHAT_BROWSER_ARTIFACT_DIR, fileName);
+    writeFileSync(absolutePath, bytes);
+    return `artifacts/browser-browse/${fileName}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeFinishReason(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value.trim().toLowerCase();
+  }
+  return undefined;
+}
+
+function shouldAutoContinueForFinishReason(value: unknown): boolean {
+  const reason = normalizeFinishReason(value);
+  return reason ? CHAT_AUTO_CONTINUE_FINISH_REASONS.has(reason) : false;
 }
 
 function summarizeToolExecution(output: unknown, toolName?: string): {
@@ -382,6 +474,36 @@ function summarizeToolExecution(output: unknown, toolName?: string): {
   outputPreview?: string;
 } {
   if (isRecord(output)) {
+    if (toolName === "steward_manage_device") {
+      const changedFields = Array.isArray(output.changedFields)
+        ? output.changedFields.filter((value): value is string => typeof value === "string")
+        : [];
+      const explicitSummary = typeof output.summary === "string" ? output.summary.trim() : "";
+      const failedText = typeof output.error === "string" ? output.error.trim() : "";
+      if (output.ok === false || failedText.length > 0) {
+        return {
+          status: "failed",
+          summary: failedText || explicitSummary || "Device settings update failed.",
+          outputPreview: previewValue(output, 1200),
+        };
+      }
+
+      if (changedFields.length === 0) {
+        return {
+          status: "completed",
+          summary: explicitSummary || "No device settings changes were needed.",
+          outputPreview: previewValue(output, 1200),
+        };
+      }
+
+      const deviceName = typeof output.deviceName === "string" ? output.deviceName.trim() : "device";
+      return {
+        status: "completed",
+        summary: `Updated ${deviceName}: ${changedFields.join(", ")}.`,
+        outputPreview: previewValue(output, 1200),
+      };
+    }
+
     if (toolName === "steward_browser_browse") {
       const browserPreview = summarizeBrowserOutputPreview(output);
       const failedText = typeof output.error === "string" ? output.error.trim() : "";
@@ -621,7 +743,7 @@ async function autoContinueIfTruncated(args: {
   let finishReason = args.initialFinishReason;
 
   for (let i = 0; i < CHAT_MAX_AUTO_CONTINUATIONS; i++) {
-    if (finishReason !== "length") {
+    if (!shouldAutoContinueForFinishReason(finishReason)) {
       return { text, truncated: false };
     }
 
@@ -651,7 +773,7 @@ async function autoContinueIfTruncated(args: {
     finishReason = await Promise.resolve((continuation as { finishReason?: unknown }).finishReason);
   }
 
-  return { text, truncated: finishReason === "length" };
+  return { text, truncated: shouldAutoContinueForFinishReason(finishReason) };
 }
 
 export async function POST(request: NextRequest) {
@@ -756,6 +878,24 @@ export async function POST(request: NextRequest) {
       sessionId: sessionId ?? undefined,
     });
     if (deviceAction.handled && deviceAction.response) {
+      const deviceActionToolEvent: ChatToolEvent | undefined = attachedDevice
+        ? {
+          id: `device-settings-${randomUUID()}`,
+          toolName: "steward_manage_device",
+          label: "Manage Device",
+          kind: "tool",
+          status: "completed",
+          startedAt: new Date().toISOString(),
+          finishedAt: new Date().toISOString(),
+          inputPreview: previewValue({ request: payload.data.input }, 700),
+          summary: deviceAction.response,
+          outputPreview: previewValue(deviceAction.metadata ?? {}, 1200),
+        }
+        : undefined;
+      const metadata: ChatMessageMetadata | undefined = deviceActionToolEvent
+        ? { toolEvents: [deviceActionToolEvent] }
+        : undefined;
+
       if (sessionId) {
         stateStore.addChatMessage({
           id: randomUUID(),
@@ -765,6 +905,7 @@ export async function POST(request: NextRequest) {
           provider: "custom",
           error: false,
           createdAt: new Date().toISOString(),
+          metadata,
         });
       }
 
@@ -782,16 +923,29 @@ export async function POST(request: NextRequest) {
       }
 
       if (payload.data.stream) {
-        return ndjsonStreamFromEvents([
+        const events: Array<Record<string, unknown>> = [
           { type: "start", provider: "steward-action" },
-          { type: "finish", provider: "steward-action", text: deviceAction.response, reasoning: "" },
-        ]);
+        ];
+        if (deviceActionToolEvent) {
+          events.push({ type: "tool-event", event: deviceActionToolEvent });
+        }
+        events.push({
+          type: "finish",
+          provider: "steward-action",
+          text: deviceAction.response,
+          reasoning: "",
+          metadata,
+        });
+        return ndjsonStreamFromEvents(events);
       }
 
       return NextResponse.json({
         provider: "steward-action",
         response: deviceAction.response,
-        metadata: deviceAction.metadata ?? {},
+        metadata: {
+          ...(deviceAction.metadata ?? {}),
+          ...(metadata ?? {}),
+        },
       });
     }
 

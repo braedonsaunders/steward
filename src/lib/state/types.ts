@@ -707,6 +707,9 @@ export interface AgentRunRecord {
   details: Record<string, unknown>;
 }
 
+export type WebResearchProvider = "brave_scrape" | "duckduckgo_scrape" | "brave_api" | "serper" | "serpapi";
+export type WebResearchFallbackStrategy = "prefer_non_key" | "key_only" | "selected_only";
+
 export interface RuntimeSettings {
   agentIntervalMs: number;
   deepScanIntervalMs: number;
@@ -734,6 +737,8 @@ export interface RuntimeSettings {
   deepBrowserObservationTargets: number;
   browserObservationCaptureScreenshots: boolean;
   enableWebResearch: boolean;
+  webResearchProvider: WebResearchProvider;
+  webResearchFallbackStrategy: WebResearchFallbackStrategy;
   webResearchTimeoutMs: number;
   webResearchMaxResults: number;
   webResearchDeepReadPages: number;

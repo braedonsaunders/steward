@@ -179,6 +179,8 @@ export const defaultRuntimeSettings = (): RuntimeSettings => ({
   deepBrowserObservationTargets: 32,
   browserObservationCaptureScreenshots: false,
   enableWebResearch: true,
+  webResearchProvider: "brave_scrape",
+  webResearchFallbackStrategy: "prefer_non_key",
   webResearchTimeoutMs: 18_000,
   webResearchMaxResults: 10,
   webResearchDeepReadPages: 3,
@@ -400,6 +402,8 @@ export function ensureDefaults(db: Database.Database): void {
     ensureMeta.run("runtime.deepBrowserObservationTargets", String(runtimeDefaults.deepBrowserObservationTargets));
     ensureMeta.run("runtime.browserObservationCaptureScreenshots", String(runtimeDefaults.browserObservationCaptureScreenshots));
     ensureMeta.run("runtime.enableWebResearch", String(runtimeDefaults.enableWebResearch));
+    ensureMeta.run("runtime.webResearchProvider", String(runtimeDefaults.webResearchProvider));
+    ensureMeta.run("runtime.webResearchFallbackStrategy", String(runtimeDefaults.webResearchFallbackStrategy));
     ensureMeta.run("runtime.webResearchTimeoutMs", String(runtimeDefaults.webResearchTimeoutMs));
     ensureMeta.run("runtime.webResearchMaxResults", String(runtimeDefaults.webResearchMaxResults));
     ensureMeta.run("runtime.webResearchDeepReadPages", String(runtimeDefaults.webResearchDeepReadPages));

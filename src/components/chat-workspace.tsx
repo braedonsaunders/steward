@@ -211,6 +211,7 @@ type BrowserStepPreview = {
   action: string;
   ok: boolean;
   label?: string;
+  path?: string;
   selector?: string;
   url?: string;
   text?: string;
@@ -232,6 +233,16 @@ type BrowserToolPreview = {
     requestFailures: string[];
     pageErrors: string[];
   };
+};
+
+type DeviceSettingsToolPreview = {
+  changedFields: string[];
+  previousName?: string;
+  nextName?: string;
+  previousType?: string;
+  nextType?: string;
+  inferredName?: boolean;
+  inferredType?: boolean;
 };
 
 type AssistantMessageBlock =
@@ -340,6 +351,7 @@ function parseBrowserToolPreview(event: ChatToolEvent): BrowserToolPreview | nul
           action: typeof item.action === "string" ? item.action : "step",
           ok: item.ok !== false,
           label: typeof item.label === "string" ? item.label : undefined,
+          path: typeof item.path === "string" ? item.path : undefined,
           selector: typeof item.selector === "string" ? item.selector : undefined,
           url: typeof item.url === "string" ? item.url : undefined,
           text: typeof item.text === "string" ? item.text : undefined,
@@ -384,6 +396,71 @@ function parseBrowserToolPreview(event: ChatToolEvent): BrowserToolPreview | nul
   } catch {
     return null;
   }
+}
+
+function parseDeviceSettingsToolPreview(event: ChatToolEvent): DeviceSettingsToolPreview | null {
+  if (event.toolName !== "steward_manage_device") {
+    return null;
+  }
+  if (!event.outputPreview) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(event.outputPreview) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return null;
+    }
+    const record = parsed as Record<string, unknown>;
+
+    const changedFields = Array.isArray(record.changedFields)
+      ? record.changedFields.filter((value): value is string => typeof value === "string")
+      : Array.isArray(record.changes)
+        ? record.changes
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => {
+            const match = value.match(/^\s*([a-zA-Z]+)\s*->/);
+            return match?.[1] ? match[1] : value;
+          })
+        : [];
+
+    return {
+      changedFields,
+      previousName: typeof record.previousName === "string" ? record.previousName : undefined,
+      nextName: typeof record.nextName === "string"
+        ? record.nextName
+        : typeof record.name === "string"
+          ? record.name
+          : undefined,
+      previousType: typeof record.previousType === "string"
+        ? record.previousType
+        : typeof record.previousCategory === "string"
+          ? record.previousCategory
+          : undefined,
+      nextType: typeof record.nextType === "string"
+        ? record.nextType
+        : typeof record.category === "string"
+          ? record.category
+          : undefined,
+      inferredName: record.inferredName === true,
+      inferredType: record.inferredType === true || record.inferredCategory === true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function browserStepScreenshotSrc(step: BrowserStepPreview | undefined): string | null {
+  if (!step) {
+    return null;
+  }
+  if (step.screenshotBase64 && step.screenshotBase64.length > 0) {
+    return `data:${step.mimeType ?? "image/png"};base64,${step.screenshotBase64}`;
+  }
+  if (step.path && step.path.length > 0) {
+    return `/api/chat/artifacts?path=${encodeURIComponent(step.path)}`;
+  }
+  return null;
 }
 
 function clampAnchorOffset(anchorOffset: number | undefined, contentLength: number): number {
@@ -563,6 +640,9 @@ const ChatToolEventCard = memo(function ChatToolEventCard({
   const running = event.status === "running";
   const terminalPreview = previewToolOutput(event.outputPreview);
   const browserPreview = parseBrowserToolPreview(event);
+  const deviceSettingsPreview = parseDeviceSettingsToolPreview(event);
+  const browserScreenshotStep = browserPreview?.stepResults.find((step) => step.screenshotBase64 || step.path);
+  const browserScreenshotSrc = browserStepScreenshotSrc(browserScreenshotStep);
   const accentClasses = event.status === "failed"
     ? "border-rose-500/25 bg-[radial-gradient(circle_at_top_left,rgba(244,63,94,0.14),transparent_60%)]"
     : running
@@ -643,12 +723,12 @@ const ChatToolEventCard = memo(function ChatToolEventCard({
             {browserPreview.finalUrl ? <span className="truncate text-muted-foreground">{browserPreview.finalUrl}</span> : null}
           </div>
 
-          {browserPreview.stepResults.find((step) => step.screenshotBase64)?.screenshotBase64 ? (
+          {browserScreenshotSrc ? (
             <div className="overflow-hidden rounded-xl border border-border/70 bg-muted/20">
               <img
-                src={`data:${browserPreview.stepResults.find((step) => step.screenshotBase64)?.mimeType ?? "image/png"};base64,${browserPreview.stepResults.find((step) => step.screenshotBase64)?.screenshotBase64 ?? ""}`}
+                src={browserScreenshotSrc}
                 alt="Browser snapshot"
-                className="h-auto w-full object-cover"
+                className="mx-auto h-auto max-h-[34rem] w-full object-contain"
               />
             </div>
           ) : null}
@@ -685,6 +765,40 @@ const ChatToolEventCard = memo(function ChatToolEventCard({
                 <p className="font-medium">Page Errors</p>
                 <p className="text-muted-foreground">{browserPreview.diagnostics.pageErrors.length}</p>
               </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {deviceSettingsPreview && (
+        <div className="mt-3 space-y-2 rounded-2xl border border-border/60 bg-background/70 p-3 text-[12px]">
+          <div className="flex flex-wrap gap-1.5">
+            {deviceSettingsPreview.changedFields.length > 0
+              ? deviceSettingsPreview.changedFields.map((field) => (
+                <Badge key={field} variant="secondary">{field}</Badge>
+              ))
+              : <Badge variant="outline">no changes</Badge>}
+          </div>
+          {(deviceSettingsPreview.previousName || deviceSettingsPreview.nextName) && (
+            <div className="rounded-md border border-border/60 bg-background/80 px-2 py-1.5">
+              <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Name</p>
+              <p className="font-medium text-foreground">
+                {deviceSettingsPreview.previousName ?? "-"} -&gt; {deviceSettingsPreview.nextName ?? "-"}
+              </p>
+              {deviceSettingsPreview.inferredName ? (
+                <p className="text-[11px] text-muted-foreground">Auto-inferred from known identity</p>
+              ) : null}
+            </div>
+          )}
+          {(deviceSettingsPreview.previousType || deviceSettingsPreview.nextType) && (
+            <div className="rounded-md border border-border/60 bg-background/80 px-2 py-1.5">
+              <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Category</p>
+              <p className="font-medium text-foreground">
+                {deviceSettingsPreview.previousType ?? "-"} -&gt; {deviceSettingsPreview.nextType ?? "-"}
+              </p>
+              {deviceSettingsPreview.inferredType ? (
+                <p className="text-[11px] text-muted-foreground">Auto-inferred from known identity</p>
+              ) : null}
             </div>
           )}
         </div>

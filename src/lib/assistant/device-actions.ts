@@ -26,6 +26,18 @@ const adhocTaskPattern = /\b(install|set up|setup|deploy|provision|configure|boo
 const renameIntentPattern = /\b(rename|name\s+this|call\s+it)\b/i;
 const categoryIntentPattern = /\b(category|device\s+type|type\s+to|mark\s+as)\b/i;
 
+const INVALID_NAME_TOKENS = new Set([
+  "this",
+  "that",
+  "it",
+  "device",
+  "host",
+  "box",
+  "machine",
+  "appliance",
+  "thing",
+]);
+
 const DEVICE_TYPE_MAP: Record<string, DeviceType> = {
   server: "server",
   workstation: "workstation",
@@ -109,6 +121,25 @@ function trimTo(value: string, max = 120): string {
   return `${trimmed.slice(0, max - 3)}...`;
 }
 
+function normalizeDeviceName(value: string): string {
+  return value.trim().replace(/\s+/g, " ").replace(/[.?!,;:]+$/, "");
+}
+
+function isValidDeviceName(value: string): boolean {
+  const normalized = normalizeDeviceName(value);
+  if (normalized.length < 2 || normalized.length > 128) {
+    return false;
+  }
+  const lowered = normalized.toLowerCase();
+  if (INVALID_NAME_TOKENS.has(lowered)) {
+    return false;
+  }
+  if (/^(?:this|that|it)(?:\s+device)?$/i.test(lowered)) {
+    return false;
+  }
+  return true;
+}
+
 function looksLikeMonitorIntent(input: string): boolean {
   return monitorIntentPattern.test(input) || (uiIntentPattern.test(input) && uiCheckPattern.test(input));
 }
@@ -120,24 +151,117 @@ function looksLikeAdhocTaskIntent(input: string): boolean {
 function extractSuggestedName(input: string): string | null {
   const quoted = input.match(/["']([^"']{2,64})["']/);
   if (quoted?.[1]) {
-    return quoted[1].trim();
+    const normalized = normalizeDeviceName(quoted[1]);
+    return isValidDeviceName(normalized) ? normalized : null;
   }
 
-  const direct = input.match(/\b(?:rename|call\s+it|name\s+this(?:\s+device)?)\s+(?:to\s+)?([a-zA-Z0-9._-]{2,64})/i);
+  const direct = input.match(/\b(?:rename|call\s+it|name\s+this(?:\s+device)?)\s+(?:to\s+)?([a-zA-Z0-9][a-zA-Z0-9._ -]{1,127})/i);
   if (direct?.[1]) {
-    return direct[1].trim();
+    const normalized = normalizeDeviceName(direct[1]);
+    return isValidDeviceName(normalized) ? normalized : null;
+  }
+
+  return null;
+}
+
+function identityRecord(device: Device): Record<string, unknown> {
+  if (typeof device.metadata.identity === "object" && device.metadata.identity !== null) {
+    return device.metadata.identity as Record<string, unknown>;
+  }
+  return {};
+}
+
+function inferDeviceName(device: Device): string | null {
+  const identity = identityRecord(device);
+  const identityName = typeof identity.name === "string" ? normalizeDeviceName(identity.name) : "";
+  if (identityName && isValidDeviceName(identityName)) {
+    return identityName;
+  }
+
+  const inferredProduct = (
+    typeof device.metadata.fingerprint === "object"
+    && device.metadata.fingerprint !== null
+    && typeof (device.metadata.fingerprint as Record<string, unknown>).inferredProduct === "string"
+  )
+    ? normalizeDeviceName(String((device.metadata.fingerprint as Record<string, unknown>).inferredProduct))
+    : "";
+  if (inferredProduct && isValidDeviceName(inferredProduct)) {
+    return inferredProduct;
+  }
+
+  if (device.hostname) {
+    const host = normalizeDeviceName(device.hostname);
+    if (isValidDeviceName(host)) {
+      return host;
+    }
+  }
+
+  const vendorModel = [device.vendor, device.os]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .map((value) => normalizeDeviceName(value))
+    .join(" ")
+    .trim();
+  if (vendorModel && isValidDeviceName(vendorModel)) {
+    return vendorModel;
   }
 
   return null;
 }
 
 function extractSuggestedCategory(input: string): DeviceType | null {
-  const normalized = input.toLowerCase();
+  const normalized = input.toLowerCase().replace(/[_\s]+/g, "-");
+  const explicit = normalized.match(/(?:category|device-type|type)(?:-[a-z]+){0,2}-(?:to|as)-([a-z-]+)/);
+  if (explicit?.[1]) {
+    const token = explicit[1].trim();
+    if (token in DEVICE_TYPE_MAP) {
+      return DEVICE_TYPE_MAP[token];
+    }
+  }
+
   for (const [key, value] of Object.entries(DEVICE_TYPE_MAP)) {
-    if (normalized.includes(key)) {
+    if (normalized.includes(key.replace(/\s+/g, "-"))) {
       return value;
     }
   }
+  return null;
+}
+
+function inferDeviceCategory(device: Device): DeviceType | null {
+  const identity = identityRecord(device);
+  const identityType = typeof identity.type === "string" ? identity.type.trim().toLowerCase() : "";
+  if (identityType && identityType in DEVICE_TYPE_MAP) {
+    return DEVICE_TYPE_MAP[identityType];
+  }
+
+  const hints = [
+    device.name,
+    device.hostname,
+    device.vendor,
+    device.os,
+    typeof identity.description === "string" ? identity.description : "",
+    typeof device.metadata.fingerprint === "object"
+    && device.metadata.fingerprint !== null
+    && typeof (device.metadata.fingerprint as Record<string, unknown>).inferredProduct === "string"
+      ? (device.metadata.fingerprint as Record<string, unknown>).inferredProduct as string
+      : "",
+  ]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .join(" ")
+    .toLowerCase();
+
+  if (hints.includes("barracuda") && hints.includes("backup")) {
+    return "nas";
+  }
+  if (/(firewall|pfsense|fortigate|opnsense|checkpoint)/.test(hints)) return "firewall";
+  if (/(router|gateway|edge-router)/.test(hints)) return "router";
+  if (/(switch|aruba|cisco catalyst)/.test(hints)) return "switch";
+  if (/(access point|wireless ap|unifi ap)/.test(hints)) return "access-point";
+  if (/(printer|laserjet|officejet)/.test(hints)) return "printer";
+  if (/(nas|synology|qnap)/.test(hints)) return "nas";
+  if (/(ups|uninterruptible power)/.test(hints)) return "ups";
+  if (/(vmware|esxi|proxmox|hyper-v|hypervisor)/.test(hints)) return "hypervisor";
+  if (/(server|ubuntu|debian|windows server|rhel)/.test(hints)) return "server";
+
   return null;
 }
 
@@ -156,15 +280,22 @@ async function handleDeviceSettingsRequest(
 
   const suggestedName = extractSuggestedName(input);
   const suggestedType = extractSuggestedCategory(input);
-  if (!suggestedName && !suggestedType) {
+  const renameRequested = renameIntentPattern.test(input);
+  const categoryRequested = categoryIntentPattern.test(input);
+  const inferredName = !suggestedName && renameRequested ? inferDeviceName(device) : null;
+  const inferredType = !suggestedType && categoryRequested ? inferDeviceCategory(device) : null;
+  const nextName = suggestedName ?? inferredName;
+  const nextType = suggestedType ?? inferredType;
+
+  if (!nextName && !nextType) {
     return { handled: false };
   }
 
   const updated: Device = {
     ...device,
-    name: suggestedName ?? device.name,
-    type: suggestedType ?? device.type,
-    metadata: suggestedName
+    name: nextName ?? device.name,
+    type: nextType ?? device.type,
+    metadata: nextName
       ? {
         ...device.metadata,
         identity: {
@@ -195,8 +326,8 @@ async function handleDeviceSettingsRequest(
   });
 
   const changes = [
-    suggestedName && suggestedName !== device.name ? `name -> ${suggestedName}` : null,
-    suggestedType && suggestedType !== device.type ? `category -> ${suggestedType}` : null,
+    nextName && nextName !== device.name ? `name -> ${nextName}` : null,
+    nextType && nextType !== device.type ? `category -> ${nextType}` : null,
   ].filter(Boolean);
 
   return {
@@ -208,6 +339,12 @@ async function handleDeviceSettingsRequest(
       action: "device_settings",
       deviceId: device.id,
       changes,
+      previousName: device.name,
+      nextName: updated.name,
+      previousType: device.type,
+      nextType: updated.type,
+      inferredName: Boolean(inferredName && !suggestedName),
+      inferredType: Boolean(inferredType && !suggestedType),
       sessionId,
     },
   };

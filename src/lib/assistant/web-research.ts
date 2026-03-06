@@ -1,3 +1,9 @@
+import {
+  requiresWebResearchApiKey,
+  WEB_RESEARCH_PROVIDER_ORDER,
+} from "@/lib/assistant/web-research-config";
+import type { WebResearchFallbackStrategy, WebResearchProvider } from "@/lib/state/types";
+
 interface FetchTextResult {
   ok: boolean;
   status: number;
@@ -27,7 +33,7 @@ export interface WebResearchPage {
 
 export interface WebResearchResult {
   ok: boolean;
-  engine: "brave";
+  engine: WebResearchProvider;
   query: string;
   resultCount: number;
   consultedCount: number;
@@ -41,7 +47,19 @@ export interface WebResearchResult {
   warnings: string[];
 }
 
+interface FetchJsonResult {
+  ok: boolean;
+  status: number;
+  finalUrl: string;
+  json: unknown;
+  error?: string;
+}
+
 export interface WebResearchOptions {
+  provider?: WebResearchProvider;
+  apiKey?: string;
+  apiKeys?: Partial<Record<WebResearchProvider, string>>;
+  fallbackStrategy?: WebResearchFallbackStrategy;
   timeoutMs?: number;
   maxResults?: number;
   deepReadPages?: number;
@@ -50,6 +68,10 @@ export interface WebResearchOptions {
 }
 
 const BRAVE_SEARCH_URL = "https://search.brave.com/search";
+const DUCKDUCKGO_HTML_SEARCH_URL = "https://html.duckduckgo.com/html/";
+const BRAVE_API_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search";
+const SERPER_SEARCH_URL = "https://google.serper.dev/search";
+const SERPAPI_SEARCH_URL = "https://serpapi.com/search.json";
 const DEFAULT_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 Steward/1.0";
 const MAX_RESULT_HTML_CHARS = 600_000;
@@ -282,6 +304,234 @@ function parseBraveSearchResults(html: string, maxResults: number): WebResearchH
   return results;
 }
 
+async function fetchJson(
+  url: string,
+  timeoutMs: number,
+  init?: { method?: "GET" | "POST"; headers?: Record<string, string>; body?: string },
+): Promise<FetchJsonResult> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: init?.method ?? "GET",
+      redirect: "follow",
+      headers: {
+        Accept: "application/json,text/plain;q=0.9,*/*;q=0.5",
+        "Accept-Language": "en-CA,en-US;q=0.9,en;q=0.8",
+        "User-Agent": DEFAULT_USER_AGENT,
+        ...(init?.headers ?? {}),
+      },
+      body: init?.body,
+      signal: controller.signal,
+    });
+
+    const text = await response.text();
+    let json: unknown = null;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      json = null;
+    }
+
+    return {
+      ok: response.ok,
+      status: response.status,
+      finalUrl: response.url,
+      json,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      finalUrl: url,
+      json: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function toHit(raw: { title: string; url: string; snippet?: string }, position: number): WebResearchHit | null {
+  const safeUrl = toPublicUrl(raw.url);
+  if (!safeUrl) {
+    return null;
+  }
+  const title = collapseWhitespace(raw.title);
+  if (!title) {
+    return null;
+  }
+  let domain = "";
+  try {
+    domain = new URL(safeUrl).hostname;
+  } catch {
+    return null;
+  }
+  const snippet = truncate(collapseWhitespace(raw.snippet ?? ""), SEARCH_RESULT_SNIPPET_CHARS);
+  return {
+    position,
+    title,
+    url: safeUrl,
+    displayUrl: domain,
+    snippet,
+    domain,
+  };
+}
+
+async function searchBraveApi(
+  query: string,
+  page: number,
+  maxResults: number,
+  timeoutMs: number,
+  apiKey: string,
+): Promise<{ ok: boolean; status: number; error?: string; results: WebResearchHit[] }> {
+  const offset = Math.max(0, (page - 1) * maxResults);
+  const url = new URL(BRAVE_API_SEARCH_URL);
+  url.searchParams.set("q", query);
+  url.searchParams.set("count", String(maxResults));
+  url.searchParams.set("offset", String(offset));
+
+  const response = await fetchJson(url.toString(), timeoutMs, {
+    method: "GET",
+    headers: {
+      "X-Subscription-Token": apiKey,
+    },
+  });
+
+  if (!response.ok) {
+    return {
+      ok: false,
+      status: response.status,
+      error: response.error,
+      results: [],
+    };
+  }
+
+  const payload = response.json as {
+    web?: { results?: Array<{ title?: string; url?: string; description?: string }> };
+  };
+  const items = payload.web?.results ?? [];
+  const hits: WebResearchHit[] = [];
+  for (const item of items) {
+    const parsed = toHit(
+      {
+        title: item.title ?? "",
+        url: item.url ?? "",
+        snippet: item.description ?? "",
+      },
+      hits.length + 1,
+    );
+    if (parsed) {
+      hits.push(parsed);
+    }
+    if (hits.length >= maxResults) {
+      break;
+    }
+  }
+
+  return { ok: true, status: response.status, results: hits };
+}
+
+async function searchSerperApi(
+  query: string,
+  page: number,
+  maxResults: number,
+  timeoutMs: number,
+  apiKey: string,
+): Promise<{ ok: boolean; status: number; error?: string; results: WebResearchHit[] }> {
+  const response = await fetchJson(SERPER_SEARCH_URL, timeoutMs, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "X-API-KEY": apiKey,
+    },
+    body: JSON.stringify({ q: query, num: maxResults, page }),
+  });
+
+  if (!response.ok) {
+    return {
+      ok: false,
+      status: response.status,
+      error: response.error,
+      results: [],
+    };
+  }
+
+  const payload = response.json as {
+    organic?: Array<{ title?: string; link?: string; snippet?: string }>;
+  };
+  const items = payload.organic ?? [];
+  const hits: WebResearchHit[] = [];
+  for (const item of items) {
+    const parsed = toHit(
+      {
+        title: item.title ?? "",
+        url: item.link ?? "",
+        snippet: item.snippet ?? "",
+      },
+      hits.length + 1,
+    );
+    if (parsed) {
+      hits.push(parsed);
+    }
+    if (hits.length >= maxResults) {
+      break;
+    }
+  }
+
+  return { ok: true, status: response.status, results: hits };
+}
+
+async function searchSerpApi(
+  query: string,
+  page: number,
+  maxResults: number,
+  timeoutMs: number,
+  apiKey: string,
+): Promise<{ ok: boolean; status: number; error?: string; results: WebResearchHit[] }> {
+  const start = Math.max(0, (page - 1) * maxResults);
+  const url = new URL(SERPAPI_SEARCH_URL);
+  url.searchParams.set("engine", "google");
+  url.searchParams.set("q", query);
+  url.searchParams.set("num", String(maxResults));
+  url.searchParams.set("start", String(start));
+  url.searchParams.set("api_key", apiKey);
+
+  const response = await fetchJson(url.toString(), timeoutMs);
+  if (!response.ok) {
+    return {
+      ok: false,
+      status: response.status,
+      error: response.error,
+      results: [],
+    };
+  }
+
+  const payload = response.json as {
+    organic_results?: Array<{ title?: string; link?: string; snippet?: string }>;
+  };
+  const items = payload.organic_results ?? [];
+  const hits: WebResearchHit[] = [];
+  for (const item of items) {
+    const parsed = toHit(
+      {
+        title: item.title ?? "",
+        url: item.link ?? "",
+        snippet: item.snippet ?? "",
+      },
+      hits.length + 1,
+    );
+    if (parsed) {
+      hits.push(parsed);
+    }
+    if (hits.length >= maxResults) {
+      break;
+    }
+  }
+
+  return { ok: true, status: response.status, results: hits };
+}
+
 function parseBraveNextPageUrl(html: string): string | null {
   const nextHref =
     html.match(/<a[^>]+href="([^"]+)"[^>]*aria-label="Next"/i)?.[1]
@@ -289,6 +539,57 @@ function parseBraveNextPageUrl(html: string): string | null {
     ?? html.match(/<a[^>]+href="([^"]+)"[^>]*rel="next"/i)?.[1]
     ?? html.match(/<a[^>]+rel="next"[^>]*href="([^"]+)"/i)?.[1];
   return toPublicUrl(nextHref);
+}
+
+function buildDuckDuckGoSearchUrl(query: string, page: number): string {
+  const url = new URL(DUCKDUCKGO_HTML_SEARCH_URL);
+  url.searchParams.set("q", query);
+  if (page > 1) {
+    url.searchParams.set("s", String((page - 1) * DEFAULT_RESULTS_PER_PAGE_HINT));
+  }
+  return url.toString();
+}
+
+function parseDuckDuckGoResults(html: string, maxResults: number): WebResearchHit[] {
+  const blocks = Array.from(html.matchAll(/<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi));
+  const results: WebResearchHit[] = [];
+  const seen = new Set<string>();
+
+  for (const block of blocks) {
+    if (results.length >= maxResults) {
+      break;
+    }
+    const url = toPublicUrl(block[1]);
+    if (!url || seen.has(url)) {
+      continue;
+    }
+    const title = collapseWhitespace(stripHtml(block[2] ?? ""));
+    if (!title) {
+      continue;
+    }
+    let domain = "";
+    try {
+      domain = new URL(url).hostname;
+    } catch {
+      continue;
+    }
+
+    const titleEscaped = block[2].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const snippetMatch = html.match(new RegExp(`${titleEscaped}[\\s\\S]{0,600}?<a[^>]*class=\"[^\"]*result__snippet[^\"]*\"[^>]*>([\\s\\S]*?)<\\/a>`, "i"));
+    const snippet = truncate(collapseWhitespace(stripHtml(snippetMatch?.[1] ?? "")), SEARCH_RESULT_SNIPPET_CHARS);
+
+    seen.add(url);
+    results.push({
+      position: results.length + 1,
+      title,
+      url,
+      displayUrl: domain,
+      snippet,
+      domain,
+    });
+  }
+
+  return results;
 }
 
 function buildBraveSearchUrl(query: string, page: number): string {
@@ -422,6 +723,13 @@ export async function runWebResearch(
   options: WebResearchOptions = {},
 ): Promise<WebResearchResult> {
   const trimmedQuery = query.trim();
+  const provider = options.provider ?? "brave_scrape";
+  const availableApiKeys: Partial<Record<WebResearchProvider, string>> = {
+    brave_api: options.apiKeys?.brave_api?.trim() ?? (provider === "brave_api" ? options.apiKey?.trim() : undefined),
+    serper: options.apiKeys?.serper?.trim() ?? (provider === "serper" ? options.apiKey?.trim() : undefined),
+    serpapi: options.apiKeys?.serpapi?.trim() ?? (provider === "serpapi" ? options.apiKey?.trim() : undefined),
+  };
+  const fallbackStrategy = options.fallbackStrategy ?? "prefer_non_key";
   const timeoutMs = clampInt(options.timeoutMs, 3_000, 60_000, 18_000);
   const maxResults = clampInt(options.maxResults, 1, MAX_RESULTS_LIMIT, 5);
   const deepReadPages = clampInt(options.deepReadPages, 0, MAX_DEEP_READ_PAGES_LIMIT, 2);
@@ -436,7 +744,7 @@ export async function runWebResearch(
   if (!trimmedQuery) {
     return {
       ok: false,
-      engine: "brave",
+      engine: provider,
       query: "",
       resultCount: 0,
       consultedCount: 0,
@@ -451,75 +759,48 @@ export async function runWebResearch(
     };
   }
 
-  const results: WebResearchHit[] = [];
-  const seenUrls = new Set<string>();
   const warnings: string[] = [];
+  const providersToTry = buildProviderFallbackOrder(provider, availableApiKeys, fallbackStrategy);
+  let selectedEngine = provider;
   let searchedPages = 0;
-  let page = 1;
-  let searchUrl = buildBraveSearchUrl(trimmedQuery, page);
+  let results: WebResearchHit[] = [];
 
-  while (searchedPages < searchPages && results.length < maxResults) {
-    const searchResponse = await fetchText(searchUrl, timeoutMs);
-    if (!searchResponse.ok) {
-      if (searchedPages === 0) {
-        return {
-          ok: false,
-          engine: "brave",
-          query: trimmedQuery,
-          resultCount: 0,
-          consultedCount: 0,
-          readStartIndex: 0,
-          readEndIndex: 0,
-          hasMoreResultsToRead: false,
-          nextReadFromResult: null,
-          summary: searchResponse.error
-            ? `Web search failed: ${searchResponse.error}`
-            : `Web search failed with status ${searchResponse.status}.`,
-          results: [],
-          consultedPages: [],
-          warnings: ["Search request failed."],
-        };
+  for (const candidateProvider of providersToTry) {
+    if (requiresWebResearchApiKey(candidateProvider) && !availableApiKeys[candidateProvider]?.trim()) {
+      warnings.push(`Skipped provider '${candidateProvider}' due to missing API key.`);
+      continue;
+    }
+
+    const searched = await searchWithProvider(
+      candidateProvider,
+      trimmedQuery,
+      timeoutMs,
+      maxResults,
+      searchPages,
+      availableApiKeys,
+    );
+
+    searchedPages = searched.searchedPages;
+    warnings.push(...searched.warnings.map((warning) => `[${candidateProvider}] ${warning}`));
+
+    if (searched.ok) {
+      selectedEngine = candidateProvider;
+      results = searched.results;
+      if (candidateProvider !== provider) {
+        warnings.push(`Primary provider '${provider}' was unavailable; fell back to '${candidateProvider}'.`);
       }
-      warnings.push(
-        searchResponse.error
-          ? `Search page ${page} failed: ${searchResponse.error}`
-          : `Search page ${page} failed with status ${searchResponse.status}.`,
-      );
       break;
     }
 
-    searchedPages += 1;
-    const pageResults = parseBraveSearchResults(searchResponse.text.slice(0, MAX_RESULT_HTML_CHARS), maxResults);
-    for (const parsed of pageResults) {
-      if (results.length >= maxResults) {
-        break;
-      }
-      if (seenUrls.has(parsed.url)) {
-        continue;
-      }
-      seenUrls.add(parsed.url);
-      results.push({
-        ...parsed,
-        position: results.length + 1,
-      });
-    }
-
-    if (results.length >= maxResults) {
-      break;
-    }
-
-    const hintedNext = parseBraveNextPageUrl(searchResponse.text);
-    page += 1;
-    searchUrl = hintedNext ?? buildBraveSearchUrl(trimmedQuery, page);
-    if (!hintedNext && page > searchPages) {
-      break;
+    if (searched.fatalSummary) {
+      warnings.push(`[${candidateProvider}] ${searched.fatalSummary}`);
     }
   }
 
   if (results.length === 0) {
     return {
       ok: false,
-      engine: "brave",
+      engine: selectedEngine,
       query: trimmedQuery,
       resultCount: 0,
       consultedCount: 0,
@@ -527,7 +808,7 @@ export async function runWebResearch(
       readEndIndex: 0,
       hasMoreResultsToRead: false,
       nextReadFromResult: null,
-      summary: "Search completed but no usable public-web results were parsed.",
+      summary: "Search completed but no usable public-web results were parsed across available providers.",
       results: [],
       consultedPages: [],
       warnings: warnings.length > 0 ? warnings : ["No usable public search results."],
@@ -568,7 +849,7 @@ export async function runWebResearch(
 
   return {
     ok: true,
-    engine: "brave",
+    engine: selectedEngine,
     query: trimmedQuery,
     resultCount: results.length,
     consultedCount: consultedPages.length,
@@ -581,4 +862,132 @@ export async function runWebResearch(
     consultedPages,
     warnings,
   };
+}
+
+function buildProviderFallbackOrder(
+  preferred: WebResearchProvider,
+  availableApiKeys: Partial<Record<WebResearchProvider, string>>,
+  strategy: WebResearchFallbackStrategy,
+): WebResearchProvider[] {
+  const ordered = [preferred, ...WEB_RESEARCH_PROVIDER_ORDER.filter((provider) => provider !== preferred)];
+  if (strategy === "selected_only") {
+    return [preferred];
+  }
+
+  const fallbackPool = ordered.filter((provider) => provider !== preferred);
+  const nonKeyProviders = strategy === "prefer_non_key"
+    ? fallbackPool.filter((provider) => !requiresWebResearchApiKey(provider))
+    : [];
+  const keyedProviders = fallbackPool.filter((provider) => {
+    if (!requiresWebResearchApiKey(provider)) {
+      return false;
+    }
+    const key = availableApiKeys[provider]?.trim();
+    return Boolean(key);
+  });
+
+  return [...new Set<WebResearchProvider>([preferred, ...nonKeyProviders, ...keyedProviders])];
+}
+
+async function searchWithProvider(
+  provider: WebResearchProvider,
+  query: string,
+  timeoutMs: number,
+  maxResults: number,
+  searchPages: number,
+  apiKeys: Partial<Record<WebResearchProvider, string>>,
+): Promise<{ ok: boolean; results: WebResearchHit[]; warnings: string[]; searchedPages: number; fatalSummary?: string }> {
+  const results: WebResearchHit[] = [];
+  const seenUrls = new Set<string>();
+  const warnings: string[] = [];
+  let searchedPages = 0;
+  let page = 1;
+  let searchUrl = buildBraveSearchUrl(query, page);
+
+  while (searchedPages < searchPages && results.length < maxResults) {
+    let pageResults: WebResearchHit[] = [];
+    let pageFailure: { status: number; error?: string } | null = null;
+
+    if (provider === "brave_scrape") {
+      const searchResponse = await fetchText(searchUrl, timeoutMs);
+      if (!searchResponse.ok) {
+        pageFailure = { status: searchResponse.status, error: searchResponse.error };
+      } else {
+        pageResults = parseBraveSearchResults(searchResponse.text.slice(0, MAX_RESULT_HTML_CHARS), maxResults);
+        const hintedNext = parseBraveNextPageUrl(searchResponse.text);
+        page += 1;
+        searchUrl = hintedNext ?? buildBraveSearchUrl(query, page);
+      }
+    } else if (provider === "duckduckgo_scrape") {
+      const ddgUrl = buildDuckDuckGoSearchUrl(query, page);
+      const searchResponse = await fetchText(ddgUrl, timeoutMs);
+      if (!searchResponse.ok) {
+        pageFailure = { status: searchResponse.status, error: searchResponse.error };
+      } else {
+        pageResults = parseDuckDuckGoResults(searchResponse.text.slice(0, MAX_RESULT_HTML_CHARS), maxResults);
+        page += 1;
+      }
+    } else if (provider === "brave_api") {
+      const response = await searchBraveApi(query, page, maxResults, timeoutMs, apiKeys.brave_api ?? "");
+      if (!response.ok) {
+        pageFailure = { status: response.status, error: response.error };
+      } else {
+        pageResults = response.results;
+        page += 1;
+      }
+    } else if (provider === "serper") {
+      const response = await searchSerperApi(query, page, maxResults, timeoutMs, apiKeys.serper ?? "");
+      if (!response.ok) {
+        pageFailure = { status: response.status, error: response.error };
+      } else {
+        pageResults = response.results;
+        page += 1;
+      }
+    } else {
+      const response = await searchSerpApi(query, page, maxResults, timeoutMs, apiKeys.serpapi ?? "");
+      if (!response.ok) {
+        pageFailure = { status: response.status, error: response.error };
+      } else {
+        pageResults = response.results;
+        page += 1;
+      }
+    }
+
+    if (pageFailure) {
+      if (searchedPages === 0) {
+        return {
+          ok: false,
+          results: [],
+          warnings: ["Search request failed."],
+          searchedPages,
+          fatalSummary: pageFailure.error
+            ? `Web search failed: ${pageFailure.error}`
+            : `Web search failed with status ${pageFailure.status}.`,
+        };
+      }
+      warnings.push(
+        pageFailure.error
+          ? `Search page ${page} failed: ${pageFailure.error}`
+          : `Search page ${page} failed with status ${pageFailure.status}.`,
+      );
+      break;
+    }
+
+    searchedPages += 1;
+    for (const parsed of pageResults) {
+      if (results.length >= maxResults) {
+        break;
+      }
+      if (seenUrls.has(parsed.url)) {
+        continue;
+      }
+      seenUrls.add(parsed.url);
+      results.push({
+        ...parsed,
+        position: results.length + 1,
+      });
+    }
+  }
+
+  return { ok: results.length > 0, results, warnings, searchedPages };
 }

@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { mkdirSync } from "node:fs";
+import path from "node:path";
 import { dynamicTool, jsonSchema } from "ai";
 import { adapterRegistry } from "@/lib/adapters/registry";
+import {
+  requiresWebResearchApiKey,
+  webResearchApiKeySecretRef,
+} from "@/lib/assistant/web-research-config";
 import { runWebResearch } from "@/lib/assistant/web-research";
 import { markCredentialValidatedFromUse } from "@/lib/adoption/credentials";
 import {
@@ -17,10 +23,12 @@ import { parseWinrmCommandTemplate } from "@/lib/adapters/winrm";
 import { getDefaultProvider } from "@/lib/llm/config";
 import { evaluatePolicy } from "@/lib/policy/engine";
 import { getAdoptionRecord, getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
+import { getDataDir } from "@/lib/state/db";
 import { stateStore } from "@/lib/state/store";
 import { vault } from "@/lib/security/vault";
 import { runShell } from "@/lib/utils/shell";
 import { generateAndStoreDeviceWidget } from "@/lib/widgets/generator";
+import { DEVICE_TYPE_VALUES, type DeviceType } from "@/lib/state/types";
 import type {
   ActionClass,
   Device,
@@ -98,6 +106,22 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
     return fallback;
   }
   return Math.max(min, Math.min(max, Math.floor(parsed)));
+}
+
+const BROWSER_BROWSE_ARTIFACT_RELATIVE_DIR = "artifacts/browser-browse";
+
+function ensureBrowserBrowseArtifactDir(): string {
+  const absoluteDir = path.join(getDataDir(), "artifacts", "browser-browse");
+  mkdirSync(absoluteDir, { recursive: true });
+  return absoluteDir;
+}
+
+function createBrowserBrowseScreenshotArtifact(ext: "jpg" | "png"): { absolutePath: string; relativePath: string } {
+  const dir = ensureBrowserBrowseArtifactDir();
+  const fileName = `${Date.now()}-${randomUUID()}.${ext}`;
+  const absolutePath = path.join(dir, fileName);
+  const relativePath = `${BROWSER_BROWSE_ARTIFACT_RELATIVE_DIR}/${fileName}`;
+  return { absolutePath, relativePath };
 }
 
 function slugifyWidgetKey(value: string): string {
@@ -374,6 +398,155 @@ function inputBoolean(input: Record<string, unknown>, ...keys: string[]): boolea
     }
   }
   return undefined;
+}
+
+const INVALID_DEVICE_NAME_TOKENS = new Set([
+  "this",
+  "that",
+  "it",
+  "device",
+  "host",
+  "box",
+  "machine",
+  "appliance",
+  "thing",
+]);
+
+const DEVICE_TYPE_ALIAS_MAP: Record<string, DeviceType> = {
+  server: "server",
+  workstation: "workstation",
+  desktop: "workstation",
+  laptop: "laptop",
+  notebook: "laptop",
+  smartphone: "smartphone",
+  phone: "smartphone",
+  tablet: "tablet",
+  router: "router",
+  firewall: "firewall",
+  switch: "switch",
+  "access-point": "access-point",
+  ap: "access-point",
+  modem: "modem",
+  "load-balancer": "load-balancer",
+  "vpn-appliance": "vpn-appliance",
+  "wan-optimizer": "wan-optimizer",
+  camera: "camera",
+  nvr: "nvr",
+  dvr: "dvr",
+  nas: "nas",
+  san: "san",
+  printer: "printer",
+  scanner: "scanner",
+  pbx: "pbx",
+  "voip-phone": "voip-phone",
+  "conference-system": "conference-system",
+  "point-of-sale": "point-of-sale",
+  pos: "point-of-sale",
+  "badge-reader": "badge-reader",
+  "door-controller": "door-controller",
+  ups: "ups",
+  pdu: "pdu",
+  bmc: "bmc",
+  iot: "iot",
+  sensor: "sensor",
+  controller: "controller",
+  "smart-tv": "smart-tv",
+  "media-streamer": "media-streamer",
+  "game-console": "game-console",
+  "container-host": "container-host",
+  hypervisor: "hypervisor",
+  "vm-host": "vm-host",
+  "kubernetes-master": "kubernetes-master",
+  "kubernetes-worker": "kubernetes-worker",
+  unknown: "unknown",
+};
+
+function normalizeDeviceNameInput(value: string): string {
+  return value.trim().replace(/\s+/g, " ").replace(/[.?!,;:]+$/, "");
+}
+
+function isAcceptableDeviceName(value: string): boolean {
+  const normalized = normalizeDeviceNameInput(value);
+  if (normalized.length < 2 || normalized.length > 128) {
+    return false;
+  }
+  const lowered = normalized.toLowerCase();
+  if (INVALID_DEVICE_NAME_TOKENS.has(lowered)) {
+    return false;
+  }
+  if (/^(?:this|that|it)(?:\s+device)?$/i.test(lowered)) {
+    return false;
+  }
+  return true;
+}
+
+function parseDeviceCategory(value: string | undefined): DeviceType | null {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase().replace(/\s+/g, "-");
+  if ((DEVICE_TYPE_VALUES as readonly string[]).includes(normalized)) {
+    return normalized as DeviceType;
+  }
+  return DEVICE_TYPE_ALIAS_MAP[normalized] ?? null;
+}
+
+function inferManageableDeviceName(device: Device): string | null {
+  const identity = isRecord(device.metadata.identity) ? device.metadata.identity : null;
+  const identityName = typeof identity?.name === "string" ? normalizeDeviceNameInput(identity.name) : "";
+  if (identityName && isAcceptableDeviceName(identityName)) {
+    return identityName;
+  }
+
+  const inferredProduct = isRecord(device.metadata.fingerprint)
+    && typeof device.metadata.fingerprint.inferredProduct === "string"
+    ? normalizeDeviceNameInput(device.metadata.fingerprint.inferredProduct)
+    : "";
+  if (inferredProduct && isAcceptableDeviceName(inferredProduct)) {
+    return inferredProduct;
+  }
+
+  if (device.hostname) {
+    const host = normalizeDeviceNameInput(device.hostname);
+    if (isAcceptableDeviceName(host)) {
+      return host;
+    }
+  }
+
+  return null;
+}
+
+function inferManageableDeviceCategory(device: Device): DeviceType | null {
+  const identity = isRecord(device.metadata.identity) ? device.metadata.identity : null;
+  const identityType = parseDeviceCategory(typeof identity?.type === "string" ? identity.type : undefined);
+  if (identityType) {
+    return identityType;
+  }
+
+  const hints = [
+    device.name,
+    device.hostname,
+    device.vendor,
+    device.os,
+    typeof identity?.description === "string" ? identity.description : "",
+    isRecord(device.metadata.fingerprint) && typeof device.metadata.fingerprint.inferredProduct === "string"
+      ? device.metadata.fingerprint.inferredProduct
+      : "",
+  ]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .join(" ")
+    .toLowerCase();
+
+  if (hints.includes("barracuda") && hints.includes("backup")) return "nas";
+  if (/(firewall|pfsense|fortigate|opnsense|checkpoint)/.test(hints)) return "firewall";
+  if (/(router|gateway|edge-router)/.test(hints)) return "router";
+  if (/(switch|aruba|cisco catalyst)/.test(hints)) return "switch";
+  if (/(access point|wireless ap|unifi ap)/.test(hints)) return "access-point";
+  if (/(printer|laserjet|officejet)/.test(hints)) return "printer";
+  if (/(nas|synology|qnap)/.test(hints)) return "nas";
+  if (/(ups|uninterruptible power)/.test(hints)) return "ups";
+  if (/(vmware|esxi|proxmox|hyper-v|hypervisor)/.test(hints)) return "hypervisor";
+  if (/(server|ubuntu|debian|windows server|rhel)/.test(hints)) return "server";
+
+  return null;
 }
 
 interface PlaywrightChromium {
@@ -1948,7 +2121,24 @@ export async function buildAdapterSkillTools(
         ? clampInt(args.read_from_result, 1, WEB_RESEARCH_MAX_RESULTS_LIMIT, 1)
         : 1;
 
+      const provider = runtime.webResearchProvider;
+      let apiKey: string | undefined;
+      const apiKeys: Partial<Record<"brave_api" | "serper" | "serpapi", string>> = {};
+      if (requiresWebResearchApiKey(provider)) {
+        apiKey = await vault.getSecret(webResearchApiKeySecretRef(provider));
+      }
+      for (const keyProvider of ["brave_api", "serper", "serpapi"] as const) {
+        const key = await vault.getSecret(webResearchApiKeySecretRef(keyProvider));
+        if (key && key.trim().length > 0) {
+          apiKeys[keyProvider] = key;
+        }
+      }
+
       const result = await runWebResearch(query, {
+        provider,
+        apiKey,
+        apiKeys,
+        fallbackStrategy: runtime.webResearchFallbackStrategy,
         timeoutMs: runtime.webResearchTimeoutMs,
         maxResults,
         deepReadPages,
@@ -1964,6 +2154,7 @@ export async function buildAdapterSkillTools(
           query,
           ok: result.ok,
           engine: result.engine,
+          provider,
           resultCount: result.resultCount,
           consultedCount: result.consultedCount,
           warnings: result.warnings,
@@ -2183,7 +2374,7 @@ export async function buildAdapterSkillTools(
           const script = typeof step.script === "string" ? step.script : "";
           const label = typeof step.label === "string" ? step.label : undefined;
           const screenshotPath = typeof step.path === "string" ? step.path : undefined;
-          const fullPage = typeof step.full_page === "boolean" ? step.full_page : true;
+          const fullPage = typeof step.full_page === "boolean" ? step.full_page : false;
           const stepTimeout = clampInt(step.timeout_ms, 200, 120_000, 15_000);
           try {
             if (action === "goto") {
@@ -2294,23 +2485,37 @@ export async function buildAdapterSkillTools(
                   : JSON.stringify(evalResult).slice(0, 2_000),
               });
             } else if (action === "screenshot") {
-              const shot = await page.screenshot({
-                ...(screenshotPath ? { path: screenshotPath } : {}),
-                fullPage,
-              });
-              const screenshotBase64 = screenshotPath
+              const inlineArtifact = screenshotPath
                 ? undefined
-                : Buffer.from(shot).toString("base64");
+                : createBrowserBrowseScreenshotArtifact(fullPage ? "png" : "jpg");
+              const targetPath = screenshotPath ?? inlineArtifact?.absolutePath;
+              const shot = await page.screenshot(
+                targetPath
+                  ? {
+                    path: targetPath,
+                    fullPage,
+                  }
+                  : {
+                    fullPage,
+                    type: "jpeg",
+                    quality: 65,
+                  },
+              );
               stepResults.push({
                 action,
                 label,
                 ok: true,
-                ...(screenshotPath
-                  ? { path: screenshotPath }
-                  : {
-                    screenshotBase64,
-                    mimeType: "image/png",
-                  }),
+                ...(inlineArtifact
+                  ? {
+                    path: inlineArtifact.relativePath,
+                    mimeType: fullPage ? "image/png" : "image/jpeg",
+                  }
+                  : screenshotPath
+                    ? { path: screenshotPath }
+                    : {
+                      screenshotBase64: Buffer.from(shot).toString("base64"),
+                      mimeType: "image/jpeg",
+                    }),
                 bytes: shot.byteLength,
               });
             } else {
@@ -2401,6 +2606,256 @@ export async function buildAdapterSkillTools(
           }
         }
       }
+    },
+  });
+
+  tools.steward_manage_device = dynamicTool({
+    description: "Get or update first-party device settings (name, category, notes, tags, autonomy) with guardrails against placeholder names.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["get", "update"],
+          description: "Action to perform.",
+        },
+        device_id: {
+          type: "string",
+          description: "Target device id, name, or IP. Optional when chat is attached to a device.",
+        },
+        name: {
+          type: "string",
+          description: "Optional new display name. Must not be a placeholder like 'this' or 'it'.",
+        },
+        category: {
+          type: "string",
+          description: "Optional device category/device type. Accepts canonical values and common aliases.",
+        },
+        infer_name: {
+          type: "boolean",
+          description: "Infer an operator-friendly name from known identity signals when true.",
+        },
+        infer_category: {
+          type: "boolean",
+          description: "Infer a category from known identity signals when true.",
+        },
+        autonomy_tier: {
+          type: "integer",
+          enum: [1, 2, 3],
+          description: "Optional autonomy tier update.",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional full tag set to replace current tags.",
+        },
+        operator_notes: {
+          type: ["string", "null"],
+          description: "Optional operator context note text.",
+        },
+        structured_memory_json: {
+          type: ["object", "null"],
+          description: "Optional structured memory JSON object.",
+          additionalProperties: true,
+        },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const action = inputString(args, "action");
+      if (!action) {
+        return { ok: false, error: "action is required." };
+      }
+
+      const device = await resolveDeviceByTarget(
+        inputString(args, "device_id"),
+        options?.attachedDeviceId,
+      );
+      if (!device) {
+        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+      }
+
+      const readiness = validateDeviceReadyForToolUse(device, {
+        allowPreOnboardingExecution: options?.allowPreOnboardingExecution,
+      });
+      if (!readiness.ok) {
+        return { ok: false, error: readiness.reason, deviceId: device.id };
+      }
+
+      if (action === "get") {
+        return {
+          ok: true,
+          deviceId: device.id,
+          deviceName: device.name,
+          name: device.name,
+          category: device.type,
+          autonomyTier: device.autonomyTier,
+          tags: device.tags,
+          operatorNotes: isRecord(device.metadata.notes) && typeof device.metadata.notes.operatorContext === "string"
+            ? device.metadata.notes.operatorContext
+            : "",
+          structuredMemoryJson: isRecord(device.metadata.notes) && isRecord(device.metadata.notes.structuredContext)
+            ? device.metadata.notes.structuredContext
+            : {},
+        };
+      }
+
+      if (action !== "update") {
+        return { ok: false, error: `Unsupported action: ${action}` };
+      }
+
+      const inferName = inputBoolean(args, "infer_name") === true;
+      const inferCategory = inputBoolean(args, "infer_category") === true;
+      const inputName = inputString(args, "name");
+      const inputCategory = inputString(args, "category");
+      const nextNameRaw = inputName ?? (inferName ? inferManageableDeviceName(device) : null);
+      const normalizedName = typeof nextNameRaw === "string" ? normalizeDeviceNameInput(nextNameRaw) : null;
+      if (normalizedName !== null && !isAcceptableDeviceName(normalizedName)) {
+        return {
+          ok: false,
+          error: `Invalid device name '${normalizedName}'. Provide a specific name (not placeholders like 'this').`,
+          deviceId: device.id,
+        };
+      }
+
+      const nextCategory = parseDeviceCategory(inputCategory)
+        ?? (inferCategory ? inferManageableDeviceCategory(device) : null);
+
+      const changedFields: string[] = [];
+      const previousName = device.name;
+      const previousCategory = device.type;
+      const previousAutonomy = device.autonomyTier;
+
+      if (normalizedName && normalizedName !== device.name) {
+        device.name = normalizedName;
+        const identity = isRecord(device.metadata.identity) ? device.metadata.identity : {};
+        device.metadata = {
+          ...device.metadata,
+          identity: {
+            ...identity,
+            nameManuallySet: true,
+            nameManuallySetAt: nowIso(),
+            nameSetBy: "steward_manage_device",
+          },
+        };
+        changedFields.push("name");
+      }
+
+      if (nextCategory && nextCategory !== device.type) {
+        device.type = nextCategory;
+        changedFields.push("category");
+      }
+
+      const autonomyTier = typeof args.autonomy_tier === "number"
+        ? clampInt(args.autonomy_tier, 1, 3, device.autonomyTier)
+        : undefined;
+      if (autonomyTier && autonomyTier !== device.autonomyTier) {
+        device.autonomyTier = autonomyTier as Device["autonomyTier"];
+        changedFields.push("autonomyTier");
+      }
+
+      if (Array.isArray(args.tags)) {
+        const tags = args.tags
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => value.trim())
+          .filter((value) => value.length > 0);
+        if (JSON.stringify(tags) !== JSON.stringify(device.tags)) {
+          device.tags = tags;
+          changedFields.push("tags");
+        }
+      }
+
+      if ("operator_notes" in args) {
+        const nextNotes = args.operator_notes === null
+          ? ""
+          : typeof args.operator_notes === "string"
+            ? args.operator_notes.trim()
+            : "";
+        const existingNotes = isRecord(device.metadata.notes)
+          && typeof device.metadata.notes.operatorContext === "string"
+          ? device.metadata.notes.operatorContext
+          : "";
+        if (nextNotes !== existingNotes) {
+          const existing = isRecord(device.metadata.notes) ? device.metadata.notes : {};
+          device.metadata = {
+            ...device.metadata,
+            notes: {
+              ...existing,
+              operatorContext: nextNotes,
+              operatorContextUpdatedAt: nowIso(),
+            },
+          };
+          changedFields.push("operatorNotes");
+        }
+      }
+
+      if ("structured_memory_json" in args) {
+        if (args.structured_memory_json !== null && !isRecord(args.structured_memory_json)) {
+          return { ok: false, error: "structured_memory_json must be an object or null.", deviceId: device.id };
+        }
+        const existingStructured = isRecord(device.metadata.notes) && isRecord(device.metadata.notes.structuredContext)
+          ? device.metadata.notes.structuredContext
+          : {};
+        const nextStructured = args.structured_memory_json ?? {};
+        if (JSON.stringify(existingStructured) !== JSON.stringify(nextStructured)) {
+          const existing = isRecord(device.metadata.notes) ? device.metadata.notes : {};
+          device.metadata = {
+            ...device.metadata,
+            notes: {
+              ...existing,
+              structuredContext: nextStructured,
+              structuredContextUpdatedAt: nowIso(),
+            },
+          };
+          changedFields.push("structuredMemoryJson");
+        }
+      }
+
+      if (changedFields.length === 0) {
+        return {
+          ok: true,
+          deviceId: device.id,
+          deviceName: device.name,
+          changedFields,
+          summary: `No device setting changes were needed for ${device.name}.`,
+        };
+      }
+
+      device.lastChangedAt = nowIso();
+      await stateStore.upsertDevice(device);
+      await stateStore.addAction({
+        actor: "steward",
+        kind: "config",
+        message: `Updated device settings for ${device.name}`,
+        context: {
+          deviceId: device.id,
+          changedFields,
+          previousName,
+          nextName: device.name,
+          previousCategory,
+          nextCategory: device.type,
+          previousAutonomy,
+          nextAutonomy: device.autonomyTier,
+          viaTool: "steward_manage_device",
+        },
+      });
+
+      return {
+        ok: true,
+        deviceId: device.id,
+        deviceName: device.name,
+        previousName,
+        previousCategory,
+        name: device.name,
+        category: device.type,
+        autonomyTier: device.autonomyTier,
+        changedFields,
+        inferredName: Boolean(inferName && !inputName && normalizedName),
+        inferredCategory: Boolean(inferCategory && !inputCategory && nextCategory),
+        summary: `Updated ${device.name}: ${changedFields.join(", ")}.`,
+      };
     },
   });
 

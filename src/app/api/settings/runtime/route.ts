@@ -32,6 +32,8 @@ const schema = z.object({
   deepBrowserObservationTargets: z.number().int().min(1).max(256),
   browserObservationCaptureScreenshots: z.boolean(),
   enableWebResearch: z.boolean(),
+  webResearchProvider: z.enum(["brave_scrape", "duckduckgo_scrape", "brave_api", "serper", "serpapi"]),
+  webResearchFallbackStrategy: z.enum(["prefer_non_key", "key_only", "selected_only"]),
   webResearchTimeoutMs: z.number().int().min(3_000).max(60_000),
   webResearchMaxResults: z.number().int().min(1).max(80),
   webResearchDeepReadPages: z.number().int().min(0).max(40),
