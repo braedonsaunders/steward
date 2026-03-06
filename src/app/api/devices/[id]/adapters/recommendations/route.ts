@@ -18,6 +18,9 @@ export async function GET(
     return NextResponse.json({ error: "Device not found" }, { status: 404 });
   }
 
-  const bindings = stateStore.getDeviceAdapterBindings(id);
-  return NextResponse.json({ bindings });
+  const accessSurfaces = stateStore.getAccessSurfaces(id);
+  return NextResponse.json({
+    accessSurfaces,
+    bindings: accessSurfaces,
+  });
 }

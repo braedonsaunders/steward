@@ -1,4 +1,5 @@
 import type { PlaybookDefinition } from "@/lib/state/types";
+import { httpBrokerRequest, sshBrokerRequest, sshShellBrokerRequest } from "@/lib/playbooks/brokers";
 
 const readSafety = {
   dryRunSupported: false,
@@ -34,6 +35,7 @@ export const backupRetryPlaybooks: PlaybookDefinition[] = [
           kind: "shell.command",
           mode: "read",
           timeoutMs: 10_000,
+          brokerRequest: sshShellBrokerRequest("test -d {{destination}} && echo OK"),
           commandTemplate: "ssh {{host}} 'test -d {{destination}} && echo OK'",
           expectedSemanticTarget: "path:{{destination}}",
           safety: readSafety,
@@ -48,6 +50,7 @@ export const backupRetryPlaybooks: PlaybookDefinition[] = [
           kind: "shell.command",
           mode: "mutate",
           timeoutMs: 240_000,
+          brokerRequest: sshBrokerRequest("rsync", "-avz", "--delete", "{{source}}", "{{destination}}"),
           commandTemplate: "ssh {{host}} 'rsync -avz --delete {{source}} {{destination}}'",
           expectedSemanticTarget: "path:{{destination}}",
           safety: mutateSafety,
@@ -64,6 +67,7 @@ export const backupRetryPlaybooks: PlaybookDefinition[] = [
           kind: "shell.command",
           mode: "read",
           timeoutMs: 10_000,
+          brokerRequest: sshShellBrokerRequest("stat -c %Y {{destination}} | xargs -I{} date -d @{}"),
           commandTemplate: "ssh {{host}} 'stat -c %Y {{destination}} | xargs -I{} date -d @{}'",
           expectedSemanticTarget: "path:{{destination}}",
           safety: readSafety,
@@ -93,6 +97,18 @@ export const backupRetryPlaybooks: PlaybookDefinition[] = [
           kind: "http.request",
           mode: "read",
           timeoutMs: 15_000,
+          brokerRequest: httpBrokerRequest({
+            method: "GET",
+            scheme: "https",
+            port: 5001,
+            path: "/webapi/entry.cgi",
+            query: {
+              api: "SYNO.Core.Share.Snapshot",
+              version: 1,
+              method: "list",
+            },
+            insecureSkipVerify: true,
+          }),
           commandTemplate: "curl -s -k https://{{host}}:5001/webapi/entry.cgi?api=SYNO.Core.Share.Snapshot&version=1&method=list",
           expectedSemanticTarget: "snapshot:list",
           safety: readSafety,
@@ -109,6 +125,19 @@ export const backupRetryPlaybooks: PlaybookDefinition[] = [
           kind: "http.request",
           mode: "read",
           timeoutMs: 15_000,
+          brokerRequest: httpBrokerRequest({
+            method: "GET",
+            scheme: "https",
+            port: 5001,
+            path: "/webapi/entry.cgi",
+            query: {
+              api: "SYNO.Core.Share.Snapshot",
+              version: 1,
+              method: "list",
+            },
+            insecureSkipVerify: true,
+            expectRegex: "snapshot",
+          }),
           commandTemplate: "curl -s -k https://{{host}}:5001/webapi/entry.cgi?api=SYNO.Core.Share.Snapshot&version=1&method=list | grep -c 'snapshot'",
           expectedSemanticTarget: "snapshot:list",
           safety: readSafety,

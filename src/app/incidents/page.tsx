@@ -1,11 +1,14 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
+  BellOff,
+  Check,
   Filter,
   Info,
+  Loader2,
   Search,
   ShieldAlert,
   TriangleAlert,
@@ -32,8 +35,10 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useSteward } from "@/lib/hooks/use-steward";
 import type { Incident, IncidentSeverity } from "@/lib/state/types";
+import { formatIncidentType, getIncidentType } from "@/lib/incidents/utils";
 
 const SEVERITY_ORDER: Record<IncidentSeverity, number> = {
   critical: 0,
@@ -111,9 +116,15 @@ function sortIncidents(incidents: Incident[]): Incident[] {
 function IncidentTable({
   incidents,
   emptyMessage,
+  actionBusy,
+  onResolve,
+  onIgnoreType,
 }: {
   incidents: Incident[];
   emptyMessage: string;
+  actionBusy: { id: string; kind: "resolve" | "ignore" } | null;
+  onResolve: (incident: Incident) => Promise<void>;
+  onIgnoreType: (incident: Incident) => Promise<void>;
 }) {
   if (incidents.length === 0) {
     return (
@@ -140,6 +151,7 @@ function IncidentTable({
             <TableHead className="w-[90px]">Devices</TableHead>
             <TableHead className="w-[110px]">Detected</TableHead>
             <TableHead className="hidden w-[130px] md:table-cell">Remediation</TableHead>
+            <TableHead className="w-[180px]">Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -188,6 +200,40 @@ function IncidentTable({
                   <span className="text-xs text-muted-foreground">Manual</span>
                 )}
               </TableCell>
+              <TableCell>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={
+                      incident.status === "resolved"
+                      || (actionBusy?.id === incident.id && actionBusy.kind === "resolve")
+                    }
+                    onClick={() => void onResolve(incident)}
+                  >
+                    {actionBusy?.id === incident.id && actionBusy.kind === "resolve" ? (
+                      <Loader2 className="mr-1 size-3 animate-spin" />
+                    ) : (
+                      <Check className="mr-1 size-3" />
+                    )}
+                    Resolve
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={actionBusy?.id === incident.id && actionBusy.kind === "ignore"}
+                    title={`Ignore future incidents for type: ${formatIncidentType(getIncidentType(incident))}`}
+                    onClick={() => void onIgnoreType(incident)}
+                  >
+                    {actionBusy?.id === incident.id && actionBusy.kind === "ignore" ? (
+                      <Loader2 className="mr-1 size-3 animate-spin" />
+                    ) : (
+                      <BellOff className="mr-1 size-3" />
+                    )}
+                    Ignore Type
+                  </Button>
+                </div>
+              </TableCell>
             </TableRow>
           ))}
         </TableBody>
@@ -197,12 +243,20 @@ function IncidentTable({
 }
 
 export default function IncidentsPage() {
-  const { incidents, loading, error } = useSteward();
+  const {
+    incidents,
+    loading,
+    error,
+    updateIncidentStatus,
+    ignoreIncidentType,
+  } = useSteward();
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [severityTab, setSeverityTab] = useState("all");
   const [page, setPage] = useState(1);
+  const [actionBusy, setActionBusy] = useState<{ id: string; kind: "resolve" | "ignore" } | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const pageSize = 12;
 
   const openCount = useMemo(
@@ -267,6 +321,38 @@ export default function IncidentsPage() {
     return filteredIncidents.slice(start, start + pageSize);
   }, [filteredIncidents, currentPage]);
 
+  const handleResolve = useCallback(async (incident: Incident) => {
+    setActionBusy({ id: incident.id, kind: "resolve" });
+    setActionError(null);
+    try {
+      await updateIncidentStatus(incident.id, "resolved");
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to resolve incident.");
+    } finally {
+      setActionBusy(null);
+    }
+  }, [updateIncidentStatus]);
+
+  const handleIgnoreType = useCallback(async (incident: Incident) => {
+    const incidentType = formatIncidentType(getIncidentType(incident));
+    const shouldContinue = window.confirm(
+      `Ignore future incidents of type "${incidentType}" and resolve current open matches?`,
+    );
+    if (!shouldContinue) {
+      return;
+    }
+
+    setActionBusy({ id: incident.id, kind: "ignore" });
+    setActionError(null);
+    try {
+      await ignoreIncidentType(incident.id);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to ignore incident type.");
+    } finally {
+      setActionBusy(null);
+    }
+  }, [ignoreIncidentType]);
+
   if (loading) {
     return (
       <div className="space-y-6">
@@ -320,6 +406,12 @@ export default function IncidentsPage() {
           </p>
         </div>
       </div>
+
+      {actionError && (
+        <Alert variant="destructive">
+          <AlertDescription className="text-xs">{actionError}</AlertDescription>
+        </Alert>
+      )}
 
       {/* Search + Status filters */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -400,24 +492,36 @@ export default function IncidentsPage() {
                 ? "No incidents have been detected yet. Run an agent cycle to scan for issues."
                 : "Try adjusting your search or filter criteria."
             }
+            actionBusy={actionBusy}
+            onResolve={handleResolve}
+            onIgnoreType={handleIgnoreType}
           />
         </TabsContent>
         <TabsContent value="critical" className="mt-4 min-h-0 flex-1 overflow-auto">
           <IncidentTable
             incidents={pagedIncidents}
             emptyMessage="No critical incidents match the current filters."
+            actionBusy={actionBusy}
+            onResolve={handleResolve}
+            onIgnoreType={handleIgnoreType}
           />
         </TabsContent>
         <TabsContent value="warning" className="mt-4 min-h-0 flex-1 overflow-auto">
           <IncidentTable
             incidents={pagedIncidents}
             emptyMessage="No warning incidents match the current filters."
+            actionBusy={actionBusy}
+            onResolve={handleResolve}
+            onIgnoreType={handleIgnoreType}
           />
         </TabsContent>
         <TabsContent value="info" className="mt-4 min-h-0 flex-1 overflow-auto">
           <IncidentTable
             incidents={pagedIncidents}
             emptyMessage="No informational incidents match the current filters."
+            actionBusy={actionBusy}
+            onResolve={handleResolve}
+            onIgnoreType={handleIgnoreType}
           />
         </TabsContent>
       </Tabs>

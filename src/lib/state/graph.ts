@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { getDb, recoverCorruptDatabase } from "@/lib/state/db";
+import { stateStore } from "@/lib/state/store";
 import type { Device, GraphNode } from "@/lib/state/types";
 
 const subnet24 = (ip: string): string | undefined => {
@@ -76,6 +77,10 @@ export const graphStore = {
       const upsertEdge = upsertEdgeStmt(db);
 
       const tx = db.transaction(() => {
+        const workloads = stateStore.getWorkloads(device.id);
+        const assurances = stateStore.getAssurances(device.id);
+        const accessSurfaces = stateStore.getAccessSurfaces(device.id);
+
         // Upsert device node
         const node: GraphNode = {
           id: `device:${device.id}`,
@@ -150,7 +155,7 @@ export const graphStore = {
           });
         }
 
-        // Upsert service nodes and edges
+        // Upsert observed endpoint nodes and edges.
         for (const service of device.services) {
           const serviceNodeId = `service:${device.id}:${service.transport}:${service.port}`;
           upsertNode.run({
@@ -173,6 +178,101 @@ export const graphStore = {
             createdAt: now,
             updatedAt: now,
           });
+        }
+
+        // Upsert workload nodes and edges.
+        for (const workload of workloads) {
+          const workloadNodeId = `workload:${workload.id}`;
+          upsertNode.run({
+            id: workloadNodeId,
+            type: "workload",
+            label: workload.displayName,
+            properties: JSON.stringify({ ...workload }),
+            createdAt: workload.createdAt,
+            updatedAt: workload.updatedAt,
+          });
+
+          const workloadEdgeExisting = findEdge(db, node.id, workloadNodeId, "hosts");
+          upsertEdge.run({
+            id: workloadEdgeExisting?.id ?? randomUUID(),
+            from: node.id,
+            to: workloadNodeId,
+            type: "hosts",
+            properties: JSON.stringify({ category: workload.category, criticality: workload.criticality }),
+            createdAt: workload.createdAt,
+            updatedAt: workload.updatedAt,
+          });
+        }
+
+        // Upsert access surface nodes and edges.
+        for (const surface of accessSurfaces) {
+          const surfaceNodeId = `access-surface:${surface.id}`;
+          upsertNode.run({
+            id: surfaceNodeId,
+            type: "access_surface",
+            label: `${surface.adapterId} (${surface.protocol})`,
+            properties: JSON.stringify({ ...surface }),
+            createdAt: surface.createdAt,
+            updatedAt: surface.updatedAt,
+          });
+
+          const surfaceEdgeExisting = findEdge(db, node.id, surfaceNodeId, "reachable_via");
+          upsertEdge.run({
+            id: surfaceEdgeExisting?.id ?? randomUUID(),
+            from: node.id,
+            to: surfaceNodeId,
+            type: "reachable_via",
+            properties: JSON.stringify({ selected: surface.selected, score: surface.score }),
+            createdAt: surface.createdAt,
+            updatedAt: surface.updatedAt,
+          });
+        }
+
+        // Upsert assurance nodes and edges.
+        for (const assurance of assurances) {
+          const assuranceNodeId = `assurance:${assurance.id}`;
+          upsertNode.run({
+            id: assuranceNodeId,
+            type: "assurance",
+            label: assurance.displayName,
+            properties: JSON.stringify({ ...assurance }),
+            createdAt: assurance.createdAt,
+            updatedAt: assurance.updatedAt,
+          });
+
+          const parentNodeId = assurance.workloadId
+            ? `workload:${assurance.workloadId}`
+            : node.id;
+          const assuranceEdgeExisting = findEdge(db, parentNodeId, assuranceNodeId, "validated_by");
+          upsertEdge.run({
+            id: assuranceEdgeExisting?.id ?? randomUUID(),
+            from: parentNodeId,
+            to: assuranceNodeId,
+            type: "validated_by",
+            properties: JSON.stringify({
+              criticality: assurance.criticality,
+              monitorType: assurance.monitorType,
+            }),
+            createdAt: assurance.createdAt,
+            updatedAt: assurance.updatedAt,
+          });
+
+          for (const protocol of assurance.requiredProtocols ?? []) {
+            const matchedSurfaces = accessSurfaces.filter((surface) => surface.protocol === protocol);
+            for (const surface of matchedSurfaces) {
+              const surfaceNodeId = `access-surface:${surface.id}`;
+              const dependencyEdgeExisting = findEdge(db, assuranceNodeId, surfaceNodeId, "requires_access");
+              upsertEdge.run({
+                id: dependencyEdgeExisting?.id ?? randomUUID(),
+                from: assuranceNodeId,
+                to: surfaceNodeId,
+                type: "requires_access",
+                properties: JSON.stringify({ protocol }),
+                createdAt: assurance.createdAt,
+                updatedAt: assurance.updatedAt,
+              });
+            }
+          }
         }
       });
 

@@ -1,4 +1,5 @@
 import type { PlaybookDefinition } from "@/lib/state/types";
+import { httpBrokerRequest, sshShellBrokerRequest } from "@/lib/playbooks/brokers";
 
 const readSafety = {
   dryRunSupported: false,
@@ -35,6 +36,9 @@ export const configBackupPlaybooks: PlaybookDefinition[] = [
           kind: "network.config",
           mode: "read",
           timeoutMs: 20_000,
+          brokerRequest: sshShellBrokerRequest(
+            "show running-config 2>/dev/null || cat /etc/network/interfaces /etc/hosts /etc/resolv.conf 2>/dev/null || echo 'config-capture-unsupported'",
+          ),
           commandTemplate:
             "ssh {{host}} 'show running-config' 2>/dev/null || ssh {{host}} 'cat /etc/network/interfaces /etc/hosts /etc/resolv.conf' 2>/dev/null || echo 'config-capture-unsupported'",
           expectedSemanticTarget: "config:running",
@@ -81,6 +85,12 @@ export const configBackupPlaybooks: PlaybookDefinition[] = [
           kind: "http.request",
           mode: "read",
           timeoutMs: 20_000,
+          brokerRequest: httpBrokerRequest({
+            method: "GET",
+            schemes: ["https", "http"],
+            path: "/api/config/export",
+            insecureSkipVerify: true,
+          }),
           commandTemplate:
             "curl -s -k https://{{host}}/api/config/export 2>/dev/null || curl -s -k http://{{host}}/api/config/export 2>/dev/null || echo 'api-export-unsupported'",
           expectedSemanticTarget: "config:export",

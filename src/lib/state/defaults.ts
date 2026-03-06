@@ -165,6 +165,25 @@ export const defaultRuntimeSettings = (): RuntimeSettings => ({
   enableMdnsDiscovery: true,
   enableSsdpDiscovery: true,
   enableSnmpProbe: true,
+  enableAdvancedNmapFingerprint: true,
+  nmapFingerprintTimeoutMs: 30_000,
+  incrementalNmapTargets: 8,
+  deepNmapTargets: 48,
+  enablePacketIntel: true,
+  packetIntelDurationSec: 5,
+  packetIntelMaxPackets: 2_500,
+  packetIntelTopTalkers: 12,
+  enableBrowserObservation: true,
+  browserObservationTimeoutMs: 12_000,
+  incrementalBrowserObservationTargets: 6,
+  deepBrowserObservationTargets: 32,
+  browserObservationCaptureScreenshots: false,
+  enableWebResearch: true,
+  webResearchTimeoutMs: 18_000,
+  webResearchMaxResults: 6,
+  webResearchDeepReadPages: 2,
+  enableDhcpLeaseIntel: true,
+  dhcpLeaseCommandTimeoutMs: 6_000,
   ouiUpdateIntervalMs: 7 * 24 * 60 * 60 * 1000,
   laneBEnabled: false,
   laneBAllowedEnvironments: ["lab", "dev"],
@@ -177,6 +196,10 @@ export const defaultRuntimeSettings = (): RuntimeSettings => ({
   approvalTtlClassDMs: 30 * 60 * 1000,
   quarantineThresholdCount: 3,
   quarantineThresholdWindowMs: 10 * 60 * 1000,
+  availabilityScannerAlertsEnabled: true,
+  securityScannerAlertsEnabled: true,
+  serviceContractScannerAlertsEnabled: true,
+  ignoredIncidentTypes: [],
 });
 
 function resolvedLocalTimezone(): string {
@@ -363,6 +386,25 @@ export function ensureDefaults(db: Database.Database): void {
     ensureMeta.run("runtime.enableMdnsDiscovery", String(runtimeDefaults.enableMdnsDiscovery));
     ensureMeta.run("runtime.enableSsdpDiscovery", String(runtimeDefaults.enableSsdpDiscovery));
     ensureMeta.run("runtime.enableSnmpProbe", String(runtimeDefaults.enableSnmpProbe));
+    ensureMeta.run("runtime.enableAdvancedNmapFingerprint", String(runtimeDefaults.enableAdvancedNmapFingerprint));
+    ensureMeta.run("runtime.nmapFingerprintTimeoutMs", String(runtimeDefaults.nmapFingerprintTimeoutMs));
+    ensureMeta.run("runtime.incrementalNmapTargets", String(runtimeDefaults.incrementalNmapTargets));
+    ensureMeta.run("runtime.deepNmapTargets", String(runtimeDefaults.deepNmapTargets));
+    ensureMeta.run("runtime.enablePacketIntel", String(runtimeDefaults.enablePacketIntel));
+    ensureMeta.run("runtime.packetIntelDurationSec", String(runtimeDefaults.packetIntelDurationSec));
+    ensureMeta.run("runtime.packetIntelMaxPackets", String(runtimeDefaults.packetIntelMaxPackets));
+    ensureMeta.run("runtime.packetIntelTopTalkers", String(runtimeDefaults.packetIntelTopTalkers));
+    ensureMeta.run("runtime.enableBrowserObservation", String(runtimeDefaults.enableBrowserObservation));
+    ensureMeta.run("runtime.browserObservationTimeoutMs", String(runtimeDefaults.browserObservationTimeoutMs));
+    ensureMeta.run("runtime.incrementalBrowserObservationTargets", String(runtimeDefaults.incrementalBrowserObservationTargets));
+    ensureMeta.run("runtime.deepBrowserObservationTargets", String(runtimeDefaults.deepBrowserObservationTargets));
+    ensureMeta.run("runtime.browserObservationCaptureScreenshots", String(runtimeDefaults.browserObservationCaptureScreenshots));
+    ensureMeta.run("runtime.enableWebResearch", String(runtimeDefaults.enableWebResearch));
+    ensureMeta.run("runtime.webResearchTimeoutMs", String(runtimeDefaults.webResearchTimeoutMs));
+    ensureMeta.run("runtime.webResearchMaxResults", String(runtimeDefaults.webResearchMaxResults));
+    ensureMeta.run("runtime.webResearchDeepReadPages", String(runtimeDefaults.webResearchDeepReadPages));
+    ensureMeta.run("runtime.enableDhcpLeaseIntel", String(runtimeDefaults.enableDhcpLeaseIntel));
+    ensureMeta.run("runtime.dhcpLeaseCommandTimeoutMs", String(runtimeDefaults.dhcpLeaseCommandTimeoutMs));
     ensureMeta.run("runtime.ouiUpdateIntervalMs", String(runtimeDefaults.ouiUpdateIntervalMs));
     ensureMeta.run("runtime.laneBEnabled", String(runtimeDefaults.laneBEnabled));
     ensureMeta.run("runtime.laneBAllowedEnvironments", JSON.stringify(runtimeDefaults.laneBAllowedEnvironments));
@@ -375,6 +417,10 @@ export function ensureDefaults(db: Database.Database): void {
     ensureMeta.run("runtime.approvalTtlClassDMs", String(runtimeDefaults.approvalTtlClassDMs));
     ensureMeta.run("runtime.quarantineThresholdCount", String(runtimeDefaults.quarantineThresholdCount));
     ensureMeta.run("runtime.quarantineThresholdWindowMs", String(runtimeDefaults.quarantineThresholdWindowMs));
+    ensureMeta.run("runtime.availabilityScannerAlertsEnabled", String(runtimeDefaults.availabilityScannerAlertsEnabled));
+    ensureMeta.run("runtime.securityScannerAlertsEnabled", String(runtimeDefaults.securityScannerAlertsEnabled));
+    ensureMeta.run("runtime.serviceContractScannerAlertsEnabled", String(runtimeDefaults.serviceContractScannerAlertsEnabled));
+    ensureMeta.run("runtime.ignoredIncidentTypes", JSON.stringify(runtimeDefaults.ignoredIncidentTypes));
 
     // System settings domain
     const systemDefaults = defaultSystemSettings();

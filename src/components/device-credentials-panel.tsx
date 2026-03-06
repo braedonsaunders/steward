@@ -196,6 +196,11 @@ export function DeviceCredentialsPanel({ deviceId, className }: { deviceId: stri
                 <div>
                   <p className="font-medium">{credential.protocol}</p>
                   <p className="text-muted-foreground">{credential.accountLabel ?? "no username"}</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    {credential.lastValidatedAt
+                      ? `Last validated ${new Date(credential.lastValidatedAt).toLocaleString()}`
+                      : "Not validated yet"}
+                  </p>
                 </div>
                 <div className="flex items-center gap-2">
                   <Badge variant="outline">{credential.status}</Badge>

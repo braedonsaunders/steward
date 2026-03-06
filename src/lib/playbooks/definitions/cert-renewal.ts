@@ -1,4 +1,5 @@
 import type { PlaybookDefinition } from "@/lib/state/types";
+import { sshBrokerRequest, sshShellBrokerRequest } from "@/lib/playbooks/brokers";
 
 const readSafety = {
   dryRunSupported: false,
@@ -35,6 +36,13 @@ export const certRenewalPlaybooks: PlaybookDefinition[] = [
           kind: "file.copy",
           mode: "mutate",
           timeoutMs: 10_000,
+          brokerRequest: sshBrokerRequest(
+            "sudo",
+            "cp",
+            "-r",
+            "/etc/letsencrypt/live/{{domain}}",
+            "/etc/letsencrypt/live/{{domain}}.bak",
+          ),
           commandTemplate: "ssh {{host}} 'sudo cp -r /etc/letsencrypt/live/{{domain}} /etc/letsencrypt/live/{{domain}}.bak'",
           expectedSemanticTarget: "certificate:{{domain}}",
           safety: mutateSafety,
@@ -49,6 +57,14 @@ export const certRenewalPlaybooks: PlaybookDefinition[] = [
           kind: "cert.renew",
           mode: "mutate",
           timeoutMs: 60_000,
+          brokerRequest: sshBrokerRequest(
+            "sudo",
+            "certbot",
+            "renew",
+            "--cert-name",
+            "{{domain}}",
+            "--non-interactive",
+          ),
           commandTemplate: "ssh {{host}} 'sudo certbot renew --cert-name {{domain}} --non-interactive'",
           expectedSemanticTarget: "certificate:{{domain}}",
           safety: mutateSafety,
@@ -63,6 +79,9 @@ export const certRenewalPlaybooks: PlaybookDefinition[] = [
           kind: "service.restart",
           mode: "mutate",
           timeoutMs: 10_000,
+          brokerRequest: sshShellBrokerRequest(
+            "sudo systemctl reload nginx || sudo systemctl reload apache2 || true",
+          ),
           commandTemplate: "ssh {{host}} 'sudo systemctl reload nginx || sudo systemctl reload apache2 || true'",
           expectedSemanticTarget: "service:web",
           safety: mutateSafety,
@@ -79,6 +98,9 @@ export const certRenewalPlaybooks: PlaybookDefinition[] = [
           kind: "shell.command",
           mode: "read",
           timeoutMs: 15_000,
+          brokerRequest: sshShellBrokerRequest(
+            "sudo certbot certificates --cert-name {{domain}} 2>/dev/null | grep Expiry",
+          ),
           commandTemplate: "ssh {{host}} 'sudo certbot certificates --cert-name {{domain}} 2>/dev/null | grep Expiry'",
           expectedSemanticTarget: "certificate:{{domain}}",
           safety: readSafety,
@@ -95,6 +117,9 @@ export const certRenewalPlaybooks: PlaybookDefinition[] = [
           kind: "file.copy",
           mode: "mutate",
           timeoutMs: 15_000,
+          brokerRequest: sshShellBrokerRequest(
+            "sudo rm -rf /etc/letsencrypt/live/{{domain}} && sudo mv /etc/letsencrypt/live/{{domain}}.bak /etc/letsencrypt/live/{{domain}} && sudo systemctl reload nginx || sudo systemctl reload apache2 || true",
+          ),
           commandTemplate: "ssh {{host}} 'sudo rm -rf /etc/letsencrypt/live/{{domain}} && sudo mv /etc/letsencrypt/live/{{domain}}.bak /etc/letsencrypt/live/{{domain}} && sudo systemctl reload nginx || sudo systemctl reload apache2 || true'",
           expectedSemanticTarget: "certificate:{{domain}}",
           safety: mutateSafety,

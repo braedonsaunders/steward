@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
   ArrowLeft,
+  BellOff,
   Bot,
   Check,
   ChevronRight,
@@ -29,8 +30,10 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useSteward } from "@/lib/hooks/use-steward";
 import type { Incident, IncidentSeverity } from "@/lib/state/types";
+import { formatIncidentType, getIncidentType } from "@/lib/incidents/utils";
 import { cn } from "@/lib/utils";
 
 function severityBadgeVariant(
@@ -98,8 +101,20 @@ function formatRelativeTime(iso: string): string {
 
 export default function IncidentDetailPage() {
   const params = useParams<{ id: string }>();
-  const { incidents, devices, playbookRuns, loading, error, updateIncidentStatus, approveAction, denyAction } = useSteward();
+  const {
+    incidents,
+    devices,
+    playbookRuns,
+    loading,
+    error,
+    updateIncidentStatus,
+    ignoreIncidentType,
+    approveAction,
+    denyAction,
+  } = useSteward();
   const [updating, setUpdating] = useState(false);
+  const [ignoring, setIgnoring] = useState(false);
+  const [actionFeedback, setActionFeedback] = useState<{ type: "ok" | "error"; message: string } | null>(null);
 
   const incident = useMemo(
     () => incidents.find((i) => i.id === params.id),
@@ -119,12 +134,41 @@ export default function IncidentDetailPage() {
   const handleStatusChange = async (newStatus: Incident["status"]) => {
     if (!incident || updating) return;
     setUpdating(true);
+    setActionFeedback(null);
     try {
       await updateIncidentStatus(incident.id, newStatus);
     } catch {
       // Error is handled by the context provider
     } finally {
       setUpdating(false);
+    }
+  };
+
+  const handleIgnoreType = async () => {
+    if (!incident || ignoring) return;
+    const incidentTypeLabel = formatIncidentType(getIncidentType(incident));
+    const shouldContinue = window.confirm(
+      `Ignore future incidents of type "${incidentTypeLabel}" and resolve all open matches now?`,
+    );
+    if (!shouldContinue) {
+      return;
+    }
+
+    setIgnoring(true);
+    setActionFeedback(null);
+    try {
+      const result = await ignoreIncidentType(incident.id);
+      setActionFeedback({
+        type: "ok",
+        message: `Ignored ${formatIncidentType(result.incidentType)}. Resolved ${result.resolvedCount} incident(s).`,
+      });
+    } catch (err) {
+      setActionFeedback({
+        type: "error",
+        message: err instanceof Error ? err.message : "Failed to ignore this incident type.",
+      });
+    } finally {
+      setIgnoring(false);
     }
   };
 
@@ -244,49 +288,74 @@ export default function IncidentDetailPage() {
 
       {/* Status controls */}
       <Card className="bg-card/85">
-        <CardContent className="flex items-center gap-3 p-4 flex-wrap">
-          <span className="text-sm font-medium text-muted-foreground">
-            Update status:
-          </span>
-          <div className="flex items-center gap-2 flex-wrap">
+        <CardContent className="space-y-3 p-4">
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-sm font-medium text-muted-foreground">
+              Update status:
+            </span>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button
+                variant={incident.status === "open" ? "default" : "outline"}
+                size="sm"
+                disabled={incident.status === "open" || updating}
+                onClick={() => handleStatusChange("open")}
+              >
+                {updating && incident.status !== "open" ? (
+                  <Loader2 className="mr-1 size-3 animate-spin" />
+                ) : null}
+                Open
+              </Button>
+              <ChevronRight className="size-4 text-muted-foreground" />
+              <Button
+                variant={incident.status === "in_progress" ? "default" : "outline"}
+                size="sm"
+                disabled={incident.status === "in_progress" || updating}
+                onClick={() => handleStatusChange("in_progress")}
+              >
+                {updating && incident.status !== "in_progress" ? (
+                  <Loader2 className="mr-1 size-3 animate-spin" />
+                ) : null}
+                In Progress
+              </Button>
+              <ChevronRight className="size-4 text-muted-foreground" />
+              <Button
+                variant={incident.status === "resolved" ? "default" : "outline"}
+                size="sm"
+                disabled={incident.status === "resolved" || updating}
+                onClick={() => handleStatusChange("resolved")}
+              >
+                {updating && incident.status !== "resolved" ? (
+                  <Loader2 className="mr-1 size-3 animate-spin" />
+                ) : (
+                  <Check className="mr-1 size-3" />
+                )}
+                Resolved
+              </Button>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 flex-wrap">
+            <Badge variant="outline" className="text-[10px]">
+              Type: {formatIncidentType(getIncidentType(incident))}
+            </Badge>
             <Button
-              variant={incident.status === "open" ? "default" : "outline"}
+              variant="ghost"
               size="sm"
-              disabled={incident.status === "open" || updating}
-              onClick={() => handleStatusChange("open")}
+              disabled={ignoring}
+              onClick={() => void handleIgnoreType()}
             >
-              {updating && incident.status !== "open" ? (
-                <Loader2 className="mr-1 size-3 animate-spin" />
-              ) : null}
-              Open
-            </Button>
-            <ChevronRight className="size-4 text-muted-foreground" />
-            <Button
-              variant={incident.status === "in_progress" ? "default" : "outline"}
-              size="sm"
-              disabled={incident.status === "in_progress" || updating}
-              onClick={() => handleStatusChange("in_progress")}
-            >
-              {updating && incident.status !== "in_progress" ? (
-                <Loader2 className="mr-1 size-3 animate-spin" />
-              ) : null}
-              In Progress
-            </Button>
-            <ChevronRight className="size-4 text-muted-foreground" />
-            <Button
-              variant={incident.status === "resolved" ? "default" : "outline"}
-              size="sm"
-              disabled={incident.status === "resolved" || updating}
-              onClick={() => handleStatusChange("resolved")}
-            >
-              {updating && incident.status !== "resolved" ? (
+              {ignoring ? (
                 <Loader2 className="mr-1 size-3 animate-spin" />
               ) : (
-                <Check className="mr-1 size-3" />
+                <BellOff className="mr-1 size-3" />
               )}
-              Resolved
+              Ignore Future of This Type
             </Button>
           </div>
+          {actionFeedback && (
+            <Alert variant={actionFeedback.type === "error" ? "destructive" : "default"}>
+              <AlertDescription className="text-xs">{actionFeedback.message}</AlertDescription>
+            </Alert>
+          )}
         </CardContent>
       </Card>
 

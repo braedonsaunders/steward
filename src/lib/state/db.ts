@@ -281,7 +281,8 @@ function createSchema(database: Database.Database): void {
       content   TEXT NOT NULL,
       provider  TEXT,
       error     INTEGER NOT NULL DEFAULT 0,
-      createdAt TEXT NOT NULL
+      createdAt TEXT NOT NULL,
+      metadata  TEXT NOT NULL DEFAULT '{}'
     );
 
     CREATE TABLE IF NOT EXISTS discovery_observations (
@@ -348,6 +349,19 @@ function createSchema(database: Database.Database): void {
       updatedAt  TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS access_surfaces (
+      id         TEXT PRIMARY KEY,
+      deviceId   TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+      adapterId  TEXT NOT NULL,
+      protocol   TEXT NOT NULL,
+      score      REAL NOT NULL DEFAULT 0,
+      selected   INTEGER NOT NULL DEFAULT 0,
+      reason     TEXT NOT NULL DEFAULT '',
+      configJson TEXT NOT NULL DEFAULT '{}',
+      createdAt  TEXT NOT NULL,
+      updatedAt  TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS service_contracts (
       id              TEXT PRIMARY KEY,
       deviceId        TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
@@ -359,6 +373,50 @@ function createSchema(database: Database.Database): void {
       policyJson      TEXT NOT NULL DEFAULT '{}',
       createdAt       TEXT NOT NULL,
       updatedAt       TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS workloads (
+      id          TEXT PRIMARY KEY,
+      deviceId    TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+      workloadKey TEXT NOT NULL,
+      displayName TEXT NOT NULL,
+      category    TEXT NOT NULL DEFAULT 'unknown',
+      criticality TEXT NOT NULL DEFAULT 'medium',
+      source      TEXT NOT NULL DEFAULT 'migration',
+      summary     TEXT,
+      evidenceJson TEXT NOT NULL DEFAULT '{}',
+      createdAt   TEXT NOT NULL,
+      updatedAt   TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS assurances (
+      id               TEXT PRIMARY KEY,
+      deviceId         TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+      workloadId       TEXT REFERENCES workloads(id) ON DELETE SET NULL,
+      assuranceKey     TEXT NOT NULL,
+      displayName      TEXT NOT NULL,
+      criticality      TEXT NOT NULL,
+      desiredState     TEXT NOT NULL DEFAULT 'running',
+      checkIntervalSec INTEGER NOT NULL DEFAULT 60,
+      monitorType      TEXT,
+      requiredProtocols TEXT NOT NULL DEFAULT '[]',
+      rationale        TEXT,
+      configJson       TEXT NOT NULL DEFAULT '{}',
+      serviceKey       TEXT NOT NULL DEFAULT '',
+      policyJson       TEXT NOT NULL DEFAULT '{}',
+      createdAt        TEXT NOT NULL,
+      updatedAt        TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS assurance_runs (
+      id          TEXT PRIMARY KEY,
+      assuranceId TEXT NOT NULL REFERENCES assurances(id) ON DELETE CASCADE,
+      deviceId    TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+      workloadId  TEXT REFERENCES workloads(id) ON DELETE SET NULL,
+      status      TEXT NOT NULL,
+      summary     TEXT NOT NULL,
+      evidenceJson TEXT NOT NULL DEFAULT '{}',
+      evaluatedAt TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS device_findings (
@@ -373,6 +431,54 @@ function createSchema(database: Database.Database): void {
       status      TEXT NOT NULL DEFAULT 'open',
       firstSeenAt TEXT NOT NULL,
       lastSeenAt  TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS device_widgets (
+      id               TEXT PRIMARY KEY,
+      deviceId         TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+      slug             TEXT NOT NULL,
+      name             TEXT NOT NULL,
+      description      TEXT,
+      status           TEXT NOT NULL DEFAULT 'active',
+      html             TEXT NOT NULL DEFAULT '',
+      css              TEXT NOT NULL DEFAULT '',
+      js               TEXT NOT NULL DEFAULT '',
+      capabilitiesJson TEXT NOT NULL DEFAULT '[]',
+      sourcePrompt     TEXT,
+      createdBy        TEXT NOT NULL DEFAULT 'steward',
+      revision         INTEGER NOT NULL DEFAULT 1,
+      createdAt        TEXT NOT NULL,
+      updatedAt        TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS device_widget_state (
+      widgetId  TEXT PRIMARY KEY REFERENCES device_widgets(id) ON DELETE CASCADE,
+      deviceId  TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+      stateJson TEXT NOT NULL DEFAULT '{}',
+      updatedAt TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS device_widget_operation_runs (
+      id               TEXT PRIMARY KEY,
+      widgetId         TEXT NOT NULL REFERENCES device_widgets(id) ON DELETE CASCADE,
+      deviceId         TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+      widgetRevision   INTEGER NOT NULL DEFAULT 1,
+      operationKind    TEXT NOT NULL,
+      operationMode    TEXT NOT NULL,
+      brokerProtocol   TEXT,
+      status           TEXT NOT NULL,
+      phase            TEXT NOT NULL,
+      proof            TEXT NOT NULL,
+      approvalRequired INTEGER NOT NULL DEFAULT 0,
+      policyDecision   TEXT NOT NULL,
+      policyReason     TEXT NOT NULL,
+      approved         INTEGER NOT NULL DEFAULT 0,
+      idempotencyKey   TEXT NOT NULL,
+      summary          TEXT NOT NULL,
+      output           TEXT NOT NULL DEFAULT '',
+      operationJson    TEXT NOT NULL DEFAULT '{}',
+      detailsJson      TEXT NOT NULL DEFAULT '{}',
+      createdAt        TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS auth_users (
@@ -416,6 +522,7 @@ function createSchema(database: Database.Database): void {
 
   // Migrate columns before creating indexes that reference them
   ensureColumn(database, "chat_sessions", "deviceId", "TEXT REFERENCES devices(id) ON DELETE SET NULL");
+  ensureColumn(database, "chat_messages", "metadata", "TEXT NOT NULL DEFAULT '{}'");
   ensureColumn(database, "devices", "secondaryIps", "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn(database, "adapters", "source", "TEXT NOT NULL DEFAULT 'file'");
   ensureColumn(database, "adapters", "docsUrl", "TEXT");
@@ -467,10 +574,36 @@ function createSchema(database: Database.Database): void {
       ON device_adapter_bindings(deviceId, protocol);
     CREATE INDEX IF NOT EXISTS idx_device_adapter_bindings_selected
       ON device_adapter_bindings(deviceId, selected);
+    CREATE INDEX IF NOT EXISTS idx_access_surfaces_device_protocol
+      ON access_surfaces(deviceId, protocol);
+    CREATE INDEX IF NOT EXISTS idx_access_surfaces_selected
+      ON access_surfaces(deviceId, selected);
     CREATE INDEX IF NOT EXISTS idx_service_contracts_deviceId ON service_contracts(deviceId);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_workloads_device_key
+      ON workloads(deviceId, workloadKey);
+    CREATE INDEX IF NOT EXISTS idx_workloads_device_updated
+      ON workloads(deviceId, updatedAt DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_assurances_device_key
+      ON assurances(deviceId, assuranceKey);
+    CREATE INDEX IF NOT EXISTS idx_assurances_workload
+      ON assurances(workloadId, updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_assurance_runs_assurance
+      ON assurance_runs(assuranceId, evaluatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_assurance_runs_device
+      ON assurance_runs(deviceId, evaluatedAt DESC);
     CREATE INDEX IF NOT EXISTS idx_device_findings_device_status ON device_findings(deviceId, status);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_device_findings_dedupe_key
       ON device_findings(deviceId, dedupeKey);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_device_widgets_device_slug
+      ON device_widgets(deviceId, slug);
+    CREATE INDEX IF NOT EXISTS idx_device_widgets_device_updated
+      ON device_widgets(deviceId, updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_device_widget_state_device
+      ON device_widget_state(deviceId, updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_device_widget_operation_runs_widget_created
+      ON device_widget_operation_runs(widgetId, createdAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_device_widget_operation_runs_device_created
+      ON device_widget_operation_runs(deviceId, createdAt DESC);
     CREATE INDEX IF NOT EXISTS idx_auth_sessions_userId ON auth_sessions(userId);
     CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiresAt ON auth_sessions(expiresAt);
     CREATE INDEX IF NOT EXISTS idx_auth_users_role ON auth_users(role);
@@ -493,6 +626,199 @@ function createSchema(database: Database.Database): void {
   `);
 }
 
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+/, "")
+    .replace(/-+$/, "")
+    .slice(0, 64);
+}
+
+function inferWorkloadCategory(name: string, monitorType: string): string {
+  const text = `${name} ${monitorType}`.toLowerCase();
+  if (/\b(nginx|apache|caddy|traefik|haproxy|proxy|web|api)\b/.test(text)) return "application";
+  if (/\b(mysql|mariadb|postgres|redis|mongo|db|database)\b/.test(text)) return "data";
+  if (/\b(backup|replication|snapshot|sync|scheduler|queue|worker|cron)\b/.test(text)) return "background";
+  if (/\b(vpn|dns|dhcp|gateway|router|switch|firewall)\b/.test(text)) return "network";
+  if (/\b(storage|nas|nfs|smb|cifs|minio)\b/.test(text)) return "storage";
+  if (/\b(metrics|monitor|telemetry|prometheus|grafana|logging)\b/.test(text)) return "telemetry";
+  return "unknown";
+}
+
+function parseJsonObject(text: unknown): Record<string, unknown> {
+  if (typeof text !== "string" || text.trim().length === 0) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(text);
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function parseStringArray(value: unknown): string[] {
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map((item) => String(item).trim())
+          .filter((item) => item.length > 0);
+      }
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => String(item).trim())
+    .filter((item) => item.length > 0);
+}
+
+function migrateLegacyWorkloadArchitecture(database: Database.Database): void {
+  const existingMarker = database
+    .prepare("SELECT value FROM metadata WHERE key = ?")
+    .get("migration.workload_architecture.v1") as { value?: string } | undefined;
+  if (existingMarker?.value === "done") {
+    return;
+  }
+
+  const migrate = database.transaction(() => {
+    database.prepare(`
+      INSERT OR IGNORE INTO access_surfaces (
+        id, deviceId, adapterId, protocol, score, selected, reason, configJson, createdAt, updatedAt
+      )
+      SELECT id, deviceId, adapterId, protocol, score, selected, reason, configJson, createdAt, updatedAt
+      FROM device_adapter_bindings
+    `).run();
+
+    const existingWorkloads = database.prepare(
+      "SELECT id, deviceId, workloadKey FROM workloads",
+    ).all() as Array<{ id: string; deviceId: string; workloadKey: string }>;
+    const workloadIds = new Map(existingWorkloads.map((row) => [`${row.deviceId}:${row.workloadKey}`, row.id]));
+
+    const insertWorkload = database.prepare(`
+      INSERT OR REPLACE INTO workloads (
+        id, deviceId, workloadKey, displayName, category, criticality, source, summary, evidenceJson, createdAt, updatedAt
+      )
+      VALUES (
+        @id, @deviceId, @workloadKey, @displayName, @category, @criticality, @source, @summary, @evidenceJson, @createdAt, @updatedAt
+      )
+    `);
+    const insertAssurance = database.prepare(`
+      INSERT OR REPLACE INTO assurances (
+        id, deviceId, workloadId, assuranceKey, displayName, criticality, desiredState, checkIntervalSec,
+        monitorType, requiredProtocols, rationale, configJson, serviceKey, policyJson, createdAt, updatedAt
+      )
+      VALUES (
+        @id, @deviceId, @workloadId, @assuranceKey, @displayName, @criticality, @desiredState, @checkIntervalSec,
+        @monitorType, @requiredProtocols, @rationale, @configJson, @serviceKey, @policyJson, @createdAt, @updatedAt
+      )
+    `);
+    const insertRun = database.prepare(`
+      INSERT OR IGNORE INTO assurance_runs (
+        id, assuranceId, deviceId, workloadId, status, summary, evidenceJson, evaluatedAt
+      )
+      VALUES (
+        @id, @assuranceId, @deviceId, @workloadId, @status, @summary, @evidenceJson, @evaluatedAt
+      )
+    `);
+
+    const legacyContracts = database.prepare("SELECT * FROM service_contracts ORDER BY createdAt ASC").all() as Record<string, unknown>[];
+    for (const contract of legacyContracts) {
+      const deviceId = String(contract.deviceId);
+      const serviceKey = String(contract.serviceKey ?? "").trim() || slugify(String(contract.displayName ?? contract.id));
+      const displayName = String(contract.displayName ?? serviceKey);
+      const policyJson = parseJsonObject(contract.policyJson);
+      const monitorType = String(policyJson.monitorType ?? "service_presence");
+      const workloadKey = slugify(serviceKey) || `workload-${String(contract.id)}`;
+      const workloadLookupKey = `${deviceId}:${workloadKey}`;
+      let workloadId = workloadIds.get(workloadLookupKey);
+      if (!workloadId) {
+        workloadId = `workload-${String(contract.id)}`;
+        insertWorkload.run({
+          id: workloadId,
+          deviceId,
+          workloadKey,
+          displayName,
+          category: inferWorkloadCategory(displayName, monitorType),
+          criticality: String(contract.criticality ?? "medium"),
+          source: String(policyJson.source ?? "migration"),
+          summary: typeof policyJson.rationale === "string"
+            ? policyJson.rationale
+            : typeof policyJson.reason === "string"
+              ? policyJson.reason
+              : null,
+          evidenceJson: JSON.stringify({
+            migratedFrom: "service_contracts",
+            legacyServiceKey: serviceKey,
+            monitorType,
+          }),
+          createdAt: String(contract.createdAt),
+          updatedAt: String(contract.updatedAt),
+        });
+        workloadIds.set(workloadLookupKey, workloadId);
+      }
+
+      insertAssurance.run({
+        id: String(contract.id),
+        deviceId,
+        workloadId,
+        assuranceKey: serviceKey,
+        displayName,
+        criticality: String(contract.criticality ?? "medium"),
+        desiredState: String(contract.desiredState ?? "running"),
+        checkIntervalSec: Number(contract.checkIntervalSec ?? 60),
+        monitorType,
+        requiredProtocols: JSON.stringify(parseStringArray(policyJson.requiredProtocols)),
+        rationale: typeof policyJson.rationale === "string"
+          ? policyJson.rationale
+          : typeof policyJson.reason === "string"
+            ? policyJson.reason
+            : null,
+        configJson: JSON.stringify(policyJson),
+        serviceKey,
+        policyJson: JSON.stringify(policyJson),
+        createdAt: String(contract.createdAt),
+        updatedAt: String(contract.updatedAt),
+      });
+
+      const lastStatus = String(policyJson.lastStatus ?? "").trim().toLowerCase();
+      const evaluatedAt = typeof policyJson.lastEvaluatedAt === "string" && policyJson.lastEvaluatedAt.trim().length > 0
+        ? policyJson.lastEvaluatedAt
+        : String(contract.updatedAt);
+      if (lastStatus === "pass" || lastStatus === "fail" || lastStatus === "pending" || lastStatus === "pending_credentials") {
+        insertRun.run({
+          id: `migrated-${String(contract.id)}`,
+          assuranceId: String(contract.id),
+          deviceId,
+          workloadId,
+          status: lastStatus === "pending_credentials" ? "pending" : lastStatus,
+          summary: `Migrated latest legacy contract status for ${displayName}.`,
+          evidenceJson: JSON.stringify({
+            migratedFrom: "service_contracts",
+            legacyStatus: lastStatus,
+          }),
+          evaluatedAt,
+        });
+      }
+    }
+
+    database.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run(
+      "migration.workload_architecture.v1",
+      "done",
+    );
+  });
+
+  migrate();
+}
+
 export function getDb(): Database.Database {
   if (stateDb) return stateDb;
 
@@ -502,6 +828,7 @@ export function getDb(): Database.Database {
     stateDb.pragma("journal_mode = WAL");
     stateDb.pragma("foreign_keys = ON");
     createSchema(stateDb);
+    migrateLegacyWorkloadArchitecture(stateDb);
   } catch (error) {
     try {
       stateDb.close();
@@ -541,10 +868,29 @@ function createAuditSchema(database: Database.Database): void {
       lastError      TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS credential_access_events (
+      id             TEXT PRIMARY KEY,
+      credentialId   TEXT,
+      deviceId       TEXT NOT NULL,
+      protocol       TEXT NOT NULL,
+      playbookRunId  TEXT,
+      operationId    TEXT,
+      adapterId      TEXT,
+      actor          TEXT NOT NULL,
+      purpose        TEXT NOT NULL,
+      result         TEXT NOT NULL,
+      details        TEXT NOT NULL DEFAULT '{}',
+      accessedAt     TEXT NOT NULL,
+      createdAt      TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_audit_events_at ON audit_events(at);
     CREATE INDEX IF NOT EXISTS idx_audit_events_kind ON audit_events(kind);
     CREATE INDEX IF NOT EXISTS idx_durable_jobs_status ON durable_jobs(status);
     CREATE INDEX IF NOT EXISTS idx_durable_jobs_runAfter ON durable_jobs(runAfter);
+    CREATE INDEX IF NOT EXISTS idx_credential_access_events_accessedAt ON credential_access_events(accessedAt);
+    CREATE INDEX IF NOT EXISTS idx_credential_access_events_deviceId ON credential_access_events(deviceId);
+    CREATE INDEX IF NOT EXISTS idx_credential_access_events_result ON credential_access_events(result);
   `);
 }
 

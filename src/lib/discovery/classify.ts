@@ -723,14 +723,20 @@ export function classifyDevice(candidate: DiscoveryCandidate): ClassificationRes
 
 const inferProtocols = (ports: number[]): string[] => {
   const protocols = new Set<string>();
+  const hasWeb = ports.some((port) => [80, 443, 8080, 8443, 8000, 9000, 5000, 5001, 7443, 9443].includes(port));
   if (ports.includes(22)) protocols.add("ssh");
-  if (ports.includes(3389) || ports.includes(5985) || ports.includes(5986)) protocols.add("winrm");
+  if (ports.includes(5985) || ports.includes(5986)) protocols.add("winrm");
+  if (ports.includes(3389)) protocols.add("rdp");
   if (ports.includes(161)) protocols.add("snmp");
-  if (ports.includes(443) || ports.includes(80)) protocols.add("http-api");
+  if (hasWeb) protocols.add("http-api");
+  if (ports.some((port) => [80, 8080, 8000, 9000, 5000].includes(port))) protocols.add("http");
+  if (ports.some((port) => [443, 8443, 7443, 9443, 5001].includes(port))) protocols.add("https");
   if (ports.includes(2375) || ports.includes(2376)) protocols.add("docker");
   if (ports.includes(6443)) protocols.add("kubernetes");
-  if (ports.includes(1883)) protocols.add("mqtt");
-  if (ports.includes(3389) || ports.includes(445) || ports.includes(389)) protocols.add("windows");
+  if (ports.includes(1883) || ports.includes(8883)) protocols.add("mqtt");
+  if (ports.includes(3389) || ports.includes(445) || ports.includes(389) || ports.includes(5985) || ports.includes(5986)) {
+    protocols.add("windows");
+  }
   if (ports.includes(554)) protocols.add("rtsp");
   if (ports.includes(53)) protocols.add("dns");
   if (ports.includes(631) || ports.includes(9100)) protocols.add("printing");
@@ -752,8 +758,11 @@ const inferFallbackType = (
   if (ports.includes(161) && ports.length <= 4) {
     return "switch";
   }
-  if (ports.includes(5985) || ports.includes(5986) || (ports.includes(445) && ports.includes(3389))) {
+  if (ports.includes(5985) || ports.includes(5986)) {
     return "server";
+  }
+  if (ports.includes(3389) && !hasAny(ports, [53, 88, 389, 1433, 1521, 3306, 5432, 6379, 27017])) {
+    return "workstation";
   }
   if (ports.includes(9100) || ports.includes(631)) {
     return "printer";

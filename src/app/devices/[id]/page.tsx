@@ -1,21 +1,16 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { motion, useReducedMotion, type Variants } from "framer-motion";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
   AlertTriangle,
   ArrowLeft,
-  ChevronRight,
   Clock,
-  Globe,
   Lightbulb,
-  Lock,
-  Network,
   Server,
   Shield,
-  Unlock,
-  Wifi,
   Wrench,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -29,18 +24,12 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { DeviceContractsPanel } from "@/components/device-contracts-panel";
-import { DeviceCredentialsPanel } from "@/components/device-credentials-panel";
+import { DeviceWorkloadsPanel } from "@/components/device-workloads-panel";
+import { DeviceAccessPanel } from "@/components/device-access-panel";
 import { DeviceSettingsPanel } from "@/components/device-settings-panel";
+import { DeviceWidgetsPanel } from "@/components/device-widgets-panel";
+import { getDeviceIdentityDescription } from "@/lib/devices/identity";
 import { useSteward } from "@/lib/hooks/use-steward";
 import { getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
 import type { DeviceStatus, IncidentSeverity, RecommendationPriority } from "@/lib/state/types";
@@ -144,10 +133,52 @@ function summarizeRecord(record: Record<string, unknown> | undefined): string | 
   return summary.length > 0 ? summary : "available";
 }
 
-function serviceOpenUrl(ip: string, port: number, secure: boolean): string {
-  const host = ip.includes(":") && !ip.startsWith("[") ? `[${ip}]` : ip;
-  const scheme = secure ? "https" : "http";
-  return `${scheme}://${host}:${port}`;
+const tabPanelVariants: Variants = {
+  hidden: {
+    opacity: 0,
+    y: 12,
+    filter: "blur(8px)",
+  },
+  visible: {
+    opacity: 1,
+    y: 0,
+    filter: "blur(0px)",
+    transition: {
+      opacity: { duration: 0.16, ease: [0.22, 1, 0.36, 1] as const },
+      y: {
+        type: "spring" as const,
+        stiffness: 260,
+        damping: 28,
+        mass: 0.8,
+      },
+      filter: { duration: 0.18, ease: [0.22, 1, 0.36, 1] as const },
+    },
+  },
+};
+
+function AnimatedTabPanel({
+  active,
+  persistent = false,
+  children,
+  className,
+}: {
+  active: boolean;
+  persistent?: boolean;
+  children: ReactNode;
+  className?: string;
+}) {
+  const reduceMotion = useReducedMotion();
+
+  return (
+    <motion.div
+      initial={persistent || reduceMotion ? false : "hidden"}
+      animate={reduceMotion ? undefined : active ? "visible" : "hidden"}
+      variants={reduceMotion ? undefined : tabPanelVariants}
+      className={cn("h-full min-h-0", className)}
+    >
+      {children}
+    </motion.div>
+  );
 }
 
 export default function DeviceDetailPage() {
@@ -158,8 +189,6 @@ export default function DeviceDetailPage() {
     incidents,
     recommendations,
     playbookRuns,
-    graphEdges,
-    graphNodes,
     loading,
     error,
   } = useSteward();
@@ -167,6 +196,7 @@ export default function DeviceDetailPage() {
   const [startingOnboarding, setStartingOnboarding] = useState(false);
   const [chatSessionRefreshToken, setChatSessionRefreshToken] = useState(0);
   const [preferredChatSessionId, setPreferredChatSessionId] = useState<string | undefined>(undefined);
+  const [hasOnboardingSession, setHasOnboardingSession] = useState<boolean | null>(null);
 
   const device = useMemo(
     () => devices.find((d) => d.id === deviceId),
@@ -188,18 +218,51 @@ export default function DeviceDetailPage() {
     [playbookRuns, deviceId],
   );
 
-  const relatedEdges = useMemo(() => {
-    const nodeId = `device:${deviceId}`;
-    return graphEdges.filter((e) => e.from === nodeId || e.to === nodeId);
-  }, [graphEdges, deviceId]);
+  const adoptionStatus = device ? getDeviceAdoptionStatus(device) : null;
+  const adoptionMeta = asRecord(device?.metadata.adoption) ?? {};
+  const onboardingRunStatus = typeof adoptionMeta.runStatus === "string"
+    ? adoptionMeta.runStatus
+    : undefined;
+  const needsOnboardingNudge =
+    adoptionStatus === "adopted" &&
+    onboardingRunStatus !== "completed" &&
+    hasOnboardingSession === false;
 
-  const nodeLabels = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const node of graphNodes) {
-      map.set(node.id, node.label);
+  useEffect(() => {
+    if (activeTab === "adapters" || activeTab === "credentials") {
+      setActiveTab("access");
     }
-    return map;
-  }, [graphNodes]);
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (!deviceId || !device || adoptionStatus !== "adopted") {
+      setHasOnboardingSession(null);
+      return;
+    }
+
+    let cancelled = false;
+    const loadOnboardingSession = async () => {
+      try {
+        const response = await fetch(
+          `/api/devices/${deviceId}/onboarding/session`,
+          withClientApiToken(),
+        );
+        const data = (await response.json()) as { session?: { id?: string } | null };
+        if (!cancelled) {
+          setHasOnboardingSession(Boolean(data.session?.id));
+        }
+      } catch {
+        if (!cancelled) {
+          setHasOnboardingSession(null);
+        }
+      }
+    };
+
+    void loadOnboardingSession();
+    return () => {
+      cancelled = true;
+    };
+  }, [adoptionStatus, device, deviceId]);
 
   if (loading) {
     return (
@@ -261,12 +324,6 @@ export default function DeviceDetailPage() {
     );
   }
 
-  const adoptionStatus = getDeviceAdoptionStatus(device);
-  const adoptionMeta = asRecord(device.metadata.adoption) ?? {};
-  const onboardingRunStatus = typeof adoptionMeta.runStatus === "string"
-    ? adoptionMeta.runStatus
-    : undefined;
-  const needsOnboardingNudge = adoptionStatus === "adopted" && onboardingRunStatus !== "completed";
   const startOnboardingFromNudge = async () => {
     if (!device || startingOnboarding) return;
     setStartingOnboarding(true);
@@ -275,9 +332,10 @@ export default function DeviceDetailPage() {
       const data = (await res.json()) as { session?: { id?: string } | null };
       if (data.session?.id) {
         setPreferredChatSessionId(data.session.id);
+        setHasOnboardingSession(true);
       }
       setChatSessionRefreshToken((prev) => prev + 1);
-      setActiveTab("chat");
+      setActiveTab("steward");
     } finally {
       setStartingOnboarding(false);
     }
@@ -308,22 +366,6 @@ export default function DeviceDetailPage() {
   const fingerprintDnsService = asRecord(fingerprintMeta.dnsService);
   const fingerprintWinrm = asRecord(fingerprintMeta.winrm);
   const fingerprintMqtt = asRecord(fingerprintMeta.mqtt);
-  const fingerprintProtocolHintsRaw = Array.isArray(fingerprintMeta.protocolHints)
-    ? fingerprintMeta.protocolHints
-    : [];
-  const fingerprintProtocolHints = fingerprintProtocolHintsRaw
-    .map((hint) => asRecord(hint))
-    .filter((hint): hint is Record<string, unknown> => Boolean(hint))
-    .map((hint) => ({
-      port: Number(hint.port),
-      protocol: typeof hint.protocol === "string" ? hint.protocol : "unknown",
-      confidence: Number(hint.confidence),
-      secure: Boolean(hint.secure),
-      banner: typeof hint.banner === "string" ? hint.banner : undefined,
-      evidence: typeof hint.evidence === "string" ? hint.evidence : undefined,
-    }))
-    .filter((hint) => Number.isFinite(hint.port) && hint.port > 0);
-
   const classificationMeta = asRecord(device.metadata.classification) ?? {};
   const classificationConfidenceRaw = Number(classificationMeta.confidence ?? 0);
   const classificationConfidence = Number.isFinite(classificationConfidenceRaw)
@@ -362,9 +404,6 @@ export default function DeviceDetailPage() {
   const fingerprintSshBanner = typeof fingerprintMeta.sshBanner === "string" && fingerprintMeta.sshBanner.trim().length > 0
     ? fingerprintMeta.sshBanner
     : undefined;
-  const fingerprintSnmpSysDescr = typeof fingerprintMeta.snmpSysDescr === "string" && fingerprintMeta.snmpSysDescr.trim().length > 0
-    ? fingerprintMeta.snmpSysDescr
-    : undefined;
   const dnsProbeSummary = summarizeRecord(fingerprintDnsService);
   const winrmProbeSummary = summarizeRecord(fingerprintWinrm);
   const mqttProbeSummary = summarizeRecord(fingerprintMqtt);
@@ -376,90 +415,86 @@ export default function DeviceDetailPage() {
   const visibleRecommendations = relatedRecommendations.filter((recommendation) => !recommendation.dismissed);
   const visibleClassificationSignals = topClassificationSignals.slice(0, 3);
   const visibleProtocols = device.protocols.slice(0, 8);
+  const deviceDescription = getDeviceIdentityDescription(device);
 
   return (
-    <main className="flex h-full min-h-0 flex-col gap-4">
-      {/* Back link */}
-      <Button variant="ghost" size="sm" asChild>
-        <Link href="/devices">
-          <ArrowLeft className="mr-2 size-4" />
-          Back to Devices
-        </Link>
-      </Button>
-
-      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
-      {/* Device Header */}
-      <section className="space-y-4">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="space-y-2">
-            <div className="flex items-center gap-3">
-              <span
-                className={cn(
-                  "inline-block size-3 rounded-full",
-                  statusDotColor(device.status),
-                )}
-              />
-              <h1 className="text-2xl font-semibold tracking-tight steward-heading-font md:text-3xl">
-                {device.name}
-              </h1>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant={statusBadgeVariant(device.status)} className="capitalize">
-                {device.status}
-              </Badge>
-              <Badge variant="outline" className="capitalize">
-                {device.type.replace(/-/g, " ")}
-              </Badge>
-              <Badge variant="secondary">
-                <Shield className="mr-1 size-3" />
-                Tier {device.autonomyTier}
-              </Badge>
-              <Badge variant={adoptionStatus === "adopted" ? "default" : adoptionStatus === "ignored" ? "outline" : "secondary"}>
-                {adoptionStatus === "adopted" ? "Adopted" : adoptionStatus === "ignored" ? "Ignored" : "Discovered"}
-              </Badge>
-            </div>
-          </div>
-          <div className="flex items-end gap-2 sm:flex-col sm:text-right">
-            <div className="text-sm text-muted-foreground">
-              <p>First seen: {formatDate(device.firstSeenAt)}</p>
-              <p>Last seen: {formatRelative(device.lastSeenAt)}</p>
-            </div>
-          </div>
-        </div>
-
-        {needsOnboardingNudge && (
-          <Card className="border-amber-300/60 bg-amber-50/70 dark:border-amber-500/40 dark:bg-amber-950/20">
-            <CardContent className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="text-sm font-medium text-amber-900 dark:text-amber-100">Onboarding pending</p>
-                <p className="text-xs text-amber-800/90 dark:text-amber-200/90">
-                  This device is adopted. Start onboarding from device chat so Steward can explore it and propose contracts.
-                </p>
+    <main className="flex h-full min-h-0 flex-col gap-3">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+        {/* Device Header */}
+        <section className="space-y-2">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="space-y-1">
+              <div className="flex items-center gap-3">
+                <span
+                  className={cn(
+                    "inline-block size-3 rounded-full",
+                    statusDotColor(device.status),
+                  )}
+                />
+                <h1 className="text-xl font-semibold tracking-tight steward-heading-font md:text-2xl">
+                  {device.name}
+                </h1>
               </div>
-              <Button size="sm" onClick={() => void startOnboardingFromNudge()} disabled={startingOnboarding}>
-                {startingOnboarding ? "Starting..." : "Start Onboarding"}
-              </Button>
-            </CardContent>
-          </Card>
-        )}
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant={statusBadgeVariant(device.status)} className="capitalize">
+                  {device.status}
+                </Badge>
+                <Badge variant="outline" className="capitalize">
+                  {device.type.replace(/-/g, " ")}
+                </Badge>
+                <Badge variant="secondary">
+                  <Shield className="mr-1 size-3" />
+                  Tier {device.autonomyTier}
+                </Badge>
+                <Badge variant={adoptionStatus === "adopted" ? "default" : adoptionStatus === "ignored" ? "outline" : "secondary"}>
+                  {adoptionStatus === "adopted" ? "Adopted" : adoptionStatus === "ignored" ? "Ignored" : "Discovered"}
+                </Badge>
+              </div>
+              {deviceDescription && (
+                <p className="max-w-3xl text-xs leading-5 text-muted-foreground">
+                  {deviceDescription}
+                </p>
+              )}
+            </div>
+            <div className="flex items-start gap-2 sm:flex-col sm:items-end sm:text-right">
+              <div className="text-xs text-muted-foreground">
+                <p>First seen: {formatDate(device.firstSeenAt)}</p>
+                <p>Last seen: {formatRelative(device.lastSeenAt)}</p>
+              </div>
+            </div>
+          </div>
 
-      </section>
+          {needsOnboardingNudge && (
+            <Card className="border-amber-300/60 bg-amber-50/70 dark:border-amber-500/40 dark:bg-amber-950/20">
+              <CardContent className="flex flex-col gap-2 p-2.5 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-medium text-amber-900 dark:text-amber-100">Onboarding pending</p>
+                  <p className="text-xs text-amber-800/90 dark:text-amber-200/90">
+                    This device is adopted. Start onboarding from Chat so it can model workloads, assurances, and access.
+                  </p>
+                </div>
+                <Button size="sm" onClick={() => void startOnboardingFromNudge()} disabled={startingOnboarding}>
+                  {startingOnboarding ? "Starting..." : "Start Onboarding"}
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+        </section>
 
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-1 flex-col">
-        <TabsList>
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="contracts">Contracts</TabsTrigger>
-          <TabsTrigger value="credentials">Credentials</TabsTrigger>
-          <TabsTrigger value="settings">Settings</TabsTrigger>
-          <TabsTrigger value="services">Services</TabsTrigger>
-          <TabsTrigger value="chat">Chat</TabsTrigger>
-          <TabsTrigger value="dependencies">Dependencies</TabsTrigger>
-          <TabsTrigger value="incidents">Incidents</TabsTrigger>
-          <TabsTrigger value="history">History</TabsTrigger>
-        </TabsList>
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-1 flex-col">
+          <TabsList className="h-auto w-fit flex-wrap gap-0.5 p-1">
+            <TabsTrigger className="h-8 px-3 text-xs sm:h-9 sm:text-sm" value="overview">Overview</TabsTrigger>
+            <TabsTrigger className="h-8 px-3 text-xs sm:h-9 sm:text-sm" value="workloads">Workloads</TabsTrigger>
+            <TabsTrigger className="h-8 px-3 text-xs sm:h-9 sm:text-sm" value="access">Access</TabsTrigger>
+            <TabsTrigger className="h-8 px-3 text-xs sm:h-9 sm:text-sm" value="widgets">Widgets</TabsTrigger>
+            <TabsTrigger className="h-8 px-3 text-xs sm:h-9 sm:text-sm" value="steward">Chat</TabsTrigger>
+            <TabsTrigger className="h-8 px-3 text-xs sm:h-9 sm:text-sm" value="activity">Activity</TabsTrigger>
+            <TabsTrigger className="h-8 px-3 text-xs sm:h-9 sm:text-sm" value="settings">Settings</TabsTrigger>
+          </TabsList>
 
-        <TabsContent value="overview" className="mt-4 min-h-0 flex-1 overflow-hidden">
-          <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[1.5fr_1fr]">
+          <TabsContent value="overview" className="mt-3 min-h-0 flex-1 overflow-hidden">
+            <AnimatedTabPanel active className="overflow-hidden">
+              <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[1.5fr_1fr]">
             <Card className="relative overflow-hidden border-primary/25 bg-gradient-to-br from-primary/10 via-card to-secondary/10">
               <div className="pointer-events-none absolute inset-0">
                 <div className="absolute -top-16 left-2 h-28 w-28 rounded-full bg-primary/20 blur-3xl" />
@@ -474,7 +509,7 @@ export default function DeviceDetailPage() {
                   </Badge>
                 </div>
                 <CardDescription>
-                  Identity, confidence, and operational signal health
+                  {deviceDescription || "Identity, confidence, and operational signal health"}
                 </CardDescription>
               </CardHeader>
               <CardContent className="relative space-y-4">
@@ -493,7 +528,7 @@ export default function DeviceDetailPage() {
                   </div>
                   <div className="rounded-md border bg-background/65 p-2.5 text-center">
                     <p className="text-base font-semibold tabular-nums">{device.services.length}</p>
-                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Services</p>
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Endpoints</p>
                   </div>
                 </div>
 
@@ -702,337 +737,167 @@ export default function DeviceDetailPage() {
                 </CardContent>
               </Card>
             </div>
-          </div>
-        </TabsContent>
-
-        <TabsContent value="contracts" className="mt-4 min-h-0 flex-1 overflow-hidden">
-          <div className="h-full min-h-0 overflow-hidden">
-            <DeviceContractsPanel deviceId={device.id} className="h-full" />
-          </div>
-        </TabsContent>
-
-        <TabsContent value="credentials" className="mt-4 min-h-0 flex-1 overflow-hidden">
-          <div className="h-full min-h-0 overflow-auto">
-            <DeviceCredentialsPanel deviceId={device.id} className="h-full" />
-          </div>
-        </TabsContent>
-
-        <TabsContent value="settings" className="mt-4 min-h-0 flex-1 overflow-hidden">
-          <div className="h-full min-h-0 overflow-auto">
-            <DeviceSettingsPanel deviceId={device.id} />
-          </div>
-        </TabsContent>
-
-        <TabsContent value="services" className="mt-4 min-h-0 flex-1 overflow-hidden">
-          <Card className="flex h-full min-h-0 flex-col min-w-0 bg-card/85">
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <Globe className="size-4 text-muted-foreground" />
-                <CardTitle className="text-base">Services</CardTitle>
-                <Badge variant="secondary" className="ml-auto tabular-nums">{device.services.length}</Badge>
               </div>
-              <CardDescription>Active services discovered on this device</CardDescription>
-            </CardHeader>
-            <CardContent className="flex min-h-0 flex-1 flex-col gap-3">
-              <div className="grid gap-3 lg:grid-cols-3">
-                <div className="rounded-md border bg-background/50 p-3">
-                  <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                    Protocol Intelligence
-                  </p>
-                  {fingerprintProtocolHints.length === 0 ? (
-                    <p className="mt-2 text-xs text-muted-foreground">No protocol hints recorded</p>
-                  ) : (
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {fingerprintProtocolHints.slice(0, 8).map((hint, idx) => {
-                        const confidence = Number.isFinite(hint.confidence)
-                          ? `${(hint.confidence * 100).toFixed(0)}%`
-                          : "n/a";
-                        return (
-                          <Badge key={`${hint.port}-${hint.protocol}-${idx}`} variant="outline" className="gap-1 text-[10px]">
-                            <span className="font-mono">{hint.port}</span>
-                            <span>{hint.protocol}</span>
-                            <span className="text-muted-foreground">{confidence}</span>
-                            {hint.secure ? <Lock className="size-3" /> : null}
-                          </Badge>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-                <div className="rounded-md border bg-background/50 p-3">
-                  <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                    Probe Results
-                  </p>
-                  <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-                    <p><span className="text-foreground/85">DNS:</span> {dnsProbeSummary ?? "n/a"}</p>
-                    <p><span className="text-foreground/85">WinRM:</span> {winrmProbeSummary ?? "n/a"}</p>
-                    <p><span className="text-foreground/85">MQTT:</span> {mqttProbeSummary ?? "n/a"}</p>
-                  </div>
-                </div>
-                <div className="rounded-md border bg-background/50 p-3">
-                  <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                    Banner Signals
-                  </p>
-                  <div className="mt-2 space-y-2 text-xs">
-                    {fingerprintSshBanner && (
-                      <p className="break-all text-muted-foreground">
-                        <span className="text-foreground/85">SSH:</span> {fingerprintSshBanner.slice(0, 120)}
-                      </p>
-                    )}
-                    {fingerprintSnmpSysDescr && (
-                      <p className="break-words text-muted-foreground">
-                        <span className="text-foreground/85">SNMP:</span> {fingerprintSnmpSysDescr.slice(0, 120)}
-                      </p>
-                    )}
-                    {!fingerprintSshBanner && !fingerprintSnmpSysDescr && (
-                      <p className="text-muted-foreground">No banner artifacts captured</p>
-                    )}
-                  </div>
-                </div>
-              </div>
+            </AnimatedTabPanel>
+          </TabsContent>
 
-              {device.services.length === 0 ? (
-                <div className="flex flex-1 flex-col items-center justify-center gap-2 rounded-md border py-8 text-center">
-                  <Wifi className="size-8 text-muted-foreground/40" />
-                  <p className="text-sm text-muted-foreground">No services discovered yet</p>
-                </div>
-              ) : (
-                <div className="min-h-0 flex-1 overflow-auto rounded-md border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Port</TableHead>
-                        <TableHead>Transport</TableHead>
-                        <TableHead>Service</TableHead>
-                        <TableHead>Product</TableHead>
-                        <TableHead>Version</TableHead>
-                        <TableHead>Secure</TableHead>
-                        <TableHead>Open</TableHead>
-                        <TableHead>Artifacts</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {device.services.map((svc) => (
-                        <TableRow key={svc.id}>
-                          <TableCell className="font-mono text-sm tabular-nums">{svc.port}</TableCell>
-                          <TableCell className="uppercase text-xs">{svc.transport}</TableCell>
-                          <TableCell className="font-medium">{svc.name}</TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{svc.product ?? "-"}</TableCell>
-                          <TableCell className="font-mono text-xs text-muted-foreground">{svc.version ?? "-"}</TableCell>
-                          <TableCell>{svc.secure ? <div className="flex items-center gap-1 text-emerald-600"><Lock className="size-3.5" /><span className="text-xs">Yes</span></div> : <div className="flex items-center gap-1 text-amber-600"><Unlock className="size-3.5" /><span className="text-xs">No</span></div>}</TableCell>
-                          <TableCell>
-                            <Button asChild type="button" variant="outline" size="sm" className="h-6 px-2 text-[10px]">
-                              <a
-                                href={serviceOpenUrl(device.ip, svc.port, svc.secure)}
-                                target="_blank"
-                                rel="noreferrer noopener"
-                                onClick={(event) => event.stopPropagation()}
-                              >
-                                Open
-                              </a>
-                            </Button>
-                          </TableCell>
-                          <TableCell className="max-w-[420px]">
-                            <div className="space-y-1 text-xs text-muted-foreground">
-                              {svc.banner && (
-                                <p className="break-all">
-                                  <span className="font-medium text-foreground/80">Banner:</span>{" "}
-                                  {svc.banner.slice(0, 220)}
-                                </p>
-                              )}
-                              {svc.httpInfo && (
-                                <p className="break-all">
-                                  <span className="font-medium text-foreground/80">HTTP:</span>{" "}
-                                  {[
-                                    svc.httpInfo.serverHeader,
-                                    svc.httpInfo.title,
-                                    svc.httpInfo.poweredBy,
-                                    svc.httpInfo.generator,
-                                  ].filter(Boolean).join(" | ") || "present"}
-                                </p>
-                              )}
-                              {svc.tlsCert && (
-                                <p className="break-all">
-                                  <span className="font-medium text-foreground/80">TLS:</span>{" "}
-                                  {svc.tlsCert.subject || "subject n/a"}
-                                  {svc.tlsCert.validTo ? ` (exp ${svc.tlsCert.validTo})` : ""}
-                                </p>
-                              )}
-                              {!svc.banner && !svc.httpInfo && !svc.tlsCert && (
-                                <p>-</p>
-                              )}
-                              <p className="font-mono text-[10px]">seen {formatRelative(svc.lastSeenAt)}</p>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="chat" forceMount className="mt-4 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
-          <ChatWorkspace
-            initialDeviceId={device.id}
-            respectUrlParams={false}
-            sessionRefreshToken={chatSessionRefreshToken}
-            preferredSessionId={preferredChatSessionId}
-          />
-        </TabsContent>
-
-        <TabsContent value="dependencies" className="mt-4 min-h-0 flex-1 overflow-hidden">
-          <Card className="flex h-full min-h-0 flex-col min-w-0 bg-card/85">
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <Network className="size-4 text-muted-foreground" />
-                <CardTitle className="text-base">Graph Dependencies</CardTitle>
-                {relatedEdges.length > 0 && <Badge variant="secondary" className="ml-auto tabular-nums">{relatedEdges.length}</Badge>}
-              </div>
-              <CardDescription>Knowledge graph edges involving this device</CardDescription>
-            </CardHeader>
-            <CardContent className="min-h-0 flex-1">
-              {relatedEdges.length === 0 ? (
-                <div className="flex flex-col items-center gap-2 py-8 text-center"><Network className="size-8 text-muted-foreground/40" /><p className="text-sm text-muted-foreground">No graph connections found</p></div>
-              ) : (
-                <div className="h-full overflow-auto rounded-md border">
-                  <Table>
-                    <TableHeader><TableRow><TableHead>From</TableHead><TableHead>Relationship</TableHead><TableHead>To</TableHead><TableHead>Updated</TableHead></TableRow></TableHeader>
-                    <TableBody>
-                      {relatedEdges.map((edge) => (
-                        <TableRow key={edge.id}>
-                          <TableCell className="text-sm">{edge.from === `device:${deviceId}` ? <Badge variant="default" className="text-[10px]">This device</Badge> : <span className="text-muted-foreground">{nodeLabels.get(edge.from) ?? edge.from}</span>}</TableCell>
-                          <TableCell><div className="flex items-center gap-1.5"><ChevronRight className="size-3 text-muted-foreground" /><Badge variant="outline" className="text-[10px] capitalize">{edge.type.replace(/_/g, " ")}</Badge><ChevronRight className="size-3 text-muted-foreground" /></div></TableCell>
-                          <TableCell className="text-sm">{edge.to === `device:${deviceId}` ? <Badge variant="default" className="text-[10px]">This device</Badge> : <span className="text-muted-foreground">{nodeLabels.get(edge.to) ?? edge.to}</span>}</TableCell>
-                          <TableCell className="text-xs text-muted-foreground">{formatRelative(edge.updatedAt)}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="incidents" className="mt-4 min-h-0 flex-1 overflow-hidden">
-          <div className="h-full min-h-0">
-            <div className="grid h-full min-h-0 gap-4">
-        {/* Related Incidents */}
-        <Card className="flex h-full min-h-0 flex-col min-w-0 bg-card/85">
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="size-4 text-muted-foreground" />
-              <CardTitle className="text-base">Related Incidents</CardTitle>
-              {relatedIncidents.length > 0 && (
-                <Badge variant="secondary" className="ml-auto tabular-nums">
-                  {relatedIncidents.length}
-                </Badge>
-              )}
+        <TabsContent value="workloads" className="mt-3 min-h-0 flex-1 overflow-hidden">
+          <AnimatedTabPanel active className="overflow-hidden">
+            <div className="h-full min-h-0 overflow-hidden">
+              <DeviceWorkloadsPanel deviceId={device.id} className="h-full" />
             </div>
-            <CardDescription>
-              Incidents involving this device
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="min-h-0 flex-1">
-            {relatedIncidents.length === 0 ? (
-              <div className="flex flex-col items-center gap-2 py-8 text-center">
-                <AlertTriangle className="size-8 text-muted-foreground/40" />
-                <p className="text-sm text-muted-foreground">
-                  No incidents for this device
-                </p>
-              </div>
-            ) : (
-              <ul className="h-full space-y-2 overflow-auto pr-1">
-                {relatedIncidents.map((incident) => (
-                  <li
-                    key={incident.id}
-                    className="rounded-md border bg-background/75 p-3 space-y-1.5"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="text-sm font-medium">{incident.title}</p>
-                      <Badge
-                        variant={incidentBadgeVariant(incident.severity)}
-                        className="shrink-0 text-[10px] uppercase"
-                      >
-                        {incident.severity}
+          </AnimatedTabPanel>
+        </TabsContent>
+
+        <TabsContent value="access" className="mt-3 min-h-0 flex-1 overflow-hidden">
+          <AnimatedTabPanel active className="overflow-auto">
+            <div className="h-full min-h-0 overflow-auto">
+              <DeviceAccessPanel deviceId={device.id} className="h-full" />
+            </div>
+          </AnimatedTabPanel>
+        </TabsContent>
+
+        <TabsContent value="widgets" className="mt-3 min-h-0 flex-1 overflow-hidden">
+          <AnimatedTabPanel active className="overflow-hidden">
+            <div className="h-full min-h-0 overflow-hidden">
+              <DeviceWidgetsPanel deviceId={device.id} active={activeTab === "widgets"} className="h-full" />
+            </div>
+          </AnimatedTabPanel>
+        </TabsContent>
+
+        <TabsContent value="steward" forceMount className="mt-3 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
+          <AnimatedTabPanel active={activeTab === "steward"} persistent className="overflow-hidden">
+            <Card className="flex h-full min-h-0 min-w-0 overflow-hidden bg-card/85">
+              <ChatWorkspace
+                initialDeviceId={device.id}
+                sessionScope="device"
+                respectUrlParams={false}
+                compact
+                sessionRefreshToken={chatSessionRefreshToken}
+                preferredSessionId={preferredChatSessionId}
+              />
+            </Card>
+          </AnimatedTabPanel>
+        </TabsContent>
+
+        <TabsContent value="activity" className="mt-3 min-h-0 flex-1 overflow-hidden">
+          <AnimatedTabPanel active className="overflow-hidden">
+            <div className="grid h-full min-h-0 gap-4 xl:grid-cols-2">
+              <Card className="flex h-full min-h-0 flex-col min-w-0 bg-card/85">
+                <CardHeader>
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="size-4 text-muted-foreground" />
+                    <CardTitle className="text-base">Incidents</CardTitle>
+                    {relatedIncidents.length > 0 && (
+                      <Badge variant="secondary" className="ml-auto tabular-nums">
+                        {relatedIncidents.length}
                       </Badge>
+                    )}
+                  </div>
+                  <CardDescription>Operational issues and degradations involving this device</CardDescription>
+                </CardHeader>
+                <CardContent className="min-h-0 flex-1">
+                  {relatedIncidents.length === 0 ? (
+                    <div className="flex flex-col items-center gap-2 py-8 text-center">
+                      <AlertTriangle className="size-8 text-muted-foreground/40" />
+                      <p className="text-sm text-muted-foreground">No incidents for this device</p>
                     </div>
-                    <p className="text-xs text-muted-foreground line-clamp-2">
-                      {incident.summary}
-                    </p>
-                    <div className="flex items-center gap-3 text-[10px] text-muted-foreground/70">
-                      <span className="capitalize">
-                        Status: {incident.status.replace("_", " ")}
-                      </span>
-                      <span>
-                        <Clock className="mr-0.5 inline size-3" />
-                        {formatRelative(incident.updatedAt)}
-                      </span>
-                      {incident.autoRemediated && (
-                        <Badge
-                          variant="outline"
-                          className="text-[9px] px-1.5 py-0"
-                        >
-                          Auto-remediated
-                        </Badge>
-                      )}
+                  ) : (
+                    <ul className="h-full space-y-2 overflow-auto pr-1">
+                      {relatedIncidents.map((incident) => (
+                        <li key={incident.id} className="rounded-md border bg-background/75 p-3 space-y-1.5">
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="text-sm font-medium">{incident.title}</p>
+                            <Badge
+                              variant={incidentBadgeVariant(incident.severity)}
+                              className="shrink-0 text-[10px] uppercase"
+                            >
+                              {incident.severity}
+                            </Badge>
+                          </div>
+                          <p className="text-xs text-muted-foreground line-clamp-2">{incident.summary}</p>
+                          <div className="flex items-center gap-3 text-[10px] text-muted-foreground/70">
+                            <span className="capitalize">Status: {incident.status.replace("_", " ")}</span>
+                            <span>
+                              <Clock className="mr-0.5 inline size-3" />
+                              {formatRelative(incident.updatedAt)}
+                            </span>
+                            {incident.autoRemediated ? (
+                              <Badge variant="outline" className="text-[9px] px-1.5 py-0">
+                                Auto-remediated
+                              </Badge>
+                            ) : null}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="flex h-full min-h-0 flex-col min-w-0 bg-card/85">
+                <CardHeader>
+                  <div className="flex items-center gap-2">
+                    <Wrench className="size-4 text-muted-foreground" />
+                    <CardTitle className="text-base">Execution History</CardTitle>
+                    {devicePlaybookRuns.length > 0 ? (
+                      <Badge variant="secondary" className="ml-auto tabular-nums">{devicePlaybookRuns.length}</Badge>
+                    ) : null}
+                  </div>
+                  <CardDescription>Playbooks and automated remediation attempts against this device</CardDescription>
+                </CardHeader>
+                <CardContent className="min-h-0 flex-1">
+                  {devicePlaybookRuns.length === 0 ? (
+                    <div className="flex flex-col items-center gap-2 py-8 text-center">
+                      <Wrench className="size-8 text-muted-foreground/40" />
+                      <p className="text-sm text-muted-foreground">No playbook runs for this device</p>
                     </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </CardContent>
-        </Card>
-
-      </div>
-
-          </div>
+                  ) : (
+                    <ul className="h-full space-y-2 overflow-auto pr-1">
+                      {devicePlaybookRuns.map((run) => (
+                        <li key={run.id} className="rounded-md border bg-background/75 p-3 space-y-1.5">
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="text-sm font-medium">{run.name}</p>
+                            <Badge
+                              variant={
+                                run.status === "completed"
+                                  ? "default"
+                                  : run.status === "failed" || run.status === "denied"
+                                    ? "destructive"
+                                    : run.status === "pending_approval"
+                                      ? "secondary"
+                                      : "outline"
+                              }
+                              className="shrink-0 text-[10px]"
+                            >
+                              {run.status.replace(/_/g, " ")}
+                            </Badge>
+                          </div>
+                          <p className="text-xs text-muted-foreground">{run.family} · Class {run.actionClass}</p>
+                          <div className="flex items-center gap-3 text-[10px] text-muted-foreground/70">
+                            <span>
+                              <Clock className="mr-0.5 inline size-3" />
+                              {formatRelative(run.createdAt)}
+                            </span>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          </AnimatedTabPanel>
         </TabsContent>
 
-        <TabsContent value="history" className="mt-4 min-h-0 flex-1 overflow-hidden">
-          <Card className="flex h-full min-h-0 flex-col min-w-0 bg-card/85">
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <Wrench className="size-4 text-muted-foreground" />
-                <CardTitle className="text-base">Playbook History</CardTitle>
-                {devicePlaybookRuns.length > 0 && <Badge variant="secondary" className="ml-auto tabular-nums">{devicePlaybookRuns.length}</Badge>}
-              </div>
-              <CardDescription>Playbook executions targeting this device</CardDescription>
-            </CardHeader>
-            <CardContent className="min-h-0 flex-1">
-              {devicePlaybookRuns.length === 0 ? (
-                <div className="flex flex-col items-center gap-2 py-8 text-center"><Wrench className="size-8 text-muted-foreground/40" /><p className="text-sm text-muted-foreground">No playbook runs for this device</p></div>
-              ) : (
-                <ul className="h-full space-y-2 overflow-auto pr-1">
-                  {devicePlaybookRuns.map((run) => (
-                    <li key={run.id} className="rounded-md border bg-background/75 p-3 space-y-1.5">
-                      <div className="flex items-start justify-between gap-2">
-                        <p className="text-sm font-medium">{run.name}</p>
-                        <Badge
-                          variant={
-                            run.status === "completed" ? "default" :
-                            run.status === "failed" || run.status === "denied" ? "destructive" :
-                            run.status === "pending_approval" ? "secondary" :
-                            "outline"
-                          }
-                          className="shrink-0 text-[10px]"
-                        >
-                          {run.status.replace(/_/g, " ")}
-                        </Badge>
-                      </div>
-                      <p className="text-xs text-muted-foreground">{run.family} · Class {run.actionClass}</p>
-                      <div className="flex items-center gap-3 text-[10px] text-muted-foreground/70"><span><Clock className="mr-0.5 inline size-3" />{formatRelative(run.createdAt)}</span></div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </CardContent>
-          </Card>
+        <TabsContent value="settings" className="mt-3 min-h-0 flex-1 overflow-hidden">
+          <AnimatedTabPanel active className="overflow-auto">
+            <div className="h-full min-h-0 overflow-auto">
+              <DeviceSettingsPanel deviceId={device.id} />
+            </div>
+          </AnimatedTabPanel>
         </TabsContent>
-      </Tabs>
+        </Tabs>
       </div>
     </main>
   );

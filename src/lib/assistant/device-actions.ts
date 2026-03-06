@@ -386,7 +386,7 @@ async function handleMonitorRequest(
   }
 
   const draft = buildCustomMonitorContractFromPrompt(device, input);
-  stateStore.upsertServiceContract(draft.contract);
+  stateStore.upsertAssurance(draft.contract);
 
   const requiredProtocols = getRequiredProtocolsForServiceContract(draft.contract);
   const validated = new Set(stateStore.getValidatedCredentialProtocols(device.id).map((item) => item.toLowerCase()));
@@ -398,9 +398,10 @@ async function handleMonitorRequest(
       dedupeKey: `monitor-credential-gap:${draft.contract.id}:${missing.sort().join(",")}`,
       findingType: "missing_credentials",
       severity: "warning",
-      title: `${device.name} monitor missing credentials`,
-      summary: `Custom monitor "${draft.contract.displayName}" needs credentials for: ${missing.join(", ")}.`,
+      title: `${device.name} assurance missing credentials`,
+      summary: `Custom assurance "${draft.contract.displayName}" needs credentials for: ${missing.join(", ")}.`,
       evidenceJson: {
+        assuranceId: draft.contract.id,
         monitorContractId: draft.contract.id,
         requiredProtocols,
         missingProtocols: missing,
@@ -412,9 +413,10 @@ async function handleMonitorRequest(
   await stateStore.addAction({
     actor: "user",
     kind: "config",
-    message: `Created custom monitor contract on ${device.name}`,
+    message: `Created custom assurance on ${device.name}`,
     context: {
       deviceId: device.id,
+      assuranceId: draft.contract.id,
       monitorContractId: draft.contract.id,
       monitorType: draft.monitorType,
       requiredProtocols,
@@ -431,7 +433,7 @@ async function handleMonitorRequest(
   return {
     handled: true,
     response: [
-      `Created monitor "${draft.contract.displayName}" on ${device.name}.`,
+      `Created assurance "${draft.contract.displayName}" on ${device.name}.`,
       `Type: ${draft.monitorType}.`,
       `Interval: every ${draft.contract.checkIntervalSec}s.`,
       credentialSuffix,
@@ -440,6 +442,7 @@ async function handleMonitorRequest(
     metadata: {
       action: "monitor",
       deviceId: device.id,
+      assuranceId: draft.contract.id,
       monitorContractId: draft.contract.id,
       monitorType: draft.monitorType,
       missingProtocols: missing,

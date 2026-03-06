@@ -3,7 +3,6 @@ import { isAuthorized } from "@/lib/auth/guard";
 import {
   ensureOnboardingSession,
   getOnboardingSession,
-  seedOnboardingSessionInitialMessage,
 } from "@/lib/adoption/conversation";
 import { getDeviceAdoptionSnapshot } from "@/lib/adoption/orchestrator";
 import { stateStore } from "@/lib/state/store";
@@ -20,10 +19,6 @@ async function buildPayload(deviceId: string, createIfMissing: boolean) {
     ? ensureOnboardingSession(device)
     : getOnboardingSession(device.id);
 
-  if (createIfMissing && session) {
-    await seedOnboardingSessionInitialMessage(device, session.id);
-  }
-
   const messages = session ? stateStore.getChatMessages(session.id) : [];
   const snapshot = await getDeviceAdoptionSnapshot(deviceId);
 
@@ -35,6 +30,10 @@ async function buildPayload(deviceId: string, createIfMissing: boolean) {
         run: snapshot.run,
         unresolvedRequiredQuestions: snapshot.unresolvedRequiredQuestions,
         credentials: snapshot.credentials,
+        accessSurfaces: snapshot.accessSurfaces,
+        workloads: snapshot.workloads,
+        assurances: snapshot.assurances,
+        assuranceRuns: snapshot.assuranceRuns,
         bindings: snapshot.bindings,
         serviceContracts: snapshot.serviceContracts,
       },

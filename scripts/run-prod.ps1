@@ -24,6 +24,9 @@ if (-not (Test-Path "node_modules")) {
   Invoke-Step "Installing dependencies..." { npm ci }
 }
 
+Invoke-Step "Ensuring Playwright runtime..." { node scripts/ensure-playwright.mjs }
+Invoke-Step "Ensuring required network tools (nmap, tshark)..." { node scripts/ensure-network-tools.mjs }
+
 Invoke-Step "Building production bundle..." { npm run build }
 
 Invoke-Step "Starting Steward on port $Port..." { npm run start -- -p $Port }

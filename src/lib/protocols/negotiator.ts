@@ -34,15 +34,28 @@ export const buildManagementSurface = (device: Device): DeviceManagementSurface 
     });
   }
 
-  if (hasPort(device, 5985) || hasPort(device, 5986) || hasPort(device, 3389)) {
+  if (hasPort(device, 5985) || hasPort(device, 5986)) {
     capabilities.push({
       id: "winrm-core",
-      title: "Windows Host Management",
+      title: "Windows Remote Management",
       protocol: "winrm",
       actions: [
         "Update state",
         "Scheduled task inventory",
         "Firewall policy review",
+      ],
+    });
+  }
+
+  if (hasPort(device, 3389)) {
+    capabilities.push({
+      id: "rdp-core",
+      title: "Remote Desktop Surface",
+      protocol: "rdp",
+      actions: [
+        "RDP reachability checks",
+        "Exposure review",
+        "Session access posture",
       ],
     });
   }

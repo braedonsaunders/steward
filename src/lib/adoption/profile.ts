@@ -25,25 +25,27 @@ export interface OnboardingQuestionDraft {
   required: boolean;
 }
 
-export interface ServiceContractDraft {
-  serviceKey: string;
+export interface WorkloadDraft {
+  workloadKey: string;
   displayName: string;
   reason: string;
   criticality: "low" | "medium" | "high";
 }
 
+export type ServiceContractDraft = WorkloadDraft;
+
 export interface DeviceAdoptionProfile {
   summary: string;
   role?: string;
   confidence: number;
-  criticalServices: ServiceContractDraft[];
+  workloads: WorkloadDraft[];
   watchItems: string[];
   credentialIntents: DeviceCredentialIntent[];
   adapterCandidates: AdapterCandidateHint[];
   questions: OnboardingQuestionDraft[];
 }
 
-const SUPPORTED_PROTOCOLS = new Set([
+const SUPPORTED_CREDENTIAL_PROTOCOLS = new Set([
   "ssh",
   "winrm",
   "snmp",
@@ -116,7 +118,7 @@ function toCredentialIntents(value: unknown): DeviceCredentialIntent[] {
         if (!item || typeof item !== "object") return undefined;
         const record = item as Record<string, unknown>;
         const protocolRaw = typeof record.protocol === "string" ? record.protocol.trim().toLowerCase() : "";
-        if (!SUPPORTED_PROTOCOLS.has(protocolRaw)) return undefined;
+        if (!SUPPORTED_CREDENTIAL_PROTOCOLS.has(protocolRaw)) return undefined;
         const reason = typeof record.reason === "string" ? record.reason : `Required for ${protocolRaw} management`;
         const priority = record.priority === "high" || record.priority === "low" ? record.priority : "medium";
         return { protocol: protocolRaw, reason, priority } as DeviceCredentialIntent;
@@ -146,7 +148,7 @@ function toAdapterCandidates(value: unknown): AdapterCandidateHint[] {
   );
 }
 
-function toServiceContracts(value: unknown): ServiceContractDraft[] {
+function toWorkloads(value: unknown): WorkloadDraft[] {
   if (!Array.isArray(value)) return [];
   return dedupeBy(
     value
@@ -155,17 +157,19 @@ function toServiceContracts(value: unknown): ServiceContractDraft[] {
         const record = item as Record<string, unknown>;
         const displayName = typeof record.displayName === "string" ? record.displayName.trim() : "";
         if (!displayName) return undefined;
-        const serviceKey = typeof record.serviceKey === "string" && record.serviceKey.trim().length > 0
-          ? record.serviceKey.trim()
+        const workloadKey = typeof record.workloadKey === "string" && record.workloadKey.trim().length > 0
+          ? record.workloadKey.trim()
+          : typeof record.serviceKey === "string" && record.serviceKey.trim().length > 0
+            ? record.serviceKey.trim()
           : displayName.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
         const reason = typeof record.reason === "string" ? record.reason : "Identified as critical workload";
         const criticality = record.criticality === "high" || record.criticality === "low"
           ? record.criticality
           : "medium";
-        return { serviceKey, displayName, reason, criticality } as ServiceContractDraft;
+        return { workloadKey, displayName, reason, criticality } as WorkloadDraft;
       })
-      .filter((item): item is ServiceContractDraft => Boolean(item)),
-    (item) => item.serviceKey,
+      .filter((item): item is WorkloadDraft => Boolean(item)),
+    (item) => item.workloadKey,
   );
 }
 
@@ -194,14 +198,19 @@ function toQuestions(value: unknown): OnboardingQuestionDraft[] {
 
 function fallbackProfile(device: Device): DeviceAdoptionProfile {
   const credentialIntents: DeviceCredentialIntent[] = [];
-  const existingContractsRaw = Number((device.metadata.adoption as Record<string, unknown> | undefined)?.serviceContractCount ?? 0);
-  const existingContracts = Number.isFinite(existingContractsRaw) ? Math.max(0, Math.floor(existingContractsRaw)) : 0;
-  const askQuestionForServices = device.services.length > 0 && existingContracts === 0;
+  const adoptionRecord = device.metadata.adoption as Record<string, unknown> | undefined;
+  const existingAssuranceCountRaw = Number(
+    adoptionRecord?.assuranceCount ?? adoptionRecord?.serviceContractCount ?? 0,
+  );
+  const existingAssuranceCount = Number.isFinite(existingAssuranceCountRaw)
+    ? Math.max(0, Math.floor(existingAssuranceCountRaw))
+    : 0;
+  const askQuestionForWorkloads = device.services.length > 0 && existingAssuranceCount === 0;
 
   if (device.protocols.includes("ssh")) {
     credentialIntents.push({ protocol: "ssh", reason: "Remote shell management and diagnostics", priority: "high" });
   }
-  if (device.protocols.includes("winrm") || device.protocols.includes("windows")) {
+  if (device.protocols.includes("winrm")) {
     credentialIntents.push({ protocol: "winrm", reason: "Windows service management and diagnostics", priority: "high" });
   }
   if (device.protocols.includes("snmp")) {
@@ -217,25 +226,40 @@ function fallbackProfile(device: Device): DeviceAdoptionProfile {
     credentialIntents.push({ protocol: "kubernetes", reason: "Cluster workload and node management", priority: "medium" });
   }
 
-  const criticalServices = device.services
+  const workloads = device.services
     .slice(0, 6)
     .map((service) => ({
-      serviceKey: `${service.transport}_${service.port}_${service.name}`.replace(/[^a-z0-9_]+/gi, "_").toLowerCase(),
+      workloadKey: `${service.transport}_${service.port}_${service.name}`.replace(/[^a-z0-9_]+/gi, "_").toLowerCase(),
       displayName: `${service.name}:${service.port}`,
-      reason: `Observed open service on port ${service.port}`,
+      reason: `Observed endpoint on port ${service.port}; likely maps to a workload or dependency.`,
       criticality: service.port === 22 || service.port === 443 || service.port === 3389 ? "high" : "medium",
-    })) as ServiceContractDraft[];
+    })) as WorkloadDraft[];
 
   const questions: OnboardingQuestionDraft[] = [];
-  if (askQuestionForServices) {
+  const isWindowsWorkstation = device.type === "workstation"
+    && (device.protocols.includes("windows") || device.protocols.includes("rdp") || device.protocols.includes("winrm"));
+
+  if (askQuestionForWorkloads) {
     const discoveredServicesLabel = device.services
       .slice(0, 8)
       .map((service) => `${service.name}:${service.port}`)
       .join(", ");
     questions.push({
       questionKey: "critical_services_confirm",
-      prompt: `List every service Steward must keep running and monitor closely (comma-separated). Discovered: ${discoveredServicesLabel || "none"}. Include any app services that discovery missed (for example: nginx, php-fpm, laravel-worker, mysql).`,
+      prompt: `List the workloads or responsibilities Steward should actively keep healthy on this device (comma-separated). Observed endpoints: ${discoveredServicesLabel || "none"}. Include responsibilities discovery may have missed (for example: nginx reverse proxy, Laravel queue workers, MySQL, backup jobs).`,
       options: [],
+      required: true,
+    });
+  } else if (isWindowsWorkstation) {
+    questions.push({
+      questionKey: "workstation_role",
+      prompt: "What is this workstation primarily used for?",
+      options: [
+        { label: "Gaming", value: "gaming" },
+        { label: "Development", value: "development" },
+        { label: "Office / Productivity", value: "office" },
+        { label: "Shared / Family", value: "shared" },
+      ],
       required: true,
     });
   } else {
@@ -263,9 +287,22 @@ function fallbackProfile(device: Device): DeviceAdoptionProfile {
     });
   }
 
+  if (isWindowsWorkstation && device.protocols.includes("rdp")) {
+    questions.push({
+      questionKey: "rdp_exposure_intent",
+      prompt: "How should Steward treat Remote Desktop on this workstation?",
+      options: [
+        { label: "Internal only", value: "internal_only" },
+        { label: "Disabled if possible", value: "disable_if_possible" },
+        { label: "Needs remote access", value: "needs_remote_access" },
+      ],
+      required: false,
+    });
+  }
+
   questions.push({
     questionKey: "manual_service_contracts",
-    prompt: "Any additional service contracts to add manually? Provide comma-separated service names and optional ports (example: laravel-api:443, queue-worker, scheduler).",
+    prompt: "Any additional workloads or assurances to add manually? Provide comma-separated names and optional ports (example: laravel-api:443, queue-worker, nightly-backups).",
     options: [],
     required: false,
   });
@@ -274,8 +311,10 @@ function fallbackProfile(device: Device): DeviceAdoptionProfile {
     summary: `Steward onboarded ${device.name} and prepared management intents.`,
     role: device.role,
     confidence: 0.55,
-    criticalServices,
-    watchItems: ["Availability drift", "Certificate expiry", "Resource pressure"],
+    workloads,
+    watchItems: isWindowsWorkstation
+      ? ["Availability drift", "Patch hygiene", "Remote desktop exposure", "Disk pressure"]
+      : ["Availability drift", "Certificate expiry", "Resource pressure"],
     credentialIntents: dedupeBy(credentialIntents, (item) => item.protocol),
     adapterCandidates: [],
     questions,
@@ -290,7 +329,7 @@ function parseProfile(raw: Record<string, unknown>, device: Device): DeviceAdopt
   const confidenceRaw = Number(raw.confidence);
   const confidence = Number.isFinite(confidenceRaw) ? Math.max(0, Math.min(1, confidenceRaw)) : 0.6;
 
-  const criticalServices = toServiceContracts(raw.criticalServices);
+  const workloads = toWorkloads(raw.workloads ?? raw.criticalServices);
   const watchItems = Array.isArray(raw.watchItems)
     ? raw.watchItems.filter((item): item is string => typeof item === "string" && item.trim().length > 0).slice(0, 12)
     : [];
@@ -302,7 +341,7 @@ function parseProfile(raw: Record<string, unknown>, device: Device): DeviceAdopt
     summary,
     role,
     confidence,
-    criticalServices,
+    workloads,
     watchItems,
     credentialIntents,
     adapterCandidates,
@@ -314,7 +353,7 @@ export async function generateDeviceAdoptionProfile(
   device: Device,
   context: {
     adapterIds: string[];
-    existingServiceContractsCount?: number;
+    existingAssuranceCount?: number;
   },
 ): Promise<DeviceAdoptionProfile> {
   let providerForHealth = "default";
@@ -347,7 +386,7 @@ export async function generateDeviceAdoptionProfile(
         fingerprint: device.metadata.fingerprint,
       },
       availableAdapters: context.adapterIds,
-      existingServiceContractsCount: context.existingServiceContractsCount ?? 0,
+      existingAssuranceCount: context.existingAssuranceCount ?? 0,
     });
 
     const firewall = applyPromptFirewall(telemetry);
@@ -360,7 +399,7 @@ export async function generateDeviceAdoptionProfile(
         "You are generating an onboarding profile for a network endpoint managed by Steward.",
         "Return ONLY a single JSON object with keys:",
         "summary (string), role (string optional), confidence (0..1),",
-        "criticalServices (array of {serviceKey, displayName, reason, criticality}),",
+        "workloads (array of {workloadKey, displayName, reason, criticality}),",
         "watchItems (string array),",
         "credentialIntents (array of {protocol, reason, priority}),",
         "adapterCandidates (array of {adapterId, protocol, score, reason}),",
@@ -368,9 +407,12 @@ export async function generateDeviceAdoptionProfile(
          "Rules:",
          "- Ask questions only when evidence is ambiguous.",
          "- Keep questions under 8 total.",
-         "- For questionKey 'critical_services_confirm', do NOT provide options. Ask for a comma-separated free-text list so user can include undiscovered services.",
-         "- If existingServiceContractsCount > 0, do not require critical_services_confirm again unless telemetry clearly conflicts.",
-         "- Use only these protocols: ssh, winrm, snmp, http-api, docker, kubernetes, mqtt, rtsp, printing.",
+         "- For questionKey 'critical_services_confirm', do NOT provide options. Ask for a comma-separated free-text list of workloads and responsibilities so the user can include things discovery missed.",
+         "- If existingAssuranceCount > 0, do not require critical_services_confirm again unless telemetry clearly conflicts.",
+         "- RDP-only Windows endpoints are usually workstations, not servers.",
+         "- Do not request WinRM credentials unless WinRM is actually observed or explicitly confirmed in telemetry.",
+         "- Use only these protocols for credentialIntents: ssh, winrm, snmp, http-api, docker, kubernetes, mqtt, rtsp, printing.",
+         "- Adapter candidates and questions may reference rdp as an exposure-only surface, but do not request RDP credentials.",
         `Known adapter ids: ${context.adapterIds.join(", ") || "none"}`,
         firewall.tainted
           ? `Telemetry was sanitized by prompt firewall. Reasons: ${firewall.reasons.join(", ")}`
@@ -400,7 +442,7 @@ export async function generateDeviceAdoptionProfile(
       if (question.questionKey !== "critical_services_confirm") {
         return true;
       }
-      return (context.existingServiceContractsCount ?? 0) === 0;
+      return (context.existingAssuranceCount ?? 0) === 0;
     });
 
     return {

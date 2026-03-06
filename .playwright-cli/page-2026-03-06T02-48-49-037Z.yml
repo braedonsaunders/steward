@@ -1,0 +1,629 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - img [ref=e7]
+          - generic [ref=e9]:
+            - heading "Steward" [level=1] [ref=e10]
+            - paragraph [ref=e11]: Network Operations
+          - button [ref=e12]:
+            - img [ref=e13]
+        - navigation [ref=e19]:
+          - generic [ref=e20]:
+            - paragraph [ref=e21]: Overview
+            - link "Dashboard" [ref=e23] [cursor=pointer]:
+              - /url: /
+              - generic [ref=e24]:
+                - img [ref=e25]
+                - generic [ref=e30]: Dashboard
+            - link "Digest" [ref=e32] [cursor=pointer]:
+              - /url: /digest
+              - generic [ref=e33]:
+                - img [ref=e34]
+                - generic [ref=e37]: Digest
+          - generic [ref=e38]:
+            - paragraph [ref=e39]: Network
+            - link "Devices" [ref=e41] [cursor=pointer]:
+              - /url: /devices
+              - generic [ref=e43]:
+                - img [ref=e44]
+                - generic [ref=e47]: Devices
+            - link "Discovery" [ref=e49] [cursor=pointer]:
+              - /url: /discovery
+              - generic [ref=e50]:
+                - img [ref=e51]
+                - generic [ref=e54]: Discovery
+            - link "Topology" [ref=e56] [cursor=pointer]:
+              - /url: /topology
+              - generic [ref=e57]:
+                - img [ref=e58]
+                - generic [ref=e63]: Topology
+          - generic [ref=e64]:
+            - paragraph [ref=e65]: Health
+            - link "Incidents 3" [ref=e67] [cursor=pointer]:
+              - /url: /incidents
+              - generic [ref=e68]:
+                - img [ref=e69]
+                - generic [ref=e71]: Incidents
+              - generic [ref=e72]: "3"
+            - link "Activity" [ref=e74] [cursor=pointer]:
+              - /url: /activity
+              - generic [ref=e75]:
+                - img [ref=e76]
+                - generic [ref=e78]: Activity
+          - generic [ref=e79]:
+            - paragraph [ref=e80]: Control
+            - link "Approvals" [ref=e82] [cursor=pointer]:
+              - /url: /approvals
+              - generic [ref=e83]:
+                - img [ref=e84]
+                - generic [ref=e87]: Approvals
+            - link "Policies" [ref=e89] [cursor=pointer]:
+              - /url: /policies
+              - generic [ref=e90]:
+                - img [ref=e91]
+                - generic [ref=e94]: Policies
+          - generic [ref=e95]:
+            - paragraph [ref=e96]: Assistant
+            - link "Chat" [ref=e98] [cursor=pointer]:
+              - /url: /chat
+              - generic [ref=e99]:
+                - img [ref=e100]
+                - generic [ref=e102]: Chat
+          - generic [ref=e103]:
+            - paragraph [ref=e104]: System
+            - link "Adapters" [ref=e106] [cursor=pointer]:
+              - /url: /adapters
+              - generic [ref=e107]:
+                - img [ref=e108]
+                - generic [ref=e110]: Adapters
+            - link "Access" [ref=e112] [cursor=pointer]:
+              - /url: /access
+              - generic [ref=e113]:
+                - img [ref=e114]
+                - generic [ref=e126]: Access
+            - link "Settings" [ref=e128] [cursor=pointer]:
+              - /url: /settings
+              - generic [ref=e129]:
+                - img [ref=e130]
+                - generic [ref=e133]: Settings
+        - generic [ref=e292]:
+          - img [ref=e293]
+          - generic [ref=e295]: "Vault: Unlocked"
+    - main [ref=e135]:
+      - main [ref=e138]:
+        - generic [ref=e139]:
+          - generic [ref=e141]:
+            - generic [ref=e142]:
+              - heading "raspberry-pi-foundation-iot-192-168-68-70" [level=1] [ref=e145]
+              - generic [ref=e146]:
+                - generic [ref=e147]: online
+                - generic [ref=e148]: iot
+                - generic [ref=e149]:
+                  - img [ref=e150]
+                  - text: Tier 1
+                - generic [ref=e152]: Adopted
+            - generic [ref=e154]:
+              - paragraph [ref=e155]: "First seen: 3/4/2026, 8:46:04 PM"
+              - paragraph [ref=e156]: "Last seen: 5m ago"
+          - generic [ref=e157]:
+            - tablist [ref=e158]:
+              - tab "Overview" [ref=e159]
+              - tab "Chat" [active] [selected] [ref=e160]
+              - tab "Incidents" [ref=e161]
+              - tab "Services" [ref=e162]
+              - tab "Contracts" [ref=e163]
+              - tab "Credentials" [ref=e164]
+              - tab "History" [ref=e165]
+              - tab "Settings" [ref=e166]
+            - tabpanel "Chat" [ref=e296]:
+              - generic [ref=e298]:
+                - generic [ref=e299]:
+                  - generic [ref=e301]:
+                    - button "New Chat" [ref=e302]:
+                      - img [ref=e303]
+                      - text: New Chat
+                    - button [ref=e305]:
+                      - img [ref=e306]
+                  - generic [ref=e314]:
+                    - button "[Onboarding] raspberry-pi-foundation-iot-192-168-68-70 4m ago raspberry-pi-foundation-iot-192-168-68-70" [ref=e315]:
+                      - paragraph [ref=e316]: "[Onboarding] raspberry-pi-foundation-iot-192-168-68-70"
+                      - paragraph [ref=e317]: 4m ago
+                      - paragraph [ref=e318]:
+                        - img [ref=e319]
+                        - generic [ref=e322]: raspberry-pi-foundation-iot-192-168-68-70
+                    - button "Conversation actions for [Onboarding] raspberry-pi-foundation-iot-192-168-68-70" [ref=e323]:
+                      - img [ref=e324]
+                - generic [ref=e328]:
+                  - generic [ref=e329]:
+                    - generic [ref=e330]:
+                      - img [ref=e331]
+                      - heading "[Onboarding] raspberry-pi-foundation-iot-192-168-68-70" [level=1] [ref=e334]
+                      - generic [ref=e335]:
+                        - img [ref=e336]
+                        - generic [ref=e339]: raspberry-pi-foundation-iot-192-168-68-70
+                    - generic [ref=e340]:
+                      - button "Manage [Onboarding] raspberry-pi-foundation-iot-192-168-68-70" [ref=e341]:
+                        - img [ref=e342]
+                      - combobox [ref=e346]:
+                        - generic: Anthropic
+                        - img
+                      - generic [ref=e347]: claude-opus-4-6
+                  - generic [ref=e349]:
+                    - generic [ref=e350]:
+                      - img [ref=e352]
+                      - generic [ref=e355]:
+                        - paragraph [ref=e356]: anthropic
+                        - generic [ref=e357]:
+                          - 'heading "Onboarding: raspberry-pi-foundation-iot-192-168-68-70 (192.168.68.70)" [level=1] [ref=e358]'
+                          - heading "What I See So Far" [level=2] [ref=e359]
+                          - table [ref=e361]:
+                            - rowgroup [ref=e362]:
+                              - row "Attribute Value" [ref=e363]:
+                                - columnheader "Attribute" [ref=e364]
+                                - columnheader "Value" [ref=e365]
+                            - rowgroup [ref=e366]:
+                              - row "IP 192.168.68.70" [ref=e367]:
+                                - cell "IP" [ref=e368]:
+                                  - strong [ref=e369]: IP
+                                - cell "192.168.68.70" [ref=e370]
+                              - row "Type IoT device" [ref=e371]:
+                                - cell "Type" [ref=e372]:
+                                  - strong [ref=e373]: Type
+                                - cell "IoT device" [ref=e374]
+                              - row "Vendor Raspberry Pi Foundation" [ref=e375]:
+                                - cell "Vendor" [ref=e376]:
+                                  - strong [ref=e377]: Vendor
+                                - cell "Raspberry Pi Foundation" [ref=e378]
+                              - row "OS Unknown" [ref=e379]:
+                                - cell "OS" [ref=e380]:
+                                  - strong [ref=e381]: OS
+                                - cell "Unknown" [ref=e382]
+                              - row "Open Services HTTP (80), MQTT (1883), HTTP-API" [ref=e383]:
+                                - cell "Open Services" [ref=e384]:
+                                  - strong [ref=e385]: Open Services
+                                - cell "HTTP (80), MQTT (1883), HTTP-API" [ref=e386]
+                          - heading "What I'll Investigate" [level=2] [ref=e387]
+                          - list [ref=e388]:
+                            - listitem [ref=e389]:
+                              - strong [ref=e390]: HTTP on port 80 & HTTP-API
+                              - text: — Probe the web interface to fingerprint the application stack (e.g., Home Assistant, Node-RED, OctoPrint, custom firmware, etc.)
+                            - listitem [ref=e391]:
+                              - strong [ref=e392]: MQTT on port 1883
+                              - text: — Determine if this Pi is acting as an MQTT broker (Mosquitto?) or just a client, and whether authentication is enforced.
+                            - listitem [ref=e393]:
+                              - strong [ref=e394]: Overall role
+                              - text: — Is this a sensor gateway, automation controller, media device, or something else?
+                          - heading "Before I Dig In" [level=2] [ref=e395]
+                          - paragraph [ref=e396]: Let me run a deep probe against the HTTP and MQTT services first — that will likely tell us what software is running without needing any credentials yet.
+                          - paragraph [ref=e397]:
+                            - strong [ref=e398]: "One question for you while I probe:"
+                          - list [ref=e399]:
+                            - listitem [ref=e400]:
+                              - strong [ref=e401]: What workload is this Pi supposed to be running?
+                              - text: (e.g., Home Assistant, sensor collector, MQTT broker
+                        - paragraph [ref=e402]: 09:31 PM
+                    - generic [ref=e403]:
+                      - img [ref=e405]
+                      - generic [ref=e408]:
+                        - paragraph [ref=e410]: i dont know ill need you to find out
+                        - paragraph [ref=e411]: 09:42 PM
+                    - generic [ref=e412]:
+                      - img [ref=e414]
+                      - generic [ref=e417]:
+                        - paragraph [ref=e418]: anthropic
+                        - generic [ref=e419]:
+                          - paragraph [ref=e420]: "No problem — let me run a comprehensive probe to figure out what this Pi is doing. I'll hit it from multiple angles simultaneously: deep device identification, HTTP console profiling, nmap fingerprinting, and an HTTP contract audit on port 80."
+                          - generic [ref=e421]:
+                            - generic [ref=e422]:
+                              - generic [ref=e423]:
+                                - generic [ref=e424]:
+                                  - generic [ref=e425]:
+                                    - img [ref=e427]
+                                    - generic [ref=e434]:
+                                      - paragraph [ref=e435]: Deep Probe
+                                      - paragraph [ref=e436]: Probe
+                                  - paragraph [ref=e437]: raspberry-pi-foundation-iot-192-168-68-70 • 7 observations • 2 services
+                                - generic [ref=e438]:
+                                  - img [ref=e439]
+                                  - text: Complete
+                              - generic [ref=e442]:
+                                - generic [ref=e443]: Input
+                                - generic [ref=e444]:
+                                  - generic [ref=e445]: device_id
+                                  - generic [ref=e446]: raspberry-pi-foundation-iot-192-168-68-70
+                                - generic [ref=e447]:
+                                  - generic [ref=e448]: include_packet_intel
+                                  - generic [ref=e449]: "true"
+                              - generic [ref=e450]:
+                                - paragraph [ref=e451]: Tool Output
+                                - generic [ref=e452]: "{ \"toolAvailability\": { \"nmap\": true, \"tshark\": true, \"playwright\": true }, \"fingerprint\": { \"inferredOs\": null, \"inferredProduct\": null, \"protocolHints\": 0 … 10 more lines"
+                            - generic [ref=e453]:
+                              - generic [ref=e454]:
+                                - generic [ref=e455]:
+                                  - generic [ref=e456]:
+                                    - img [ref=e458]
+                                    - generic [ref=e465]:
+                                      - paragraph [ref=e466]: Http Console Profile
+                                      - paragraph [ref=e467]: Probe
+                                  - paragraph [ref=e468]: raspberry-pi-foundation-iot-192-168-68-70
+                                - generic [ref=e469]:
+                                  - img [ref=e470]
+                                  - text: Complete
+                              - generic [ref=e473]:
+                                - generic [ref=e474]: Input
+                                - generic [ref=e475]:
+                                  - generic [ref=e476]: device_id
+                                  - generic [ref=e477]: raspberry-pi-foundation-iot-192-168-68-70
+                              - generic [ref=e478]:
+                                - paragraph [ref=e479]: Tool Output
+                                - generic [ref=e480]: "<html><body>You are being <a href=\"/sign_in\">redirected</a>.</body></html> [status code: 302] [url] http://192.168.68.70/"
+                            - generic [ref=e481]:
+                              - generic [ref=e482]:
+                                - generic [ref=e483]:
+                                  - generic [ref=e484]:
+                                    - img [ref=e486]
+                                    - generic [ref=e489]:
+                                      - paragraph [ref=e490]: Nmap Fingerprint
+                                      - paragraph [ref=e491]: Terminal
+                                  - paragraph [ref=e492]: Tool execution failed.
+                                - generic [ref=e493]:
+                                  - img [ref=e494]
+                                  - text: Failed
+                              - generic [ref=e496]:
+                                - generic [ref=e497]: Input
+                                - generic [ref=e498]:
+                                  - generic [ref=e499]: device_id
+                                  - generic [ref=e500]: raspberry-pi-foundation-iot-192-168-68-70
+                              - generic [ref=e501]:
+                                - generic [ref=e506]:
+                                  - img [ref=e507]
+                                  - text: Inline Terminal
+                                - generic [ref=e510]: "Starting Nmap 7.98 ( https://nmap.org ) at 2026-03-05 21:42 -0500 [exit code: 1]"
+                            - generic [ref=e511]:
+                              - generic [ref=e512]:
+                                - generic [ref=e513]:
+                                  - generic [ref=e514]:
+                                    - img [ref=e516]
+                                    - generic [ref=e523]:
+                                      - paragraph [ref=e524]: Http Contract Audit
+                                      - paragraph [ref=e525]: Probe
+                                  - paragraph [ref=e526]: raspberry-pi-foundation-iot-192-168-68-70
+                                - generic [ref=e527]:
+                                  - img [ref=e528]
+                                  - text: Complete
+                              - generic [ref=e531]:
+                                - generic [ref=e532]: Input
+                                - generic [ref=e533]:
+                                  - generic [ref=e534]: device_id
+                                  - generic [ref=e535]: raspberry-pi-foundation-iot-192-168-68-70
+                                - generic [ref=e536]:
+                                  - generic [ref=e537]: input
+                                  - generic [ref=e538]: 2 fields
+                              - generic [ref=e539]:
+                                - paragraph [ref=e540]: Tool Output
+                                - generic [ref=e541]: "<html><body>You are being <a href=\"/sign_in\">redirected</a>.</body></html> [status code: 302] [url] http://192.168.68.70/"
+                            - generic [ref=e542]:
+                              - generic [ref=e543]:
+                                - generic [ref=e544]:
+                                  - generic [ref=e545]:
+                                    - img [ref=e547]
+                                    - generic [ref=e554]:
+                                      - paragraph [ref=e555]: Favicon Fingerprint
+                                      - paragraph [ref=e556]: Probe
+                                  - paragraph [ref=e557]: raspberry-pi-foundation-iot-192-168-68-70
+                                - generic [ref=e558]:
+                                  - img [ref=e559]
+                                  - text: Complete
+                              - generic [ref=e562]:
+                                - generic [ref=e563]: Input
+                                - generic [ref=e564]:
+                                  - generic [ref=e565]: device_id
+                                  - generic [ref=e566]: raspberry-pi-foundation-iot-192-168-68-70
+                              - generic [ref=e567]:
+                                - paragraph [ref=e568]: Tool Output
+                                - generic [ref=e569]: 9452d9c981456bf28c006ceb36baaf5dbfe73d3a0880e53b27257cc9bcae7f50 -
+                          - paragraph [ref=e570]: "Excellent — the probes returned very clear results. Here's what this device is:"
+                          - separator [ref=e571]
+                          - 'heading "🔆 Identified: SolarAssistant on Raspberry Pi" [level=1] [ref=e572]':
+                            - text: "🔆 Identified:"
+                            - strong [ref=e573]: SolarAssistant
+                            - text: on Raspberry Pi
+                          - heading "What We Found" [level=2] [ref=e574]
+                          - table [ref=e576]:
+                            - rowgroup [ref=e577]:
+                              - row "Finding Detail" [ref=e578]:
+                                - columnheader "Finding" [ref=e579]
+                                - columnheader "Detail" [ref=e580]
+                            - rowgroup [ref=e581]:
+                              - row "Application SolarAssistant — a solar inverter monitoring platform" [ref=e582]:
+                                - cell "Application" [ref=e583]:
+                                  - strong [ref=e584]: Application
+                                - cell "SolarAssistant — a solar inverter monitoring platform" [ref=e585]:
+                                  - strong [ref=e586]: SolarAssistant
+                                  - text: — a solar inverter monitoring platform
+                              - row "Web Server Cowboy (Erlang/Elixir HTTP server)" [ref=e587]:
+                                - cell "Web Server" [ref=e588]:
+                                  - strong [ref=e589]: Web Server
+                                - cell "Cowboy (Erlang/Elixir HTTP server)" [ref=e590]
+                              - row "Web UI http://192.168.68.70/ → redirects to /sign_in (login-protected)" [ref=e591]:
+                                - cell "Web UI" [ref=e592]:
+                                  - strong [ref=e593]: Web UI
+                                - cell "http://192.168.68.70/ → redirects to /sign_in (login-protected)" [ref=e594]:
+                                  - code [ref=e595]: http://192.168.68.70/
+                                  - text: → redirects to
+                                  - code [ref=e596]: /sign_in
+                                  - text: (login-protected)
+                              - row "Page Title \"SolarAssistant\"" [ref=e597]:
+                                - cell "Page Title" [ref=e598]:
+                                  - strong [ref=e599]: Page Title
+                                - cell "\"SolarAssistant\"" [ref=e600]
+                              - row "MQTT (1883) Likely publishing solar inverter telemetry (battery SOC, PV watts, grid status, etc.)" [ref=e601]:
+                                - cell "MQTT (1883)" [ref=e602]:
+                                  - strong [ref=e603]: MQTT (1883)
+                                - cell "Likely publishing solar inverter telemetry (battery SOC, PV watts, grid status, etc.)" [ref=e604]
+                              - row "Auth Session-cookie based (_solar_assistant_key), HttpOnly, 30-day expiry" [ref=e605]:
+                                - cell "Auth" [ref=e606]:
+                                  - strong [ref=e607]: Auth
+                                - cell "Session-cookie based (_solar_assistant_key), HttpOnly, 30-day expiry" [ref=e608]:
+                                  - text: Session-cookie based (
+                                  - code [ref=e609]: _solar_assistant_key
+                                  - text: ), HttpOnly, 30-day expiry
+                              - 'row "Security Headers Good: X-Frame-Options: SAMEORIGIN, X-XSS-Protection, X-Content-Type-Options: nosniff, Cross-Origin-Window-Policy: deny" [ref=e610]':
+                                - cell "Security Headers" [ref=e611]:
+                                  - strong [ref=e612]: Security Headers
+                                - 'cell "Good: X-Frame-Options: SAMEORIGIN, X-XSS-Protection, X-Content-Type-Options: nosniff, Cross-Origin-Window-Policy: deny" [ref=e613]':
+                                  - text: "Good:"
+                                  - code [ref=e614]: "X-Frame-Options: SAMEORIGIN"
+                                  - text: ","
+                                  - code [ref=e615]: X-XSS-Protection
+                                  - text: ","
+                                  - code [ref=e616]: "X-Content-Type-Options: nosniff"
+                                  - text: ","
+                                  - code [ref=e617]: "Cross-Origin-Window-Policy: deny"
+                          - heading "What SolarAssistant Does" [level=2] [ref=e618]
+                          - paragraph [ref=e619]: "SolarAssistant is a dedicated Raspberry Pi appliance that:"
+                          - list [ref=e620]:
+                            - listitem [ref=e621]:
+                              - strong [ref=e622]: Connects to solar inverters
+                              - text: "(typically via RS-232/RS-485/USB) — common brands: Voltronic/Axpert, Deye, Sunsynk, Growatt, etc."
+                            - listitem [ref=e623]:
+                              - strong [ref=e624]: Publishes real-time telemetry over MQTT
+                              - text: (battery voltage, SOC, PV power, load, grid status)
+                            - listitem [ref=e625]:
+                              - strong [ref=e626]: Serves a web dashboard
+                              - text: on port 80 for monitoring and configuration
+                            - listitem [ref=e627]:
+                              - strong [ref=e628]: Integrates with Home Assistant
+                              - text: and other automation platforms via MQTT
+                          - heading "Concerns to Address" [level=2] [ref=e629]
+                          - table [ref=e631]:
+                            - rowgroup [ref=e632]:
+                              - row "# Concern Severity" [ref=e633]:
+                                - columnheader "#" [ref=e634]
+                                - columnheader "Concern" [ref=e635]
+                                - columnheader "Severity" [ref=e636]
+                            - rowgroup [ref=e637]:
+                              - row "1 MQTT on 1883 — no TLS, likely no auth 🔴 High — any LAN device can subscribe to solar data or publish rogue commands" [ref=e638]:
+                                - cell "1" [ref=e639]
+                                - cell "MQTT on 1883 — no TLS, likely no auth" [ref=e640]:
+                                  - strong [ref=e641]: MQTT on 1883 — no TLS, likely no auth
+                                - cell "🔴 High — any LAN device can subscribe to solar data or publish rogue commands" [ref=e642]
+                              - row "2 HTTP only (no HTTPS) 🟡 Medium — login credentials sent in cleartext on LAN" [ref=e643]:
+                                - cell "2" [ref=e644]
+                                - cell "HTTP only (no HTTPS)" [ref=e645]:
+                                  - strong [ref=e646]: HTTP only (no HTTPS)
+                                - cell "🟡 Medium — login credentials sent in cleartext on LAN" [ref=e647]
+                              - row "3 30-day session cookie 🟡 Medium — long-lived session if compromised" [ref=e648]:
+                                - cell "3" [ref=e649]
+                                - cell "30-day session cookie" [ref=e650]:
+                                  - strong [ref=e651]: 30-day session cookie
+                                - cell "🟡 Medium — long-lived session if compromised" [ref=e652]
+                              - row "4 Unknown patch posture 🟡 Medium — SolarAssistant is an appliance image; update cadence unclear" [ref=e653]:
+                                - cell "4" [ref=e654]
+                                - cell "Unknown patch posture" [ref=e655]:
+                                  - strong [ref=e656]: Unknown patch posture
+                                - cell "🟡 Medium — SolarAssistant is an appliance image; update cadence unclear" [ref=e657]
+                          - separator [ref=e658]
+                          - heading "Recommended Monitoring Contracts" [level=2] [ref=e659]
+                          - paragraph [ref=e660]: "Now let me check the auth surface and MQTT exposure more closely to finalize recommendations:"
+                          - generic [ref=e661]:
+                            - generic [ref=e662]:
+                              - generic [ref=e663]:
+                                - generic [ref=e664]:
+                                  - generic [ref=e665]:
+                                    - img [ref=e667]
+                                    - generic [ref=e674]:
+                                      - paragraph [ref=e675]: Http Auth Surface
+                                      - paragraph [ref=e676]: Probe
+                                  - paragraph [ref=e677]: raspberry-pi-foundation-iot-192-168-68-70
+                                - generic [ref=e678]:
+                                  - img [ref=e679]
+                                  - text: Complete
+                              - generic [ref=e682]:
+                                - generic [ref=e683]: Input
+                                - generic [ref=e684]:
+                                  - generic [ref=e685]: device_id
+                                  - generic [ref=e686]: raspberry-pi-foundation-iot-192-168-68-70
+                              - generic [ref=e687]:
+                                - paragraph [ref=e688]: Tool Output
+                                - generic [ref=e689]: "<html><body>You are being <a href=\"/sign_in\">redirected</a>.</body></html> [status code: 302] [url] http://192.168.68.70/"
+                            - generic [ref=e690]:
+                              - generic [ref=e691]:
+                                - generic [ref=e692]:
+                                  - generic [ref=e693]:
+                                    - img [ref=e695]
+                                    - generic [ref=e702]:
+                                      - paragraph [ref=e703]: Http Reachability Slo
+                                      - paragraph [ref=e704]: Probe
+                                  - paragraph [ref=e705]: raspberry-pi-foundation-iot-192-168-68-70
+                                - generic [ref=e706]:
+                                  - img [ref=e707]
+                                  - text: Complete
+                              - generic [ref=e710]:
+                                - generic [ref=e711]: Input
+                                - generic [ref=e712]:
+                                  - generic [ref=e713]: device_id
+                                  - generic [ref=e714]: raspberry-pi-foundation-iot-192-168-68-70
+                              - generic [ref=e715]:
+                                - paragraph [ref=e716]: Tool Output
+                                - generic [ref=e717]: "<html><body>You are being <a href=\"/sign_in\">redirected</a>.</body></html> [status code: 302] [url] http://192.168.68.70/"
+                          - paragraph [ref=e718]:
+                            - text: Good — both probes confirm the device is up and responding consistently (302 →
+                            - code [ref=e719]: /sign_in
+                            - text: "). Here's the full onboarding summary:"
+                          - separator [ref=e720]
+                          - 'heading "✅ Onboarding Summary: SolarAssistant (192.168.68.70)" [level=1] [ref=e721]'
+                          - heading "Device Identity" [level=2] [ref=e722]
+                          - table [ref=e724]:
+                            - rowgroup [ref=e725]:
+                              - row "Field Value" [ref=e726]:
+                                - columnheader "Field" [ref=e727]
+                                - columnheader "Value" [ref=e728]
+                            - rowgroup [ref=e729]:
+                              - row "Name raspberry-pi-foundation-iot-192-168-68-70" [ref=e730]:
+                                - cell "Name" [ref=e731]:
+                                  - strong [ref=e732]: Name
+                                - cell "raspberry-pi-foundation-iot-192-168-68-70" [ref=e733]:
+                                  - code [ref=e734]: raspberry-pi-foundation-iot-192-168-68-70
+                              - row "Role Solar inverter monitoring appliance" [ref=e735]:
+                                - cell "Role" [ref=e736]:
+                                  - strong [ref=e737]: Role
+                                - cell "Solar inverter monitoring appliance" [ref=e738]:
+                                  - strong [ref=e739]: Solar inverter monitoring appliance
+                              - row "Software SolarAssistant (Elixir/Phoenix app on Cowboy)" [ref=e740]:
+                                - cell "Software" [ref=e741]:
+                                  - strong [ref=e742]: Software
+                                - cell "SolarAssistant (Elixir/Phoenix app on Cowboy)" [ref=e743]
+                              - row "Hardware Raspberry Pi (Foundation OUI confirmed)" [ref=e744]:
+                                - cell "Hardware" [ref=e745]:
+                                  - strong [ref=e746]: Hardware
+                                - cell "Raspberry Pi (Foundation OUI confirmed)" [ref=e747]
+                              - row "Services HTTP dashboard (:80), MQTT telemetry broker (:1883)" [ref=e748]:
+                                - cell "Services" [ref=e749]:
+                                  - strong [ref=e750]: Services
+                                - cell "HTTP dashboard (:80), MQTT telemetry broker (:1883)" [ref=e751]
+                              - row "Auth Web login at /sign_in, cookie-based sessions" [ref=e752]:
+                                - cell "Auth" [ref=e753]:
+                                  - strong [ref=e754]: Auth
+                                - cell "Web login at /sign_in, cookie-based sessions" [ref=e755]:
+                                  - text: Web login at
+                                  - code [ref=e756]: /sign_in
+                                  - text: ", cookie-based sessions"
+                          - separator [ref=e757]
+                          - heading "Recommended Monitoring Contracts" [level=2] [ref=e758]
+                          - heading "1. 🟢 HTTP Reachability SLO (Critical)" [level=3] [ref=e759]:
+                            - text: 1. 🟢
+                            - strong [ref=e760]: HTTP Reachability SLO
+                            - text: (Critical)
+                          - list [ref=e761]:
+                            - listitem [ref=e762]:
+                              - strong [ref=e763]: "What:"
+                              - text: Poll
+                              - code [ref=e764]: http://192.168.68.70/
+                              - text: every 5 minutes, expect HTTP 200 or 302
+                            - listitem [ref=e765]:
+                              - strong [ref=e766]: "Why:"
+                              - text: If this goes down, you lose solar monitoring and MQTT telemetry — you won't know your battery SOC or if the grid has failed
+                            - listitem [ref=e767]:
+                              - strong [ref=e768]: "Alert:"
+                              - text: If unreachable for >10 minutes
+                          - heading "2. 🟢 HTTP Console Profile (Drift Detection)" [level=3] [ref=e769]:
+                            - text: 2. 🟢
+                            - strong [ref=e770]: HTTP Console Profile
+                            - text: (Drift Detection)
+                          - list [ref=e771]:
+                            - listitem [ref=e772]:
+                              - strong [ref=e773]: "What:"
+                              - text: Periodically verify the page title remains "SolarAssistant" and the favicon hash matches
+                              - code [ref=e774]: 9452d9c9...
+                            - listitem [ref=e775]:
+                              - strong [ref=e776]: "Why:"
+                              - text: Detects if the SD card corrupts, the app crashes, or someone re-images the Pi
+                          - heading "3. 🟡 MQTT Broker Liveness (Recommended)" [level=3] [ref=e777]:
+                            - text: 3. 🟡
+                            - strong [ref=e778]: MQTT Broker Liveness
+                            - text: (Recommended)
+                          - list [ref=e779]:
+                            - listitem [ref=e780]:
+                              - strong [ref=e781]: "What:"
+                              - text: Verify TCP 1883 is accepting connections
+                            - listitem [ref=e782]:
+                              - strong [ref=e783]: "Why:"
+                              - text: MQTT is the primary data path to Home Assistant or other consumers — if it dies, dashboards go stale silently
+                          - heading "4. 🟡 Auth Surface Watch" [level=3] [ref=e784]:
+                            - text: 4. 🟡
+                            - strong [ref=e785]: Auth Surface Watch
+                          - list [ref=e786]:
+                            - listitem [ref=e787]:
+                              - strong [ref=e788]: "What:"
+                              - text: Confirm
+                              - code [ref=e789]: /sign_in
+                              - text: endpoint is present and no unauthenticated paths appear
+                            - listitem [ref=e790]:
+                              - strong [ref=e791]: "Why:"
+                              - text: SolarAssistant updates could inadvertently expose data without auth
+                          - separator [ref=e792]
+                          - heading "Security Recommendations" [level=2] [ref=e793]
+                          - table [ref=e795]:
+                            - rowgroup [ref=e796]:
+                              - row "Priority Action" [ref=e797]:
+                                - columnheader "Priority" [ref=e798]
+                                - columnheader "Action" [ref=e799]
+                            - rowgroup [ref=e800]:
+                              - row "🔴 High Verify MQTT authentication is enabled — by default, Mosquitto on SolarAssistant may allow anonymous access. Check the SolarAssistant settings UI under MQTT configuration." [ref=e801]:
+                                - cell "🔴 High" [ref=e802]:
+                                  - text: 🔴
+                                  - strong [ref=e803]: High
+                                - cell "Verify MQTT authentication is enabled — by default, Mosquitto on SolarAssistant may allow anonymous access. Check the SolarAssistant settings UI under MQTT configuration." [ref=e804]:
+                                  - strong [ref=e805]: Verify MQTT authentication is enabled
+                                  - text: — by default, Mosquitto on SolarAssistant may allow anonymous access. Check the SolarAssistant settings UI under MQTT configuration.
+                              - row "🟡 Medium Network-segment this Pi — place it on an IoT VLAN so MQTT isn't exposed to your entire LAN" [ref=e806]:
+                                - cell "🟡 Medium" [ref=e807]:
+                                  - text: 🟡
+                                  - strong [ref=e808]: Medium
+                                - cell "Network-segment this Pi — place it on an IoT VLAN so MQTT isn't exposed to your entire LAN" [ref=e809]:
+                                  - strong [ref=e810]: Network-segment this Pi
+                                  - text: — place it on an IoT VLAN so MQTT isn't exposed to your entire LAN
+                              - row "🟡 Medium Enable SolarAssistant auto-updates — the appliance supports OTA updates; ensure they're turned on" [ref=e811]:
+                                - cell "🟡 Medium" [ref=e812]:
+                                  - text: 🟡
+                                  - strong [ref=e813]: Medium
+                                - cell "Enable SolarAssistant auto-updates — the appliance supports OTA updates; ensure they're turned on" [ref=e814]:
+                                  - strong [ref=e815]: Enable SolarAssistant auto-updates
+                                  - text: — the appliance supports OTA updates; ensure they're turned on
+                              - row "🟢 Low Consider MQTT TLS — if you integrate with cloud services or cross-VLAN consumers" [ref=e816]:
+                                - cell "🟢 Low" [ref=e817]:
+                                  - text: 🟢
+                                  - strong [ref=e818]: Low
+                                - cell "Consider MQTT TLS — if you integrate with cloud services or cross-VLAN consumers" [ref=e819]:
+                                  - strong [ref=e820]: Consider MQTT TLS
+                                  - text: — if you integrate with cloud services or cross-VLAN consumers
+                          - separator [ref=e821]
+                          - heading "Next Steps — Your Input Needed" [level=2] [ref=e822]
+                          - list [ref=e823]:
+                            - listitem [ref=e824]:
+                              - paragraph [ref=e825]:
+                                - strong [ref=e826]: Do you have SSH access to this Pi?
+                                - text: SolarAssistant appliance images sometimes enable SSH (default user
+                                - code [ref=e827]: pi
+                                - text: ). If so, I can inspect disk health, memory pressure, and the MQTT broker config directly.
+                            - listitem [ref=e828]:
+                              - paragraph [ref=e829]:
+                                - strong [ref=e830]: Is this Pi feeding data to Home Assistant or another system?
+                                - text: Knowing the MQTT consumers helps me set up end-to-end monitoring.
+                            - listitem [ref=e831]:
+                              - paragraph [ref=e832]:
+                                - strong [ref=e833]: Shall I activate the recommended contracts now?
+                                - text: I can enable the HTTP reachability SLO and console profile drift detection immediately — no credentials needed.
+                        - paragraph [ref=e834]: 09:44 PM
+                  - generic [ref=e835]:
+                    - generic [ref=e836]:
+                      - textbox "Ask Steward anything about your environment..." [ref=e837]
+                      - button [disabled]:
+                        - img
+                    - paragraph [ref=e838]: Press Enter to send, Shift+Enter for new line
+  - button "Open Next.js Dev Tools" [ref=e287] [cursor=pointer]:
+    - img [ref=e288]
+  - alert [ref=e291]

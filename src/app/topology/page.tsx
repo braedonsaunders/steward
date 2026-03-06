@@ -49,6 +49,9 @@ interface LayoutEdge {
 const NODE_TYPE_COLORS: Record<GraphNodeType, string> = {
   device: "#3b82f6",
   service: "#10b981",
+  workload: "#f59e0b",
+  assurance: "#ef4444",
+  access_surface: "#14b8a6",
   incident: "#ef4444",
   credential: "#8b5cf6",
   baseline: "#6b7280",
@@ -61,6 +64,9 @@ const NODE_TYPE_COLORS: Record<GraphNodeType, string> = {
 const NODE_TYPE_LABELS: Record<GraphNodeType, string> = {
   device: "Device",
   service: "Service",
+  workload: "Workload",
+  assurance: "Assurance",
+  access_surface: "Access Surface",
   incident: "Incident",
   credential: "Credential",
   baseline: "Baseline",

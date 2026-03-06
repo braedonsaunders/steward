@@ -1,0 +1,36 @@
+[  199422ms] ReferenceError: editingSessionId is not defined
+    at eval (http://localhost:3010/_next/static/chunks/src_0a4972b1._.js?id=%255Bproject%255D%252Fsrc%252Fcomponents%252Fchat-workspace.tsx+%255Bapp-client%255D+%2528ecmascript%2529:1894:63)
+    at Array.map (<anonymous>)
+    at eval (http://localhost:3010/_next/static/chunks/src_0a4972b1._.js?id=%255Bproject%255D%252Fsrc%252Fcomponents%252Fchat-workspace.tsx+%255Bapp-client%255D+%2528ecmascript%2529:1890:60)
+    at Array.map (<anonymous>)
+    at ChatWorkspace (http://localhost:3010/_next/static/chunks/src_0a4972b1._.js?id=%255Bproject%255D%252Fsrc%252Fcomponents%252Fchat-workspace.tsx+%255Bapp-client%255D+%2528ecmascript%2529:1879:49)
+    at Object.react_stack_bottom_frame (http://localhost:3010/_next/static/chunks/node_modules_next_dist_compiled_react-dom_1e674e59._.js:14826:24)
+    at renderWithHooks (http://localhost:3010/_next/static/chunks/node_modules_next_dist_compiled_react-dom_1e674e59._.js:4651:24)
+    at updateFunctionComponent (http://localhost:3010/_next/static/chunks/node_modules_next_dist_compiled_react-dom_1e674e59._.js:6112:21)
+    at beginWork (http://localhost:3010/_next/static/chunks/node_modules_next_dist_compiled_react-dom_1e674e59._.js:6708:24)
+    at runWithFiberInDEV (http://localhost:3010/_next/static/chunks/node_modules_next_dist_compiled_react-dom_1e674e59._.js:965:74)
+    at performUnitOfWork (http://localhost:3010/_next/static/chunks/node_modules_next_dist_compiled_react-dom_1e674e59._.js:9562:97)
+    at workLoopSync (http://localhost:3010/_next/static/chunks/node_modules_next_dist_compiled_react-dom_1e674e59._.js:9456:40)
+    at renderRootSync (http://localhost:3010/_next/static/chunks/node_modules_next_dist_compiled_react-dom_1e674e59._.js:9440:13)
+    at performWorkOnRoot (http://localhost:3010/_next/static/chunks/node_modules_next_dist_compiled_react-dom_1e674e59._.js:9105:47)
+    at performWorkOnRootViaSchedulerTask (http://localhost:3010/_next/static/chunks/node_modules_next_dist_compiled_react-dom_1e674e59._.js:10230:9)
+    at MessagePort.performWorkUntilDeadline (http://localhost:3010/_next/static/chunks/node_modules_next_dist_compiled_a0e4c7b4._.js:2647:64)
+[  207757ms] [WARNING] [Fast Refresh] performing full reload because your application had an unrecoverable error @ http://localhost:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:2297
+[  208345ms] ReferenceError: editingSessionId is not defined
+    at http://localhost:3010/_next/static/chunks/src_0a4972b1._.js:2663:63
+    at Array.map (<anonymous>)
+    at http://localhost:3010/_next/static/chunks/src_0a4972b1._.js:2659:60
+    at Array.map (<anonymous>)
+    at ChatWorkspace (http://localhost:3010/_next/static/chunks/src_0a4972b1._.js:2648:49)
+    at Object.react_stack_bottom_frame (http://localhost:3010/_next/static/chunks/node_modules_next_dist_compiled_react-dom_1e674e59._.js:14826:24)
+    at renderWithHooks (http://localhost:3010/_next/static/chunks/node_modules_next_dist_compiled_react-dom_1e674e59._.js:4651:24)
+    at updateFunctionComponent (http://localhost:3010/_next/static/chunks/node_modules_next_dist_compiled_react-dom_1e674e59._.js:6112:21)
+    at beginWork (http://localhost:3010/_next/static/chunks/node_modules_next_dist_compiled_react-dom_1e674e59._.js:6708:24)
+    at runWithFiberInDEV (http://localhost:3010/_next/static/chunks/node_modules_next_dist_compiled_react-dom_1e674e59._.js:965:74)
+    at performUnitOfWork (http://localhost:3010/_next/static/chunks/node_modules_next_dist_compiled_react-dom_1e674e59._.js:9562:97)
+    at workLoopSync (http://localhost:3010/_next/static/chunks/node_modules_next_dist_compiled_react-dom_1e674e59._.js:9456:40)
+    at renderRootSync (http://localhost:3010/_next/static/chunks/node_modules_next_dist_compiled_react-dom_1e674e59._.js:9440:13)
+    at performWorkOnRoot (http://localhost:3010/_next/static/chunks/node_modules_next_dist_compiled_react-dom_1e674e59._.js:9105:47)
+    at performWorkOnRootViaSchedulerTask (http://localhost:3010/_next/static/chunks/node_modules_next_dist_compiled_react-dom_1e674e59._.js:10230:9)
+    at MessagePort.performWorkUntilDeadline (http://localhost:3010/_next/static/chunks/node_modules_next_dist_compiled_a0e4c7b4._.js:2647:64)
+[  230355ms] [WARNING] [Fast Refresh] performing full reload because your application had an unrecoverable error @ http://localhost:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:2297

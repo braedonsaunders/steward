@@ -9,10 +9,13 @@ export async function GET(request: NextRequest) {
   const auth = getAuthContext(request);
   const usersCount = countAuthUsers();
   const settings = await getAuthSettingsWithSecretFlags();
+  const authenticated = Boolean(auth.user) || auth.source === "token";
+  const authRequired = !auth.authorized;
 
-  if (!auth.user) {
+  if (!authenticated) {
     return NextResponse.json({
       authenticated: false,
+      authRequired,
       requiresBootstrap: usersCount === 0,
       mode: settings.mode,
       apiTokenEnabled: settings.apiTokenEnabled,
@@ -22,6 +25,7 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     authenticated: true,
+    authRequired,
     user: auth.user,
     role: auth.role,
     source: auth.source,
@@ -31,4 +35,3 @@ export async function GET(request: NextRequest) {
     usersCount,
   });
 }
-

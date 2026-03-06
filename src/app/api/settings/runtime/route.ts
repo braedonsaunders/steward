@@ -18,6 +18,25 @@ const schema = z.object({
   enableMdnsDiscovery: z.boolean(),
   enableSsdpDiscovery: z.boolean(),
   enableSnmpProbe: z.boolean(),
+  enableAdvancedNmapFingerprint: z.boolean(),
+  nmapFingerprintTimeoutMs: z.number().int().min(5_000).max(5 * 60 * 1000),
+  incrementalNmapTargets: z.number().int().min(1).max(128),
+  deepNmapTargets: z.number().int().min(1).max(512),
+  enablePacketIntel: z.boolean(),
+  packetIntelDurationSec: z.number().int().min(1).max(60),
+  packetIntelMaxPackets: z.number().int().min(100).max(50_000),
+  packetIntelTopTalkers: z.number().int().min(1).max(100),
+  enableBrowserObservation: z.boolean(),
+  browserObservationTimeoutMs: z.number().int().min(2_000).max(120_000),
+  incrementalBrowserObservationTargets: z.number().int().min(1).max(64),
+  deepBrowserObservationTargets: z.number().int().min(1).max(256),
+  browserObservationCaptureScreenshots: z.boolean(),
+  enableWebResearch: z.boolean(),
+  webResearchTimeoutMs: z.number().int().min(3_000).max(60_000),
+  webResearchMaxResults: z.number().int().min(1).max(10),
+  webResearchDeepReadPages: z.number().int().min(0).max(5),
+  enableDhcpLeaseIntel: z.boolean(),
+  dhcpLeaseCommandTimeoutMs: z.number().int().min(1_000).max(60_000),
   ouiUpdateIntervalMs: z.number().int().min(60 * 60 * 1000).max(30 * 24 * 60 * 60 * 1000),
   laneBEnabled: z.boolean(),
   laneBAllowedEnvironments: z.array(z.enum(["prod", "staging", "dev", "lab"])).max(4),
@@ -30,6 +49,10 @@ const schema = z.object({
   approvalTtlClassDMs: z.number().int().min(60_000).max(12 * 60 * 60 * 1000),
   quarantineThresholdCount: z.number().int().min(1).max(20),
   quarantineThresholdWindowMs: z.number().int().min(60_000).max(24 * 60 * 60 * 1000),
+  availabilityScannerAlertsEnabled: z.boolean(),
+  securityScannerAlertsEnabled: z.boolean(),
+  serviceContractScannerAlertsEnabled: z.boolean(),
+  ignoredIncidentTypes: z.array(z.string().trim().min(1).max(120)).max(100),
 });
 
 export async function GET(request: NextRequest) {
@@ -68,6 +91,18 @@ export async function POST(request: NextRequest) {
       { status: 400 },
     );
   }
+  if (data.deepNmapTargets < data.incrementalNmapTargets) {
+    return NextResponse.json(
+      { error: "deepNmapTargets must be greater than or equal to incrementalNmapTargets" },
+      { status: 400 },
+    );
+  }
+  if (data.deepBrowserObservationTargets < data.incrementalBrowserObservationTargets) {
+    return NextResponse.json(
+      { error: "deepBrowserObservationTargets must be greater than or equal to incrementalBrowserObservationTargets" },
+      { status: 400 },
+    );
+  }
   if (data.laneCMutationsInProd) {
     return NextResponse.json(
       { error: "Lane C mutable mode is not allowed in production" },
@@ -81,11 +116,14 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  stateStore.setRuntimeSettings(data);
+  stateStore.setRuntimeSettings({
+    ...data,
+    ignoredIncidentTypes: Array.from(new Set(data.ignoredIncidentTypes)),
+  });
   await stateStore.addAction({
     actor: "user",
     kind: "config",
-    message: "Updated runtime discovery settings",
+    message: "Updated runtime settings",
     context: data,
   });
 

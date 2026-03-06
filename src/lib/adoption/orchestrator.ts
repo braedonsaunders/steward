@@ -5,12 +5,14 @@ import { generateDeviceAdoptionProfile, type DeviceAdoptionProfile } from "@/lib
 import { getAdoptionRecord, getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
 import { stateStore } from "@/lib/state/store";
 import type {
+  AccessSurface,
   AdoptionQuestion,
   AdoptionRun,
+  Assurance,
+  AssuranceRun,
   Device,
-  DeviceAdapterBinding,
   DeviceCredential,
-  ServiceContract,
+  Workload,
 } from "@/lib/state/types";
 
 const ADOPTION_ONBOARDING_VERSION = 1;
@@ -21,8 +23,13 @@ export interface DeviceAdoptionSnapshot {
   questions: AdoptionQuestion[];
   unresolvedRequiredQuestions: number;
   credentials: DeviceCredential[];
-  bindings: DeviceAdapterBinding[];
-  serviceContracts: ServiceContract[];
+  accessSurfaces: AccessSurface[];
+  workloads: Workload[];
+  assurances: Assurance[];
+  assuranceRuns: AssuranceRun[];
+  // Deprecated compatibility fields while the rest of the app cuts over.
+  bindings: AccessSurface[];
+  serviceContracts: Assurance[];
 }
 
 function nowIso(): string {
@@ -110,10 +117,10 @@ function buildBindings(
   device: Device,
   profile: DeviceAdoptionProfile,
   adapters: AdapterRecord[],
-): DeviceAdapterBinding[] {
+): AccessSurface[] {
   const protocols = protocolSetForBinding(device, profile);
   const createdAt = nowIso();
-  const bindings: DeviceAdapterBinding[] = [];
+  const bindings: AccessSurface[] = [];
 
   for (const protocol of protocols) {
     const scored = adapters
@@ -149,23 +156,86 @@ function buildBindings(
   return bindings;
 }
 
-function buildServiceContracts(device: Device, profile: DeviceAdoptionProfile): ServiceContract[] {
+function buildProposedWorkloadsAndAssurances(
+  device: Device,
+  profile: DeviceAdoptionProfile,
+): { workloads: Workload[]; assurances: Assurance[] } {
   const createdAt = nowIso();
-  return profile.criticalServices.slice(0, 24).map((service) => ({
-    id: randomUUID(),
-    deviceId: device.id,
-    serviceKey: service.serviceKey,
-    displayName: service.displayName,
-    criticality: service.criticality,
-    desiredState: "running",
-    checkIntervalSec: service.criticality === "high" ? 30 : 120,
-    policyJson: {
-      reason: service.reason,
-      source: "adoption_profile",
-    },
-    createdAt,
-    updatedAt: createdAt,
-  }));
+  const workloads: Workload[] = [];
+  const assurances: Assurance[] = [];
+
+  for (const workload of profile.workloads.slice(0, 24)) {
+    const workloadId = randomUUID();
+    workloads.push({
+      id: workloadId,
+      deviceId: device.id,
+      workloadKey: workload.workloadKey,
+      displayName: workload.displayName,
+      category: "unknown",
+      criticality: workload.criticality,
+      source: "onboarding_profile",
+      summary: workload.reason,
+      evidenceJson: {
+        proposedFrom: "adoption_profile",
+        workloadKey: workload.workloadKey,
+      },
+      createdAt,
+      updatedAt: createdAt,
+    });
+    assurances.push({
+      id: randomUUID(),
+      deviceId: device.id,
+      workloadId,
+      assuranceKey: workload.workloadKey,
+      displayName: workload.displayName,
+      criticality: workload.criticality,
+      desiredState: "running",
+      checkIntervalSec: workload.criticality === "high" ? 30 : 120,
+      monitorType: "service_presence",
+      requiredProtocols: [],
+      rationale: workload.reason,
+      configJson: {
+        reason: workload.reason,
+        source: "adoption_profile",
+      },
+      serviceKey: workload.workloadKey,
+      policyJson: {
+        reason: workload.reason,
+        source: "adoption_profile",
+      },
+      createdAt,
+      updatedAt: createdAt,
+    });
+  }
+
+  return { workloads, assurances };
+}
+
+function buildQuestions(
+  deviceId: string,
+  runId: string,
+  profile: DeviceAdoptionProfile,
+  existingQuestions: AdoptionQuestion[],
+): AdoptionQuestion[] {
+  const createdAt = nowIso();
+  const existingByKey = new Map(existingQuestions.map((question) => [question.questionKey, question]));
+
+  return profile.questions.slice(0, 8).map((draft) => {
+    const existing = existingByKey.get(draft.questionKey);
+    return {
+      id: existing?.id ?? randomUUID(),
+      runId,
+      deviceId,
+      questionKey: draft.questionKey,
+      prompt: draft.prompt,
+      options: draft.options,
+      required: draft.required,
+      answerJson: existing?.answerJson,
+      answeredAt: existing?.answeredAt,
+      createdAt: existing?.createdAt ?? createdAt,
+      updatedAt: createdAt,
+    };
+  });
 }
 
 function upsertDeviceAdoptionMetadata(device: Device, run: AdoptionRun, profile: DeviceAdoptionProfile): Device {
@@ -186,7 +256,9 @@ function upsertDeviceAdoptionMetadata(device: Device, run: AdoptionRun, profile:
         profileSummary: profile.summary,
         profileConfidence: profile.confidence,
         requiredCredentials: profile.credentialIntents.map((intent) => intent.protocol),
-        serviceContractCount: profile.criticalServices.length,
+        workloadCount: profile.workloads.length,
+        assuranceCount: profile.workloads.length,
+        serviceContractCount: profile.workloads.length,
         lastProfiledAt: run.updatedAt,
       },
     },
@@ -202,8 +274,10 @@ export async function getDeviceAdoptionSnapshot(deviceId: string): Promise<Devic
     : [];
   const unresolvedRequiredQuestions = questions.filter((question) => question.required && !question.answerJson).length;
   const credentials = stateStore.getDeviceCredentials(deviceId);
-  const bindings = stateStore.getDeviceAdapterBindings(deviceId);
-  const serviceContracts = stateStore.getServiceContracts(deviceId);
+  const accessSurfaces = stateStore.getAccessSurfaces(deviceId);
+  const workloads = stateStore.getWorkloads(deviceId);
+  const assurances = stateStore.getAssurances(deviceId);
+  const assuranceRuns = stateStore.getLatestAssuranceRuns(deviceId);
 
   return {
     deviceId,
@@ -211,8 +285,12 @@ export async function getDeviceAdoptionSnapshot(deviceId: string): Promise<Devic
     questions,
     unresolvedRequiredQuestions,
     credentials,
-    bindings,
-    serviceContracts,
+    accessSurfaces,
+    workloads,
+    assurances,
+    assuranceRuns,
+    bindings: accessSurfaces,
+    serviceContracts: assurances,
   };
 }
 
@@ -232,7 +310,10 @@ export async function startDeviceAdoption(
 
   const now = nowIso();
   const existing = stateStore.getLatestAdoptionRun(deviceId);
-  const existingServiceContractsCount = stateStore.getServiceContracts(deviceId).length;
+  const existingAssuranceCount = stateStore.getAssurances(deviceId).length;
+  const existingQuestions = existing && !options?.force
+    ? stateStore.getAdoptionQuestions(deviceId, { runId: existing.id })
+    : [];
   const run: AdoptionRun = {
     id: existing && !options?.force ? existing.id : randomUUID(),
     deviceId,
@@ -250,7 +331,7 @@ export async function startDeviceAdoption(
   const adapters = activeAdapters(adapterRegistry.getAdapterRecords());
   const profile = await generateDeviceAdoptionProfile(device, {
     adapterIds: adapters.map((adapter) => adapter.id),
-    existingServiceContractsCount,
+    existingAssuranceCount,
   });
 
   const profiledRun: AdoptionRun = {
@@ -267,37 +348,47 @@ export async function startDeviceAdoption(
   await stateStore.upsertDevice(nextDevice);
 
   const bindings = buildBindings(nextDevice, profile, adapters);
-  stateStore.clearDeviceAdapterBindings(deviceId);
+  stateStore.clearAccessSurfaces(deviceId);
   for (const binding of bindings) {
-    stateStore.upsertDeviceAdapterBinding(binding);
+    stateStore.upsertAccessSurface(binding);
   }
 
-  const existingContracts = stateStore.getServiceContracts(deviceId);
-  const proposedContracts = buildServiceContracts(nextDevice, profile);
-
-  const questions: AdoptionQuestion[] = [];
+  const existingAssurances = stateStore.getAssurances(deviceId);
+  const existingWorkloads = stateStore.getWorkloads(deviceId);
+  const proposedModel = buildProposedWorkloadsAndAssurances(nextDevice, profile);
+  const questions = buildQuestions(deviceId, profiledRun.id, profile, existingQuestions);
   stateStore.deleteAdoptionQuestionsForRun(profiledRun.id);
   for (const question of questions) {
     stateStore.upsertAdoptionQuestion(question);
   }
 
-  const unresolvedRequired = questions.filter((question) => question.required).length;
+  const unresolvedRequired = questions.filter((question) => question.required && !question.answerJson).length;
   const validatedProtocols = stateStore.getValidatedCredentialProtocols(deviceId);
   const requiredProtocols = Array.from(new Set(profile.credentialIntents.map((intent) => intent.protocol)));
   const missingRequiredCredentials = requiredProtocols.filter(
     (protocol) => !validatedProtocols.includes(protocol),
   );
+  const nextStage: AdoptionRun["stage"] = unresolvedRequired > 0
+    ? "questions"
+    : missingRequiredCredentials.length > 0
+      ? "credentials"
+      : "activation";
   const terminalRun: AdoptionRun = {
     ...profiledRun,
     status: "awaiting_user",
-    stage: missingRequiredCredentials.length > 0 ? "credentials" : "activation",
+    stage: nextStage,
     profileJson: {
       ...profiledRun.profileJson,
-      proposedContracts,
+      proposedWorkloads: proposedModel.workloads,
+      proposedAssurances: proposedModel.assurances,
+      proposedContracts: proposedModel.assurances,
       onboardingConversationRequired: true,
       missingRequiredCredentials,
-      existingServiceContractsCount,
-      existingServiceContractKeys: existingContracts.map((contract) => contract.serviceKey),
+      existingAssuranceCount,
+      existingServiceContractsCount: existingAssuranceCount,
+      existingAssuranceKeys: existingAssurances.map((contract) => contract.assuranceKey),
+      existingServiceContractKeys: existingAssurances.map((contract) => contract.serviceKey),
+      existingWorkloadKeys: existingWorkloads.map((workload) => workload.workloadKey),
     },
     updatedAt: nowIso(),
   };
@@ -311,7 +402,9 @@ export async function startDeviceAdoption(
         ...getAdoptionRecord(nextDevice),
         runStatus: terminalRun.status,
         runStage: terminalRun.stage,
-        serviceContractCount: existingContracts.length,
+        workloadCount: existingWorkloads.length,
+        assuranceCount: existingAssurances.length,
+        serviceContractCount: existingAssurances.length,
         unresolvedRequiredQuestions: unresolvedRequired,
       },
     },
@@ -341,6 +434,28 @@ export async function finalizeAdoptionRunIfReady(deviceId: string): Promise<Devi
     return getDeviceAdoptionSnapshot(deviceId);
   }
 
+  const syncDeviceAdoptionStage = async (
+    stageRun: AdoptionRun,
+    unresolvedQuestions: number,
+  ): Promise<void> => {
+    const device = stateStore.getDeviceById(deviceId);
+    if (!device) return;
+
+    await stateStore.upsertDevice({
+      ...device,
+      metadata: {
+        ...device.metadata,
+        adoption: {
+          ...getAdoptionRecord(device),
+          runStatus: stageRun.status,
+          runStage: stageRun.stage,
+          unresolvedRequiredQuestions: unresolvedQuestions,
+        },
+      },
+      lastChangedAt: nowIso(),
+    });
+  };
+
   const questions = stateStore.getAdoptionQuestions(deviceId, { runId: run.id });
   const unresolvedRequired = questions.filter((question) => question.required && !question.answerJson).length;
   if (unresolvedRequired > 0) {
@@ -351,6 +466,39 @@ export async function finalizeAdoptionRunIfReady(deviceId: string): Promise<Devi
       updatedAt: nowIso(),
     };
     stateStore.upsertAdoptionRun(waiting);
+    await syncDeviceAdoptionStage(waiting, unresolvedRequired);
+    return getDeviceAdoptionSnapshot(deviceId);
+  }
+
+  const profileCredentialIntents = Array.isArray(run.profileJson.credentialIntents)
+    ? run.profileJson.credentialIntents
+      .filter((item): item is { protocol: string } => (
+        typeof item === "object"
+        && item !== null
+        && "protocol" in item
+        && typeof (item as { protocol?: unknown }).protocol === "string"
+      ))
+    : [];
+  const requiredProtocols = Array.from(
+    new Set(profileCredentialIntents.map((intent) => intent.protocol.trim().toLowerCase()).filter(Boolean)),
+  );
+  const validatedProtocols = new Set(
+    stateStore.getValidatedCredentialProtocols(deviceId).map((protocol) => protocol.trim().toLowerCase()),
+  );
+  const missingRequiredCredentials = requiredProtocols.filter((protocol) => !validatedProtocols.has(protocol));
+  if (missingRequiredCredentials.length > 0) {
+    const waiting: AdoptionRun = {
+      ...run,
+      status: "awaiting_user",
+      stage: "credentials",
+      profileJson: {
+        ...run.profileJson,
+        missingRequiredCredentials,
+      },
+      updatedAt: nowIso(),
+    };
+    stateStore.upsertAdoptionRun(waiting);
+    await syncDeviceAdoptionStage(waiting, 0);
     return getDeviceAdoptionSnapshot(deviceId);
   }
 

@@ -4,7 +4,7 @@ import { z } from "zod";
 import { isAuthorized } from "@/lib/auth/guard";
 import {
   getOnboardingSession,
-  synthesizeOnboardingContracts,
+  synthesizeOnboardingModel,
   type OnboardingSynthesis,
 } from "@/lib/adoption/conversation";
 import { getAdoptionRecord } from "@/lib/state/device-adoption";
@@ -73,7 +73,7 @@ export async function GET(
       { status: 400 },
     );
   }
-  const synthesis = await synthesizeOnboardingContracts(device, session.id);
+  const synthesis = await synthesizeOnboardingModel(device, session.id);
   await saveSynthesis(id, synthesis);
   return NextResponse.json({ synthesis, source: "generated" });
 }
@@ -102,26 +102,63 @@ export async function POST(
     return NextResponse.json({ error: "No onboarding proposal found. Generate one first." }, { status: 400 });
   }
 
-  const selected = stored.contracts.filter((contract) => payload.data.proposalIds.includes(contract.id));
+  const selected = (stored.assurances ?? stored.contracts ?? [])
+    .filter((assurance) => payload.data.proposalIds.includes(assurance.id));
   if (selected.length === 0) {
     return NextResponse.json({ error: "No matching proposals selected." }, { status: 400 });
   }
 
   const existingByServiceKey = new Map(
-    stateStore.getServiceContracts(id).map((contract) => [contract.serviceKey.toLowerCase(), contract]),
+    stateStore.getAssurances(id).map((contract) => [contract.serviceKey.toLowerCase(), contract]),
+  );
+  const existingWorkloadsByKey = new Map(
+    stateStore.getWorkloads(id).map((workload) => [workload.workloadKey.toLowerCase(), workload]),
   );
 
   const now = new Date().toISOString();
   const upserted = selected.map((proposal) => {
-    const existing = existingByServiceKey.get(proposal.serviceKey.toLowerCase());
-    return stateStore.upsertServiceContract({
+    const assuranceKey = proposal.assuranceKey.trim();
+    const workloadKey = assuranceKey.toLowerCase();
+    const workload = existingWorkloadsByKey.get(workloadKey)
+      ?? stateStore.upsertWorkload({
+        id: randomUUID(),
+        deviceId: id,
+        workloadKey: assuranceKey,
+        displayName: proposal.displayName,
+        category: "unknown",
+        criticality: proposal.criticality,
+        source: "onboarding_conversation",
+        summary: proposal.rationale,
+        evidenceJson: {
+          source: "onboarding_conversation",
+          proposalId: proposal.id,
+        },
+        createdAt: now,
+        updatedAt: now,
+      });
+    existingWorkloadsByKey.set(workloadKey, workload);
+
+    const existing = existingByServiceKey.get(assuranceKey.toLowerCase());
+    const assurance = stateStore.upsertAssurance({
       id: existing?.id ?? randomUUID(),
       deviceId: id,
-      serviceKey: proposal.serviceKey,
+      workloadId: workload.id,
+      assuranceKey,
+      serviceKey: assuranceKey,
       displayName: proposal.displayName,
       criticality: proposal.criticality,
       desiredState: "running",
       checkIntervalSec: proposal.checkIntervalSec,
+      monitorType: proposal.monitorType,
+      requiredProtocols: proposal.requiredProtocols,
+      rationale: proposal.rationale,
+      configJson: {
+        ...(existing?.configJson ?? existing?.policyJson ?? {}),
+        source: "onboarding_conversation",
+        monitorType: proposal.monitorType,
+        requiredProtocols: proposal.requiredProtocols,
+        rationale: proposal.rationale,
+      },
       policyJson: {
         ...(existing?.policyJson ?? {}),
         source: "onboarding_conversation",
@@ -132,6 +169,8 @@ export async function POST(
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     });
+    existingByServiceKey.set(assuranceKey.toLowerCase(), assurance);
+    return assurance;
   });
 
   const run = stateStore.getLatestAdoptionRun(id);
@@ -159,7 +198,9 @@ export async function POST(
           runStatus: "completed",
           runStage: "completed",
           unresolvedRequiredQuestions: 0,
-          serviceContractCount: stateStore.getServiceContracts(id).length,
+          workloadCount: stateStore.getWorkloads(id).length,
+          assuranceCount: stateStore.getAssurances(id).length,
+          serviceContractCount: stateStore.getAssurances(id).length,
           profileSummary: stored.summary,
         },
       },
@@ -170,7 +211,7 @@ export async function POST(
   await stateStore.addAction({
     actor: "user",
     kind: "config",
-    message: `Applied ${upserted.length} onboarding contract recommendation(s) for ${device.name}`,
+    message: `Applied ${upserted.length} onboarding workload assurance recommendation(s) for ${device.name}`,
     context: {
       deviceId: id,
       proposalIds: payload.data.proposalIds,
@@ -180,7 +221,9 @@ export async function POST(
 
   return NextResponse.json({
     applied: upserted,
-    contracts: stateStore.getServiceContracts(id),
+    workloads: stateStore.getWorkloads(id),
+    assurances: stateStore.getAssurances(id),
+    contracts: stateStore.getAssurances(id),
     onboardingCompleted: shouldComplete,
   });
 }

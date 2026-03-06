@@ -16,19 +16,26 @@ import {
   ensureDefaults,
 } from "@/lib/state/defaults";
 import type {
+  AccessSurface,
   ActionLog,
   AdoptionQuestion,
   AdoptionRun,
+  Assurance,
+  AssuranceRun,
   AgentRunRecord,
   AuthSettings,
   ChatMessage,
   ChatSession,
+  CredentialAccessLog,
   DailyDigest,
   Device,
   DeviceAdapterBinding,
   DeviceBaseline,
   DeviceCredential,
   DeviceFinding,
+  DeviceWidget,
+  DeviceWidgetOperationRun,
+  DeviceWidgetRuntimeState,
   DiscoveryObservation,
   DiscoveryObservationInput,
   GraphEdge,
@@ -45,6 +52,7 @@ import type {
   SettingsHistoryEntry,
   StewardState,
   SystemSettings,
+  Workload,
 } from "@/lib/state/types";
 
 /* ---------- Row <-> Domain helpers ---------- */
@@ -236,6 +244,13 @@ function playbookRunFromRow(row: Record<string, unknown>): PlaybookRun {
       decision: (policyEvaluationRaw.decision as PlaybookRun["policyEvaluation"]["decision"]) ?? "REQUIRE_APPROVAL",
       ruleId: policyEvaluationRaw.ruleId ?? null,
       reason: String(policyEvaluationRaw.reason ?? "Policy evaluation unavailable"),
+      riskScore: Number.isFinite(Number(policyEvaluationRaw.riskScore))
+        ? Math.max(0, Math.min(1, Number(policyEvaluationRaw.riskScore)))
+        : 0.5,
+      riskFactors: Array.isArray(policyEvaluationRaw.riskFactors)
+        ? policyEvaluationRaw.riskFactors
+          .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+        : [],
       evaluatedAt: String(policyEvaluationRaw.evaluatedAt ?? row.createdAt ?? new Date().toISOString()),
       inputs: {
         actionClass: (policyInputsRaw.actionClass as PlaybookRun["policyEvaluation"]["inputs"]["actionClass"])
@@ -338,7 +353,7 @@ function deviceCredentialFromRow(row: Record<string, unknown>): DeviceCredential
   };
 }
 
-function deviceAdapterBindingFromRow(row: Record<string, unknown>): DeviceAdapterBinding {
+function accessSurfaceFromRow(row: Record<string, unknown>): AccessSurface {
   return {
     id: String(row.id),
     deviceId: String(row.deviceId),
@@ -353,19 +368,79 @@ function deviceAdapterBindingFromRow(row: Record<string, unknown>): DeviceAdapte
   };
 }
 
-function serviceContractFromRow(row: Record<string, unknown>): ServiceContract {
+function workloadFromRow(row: Record<string, unknown>): Workload {
   return {
     id: String(row.id),
     deviceId: String(row.deviceId),
-    serviceKey: String(row.serviceKey),
+    workloadKey: String(row.workloadKey),
     displayName: String(row.displayName),
-    criticality: row.criticality as ServiceContract["criticality"],
-    desiredState: row.desiredState as ServiceContract["desiredState"],
-    checkIntervalSec: Number(row.checkIntervalSec ?? 60),
-    policyJson: JSON.parse(String(row.policyJson ?? "{}")) as Record<string, unknown>,
+    category: row.category as Workload["category"],
+    criticality: row.criticality as Workload["criticality"],
+    source: row.source as Workload["source"],
+    summary: row.summary ? String(row.summary) : undefined,
+    evidenceJson: JSON.parse(String(row.evidenceJson ?? "{}")) as Record<string, unknown>,
     createdAt: String(row.createdAt),
     updatedAt: String(row.updatedAt),
   };
+}
+
+function assuranceFromRow(row: Record<string, unknown>): Assurance {
+  const configJson = JSON.parse(String(row.configJson ?? row.policyJson ?? "{}")) as Record<string, unknown>;
+  const policyJson = JSON.parse(String(row.policyJson ?? row.configJson ?? "{}")) as Record<string, unknown>;
+  const requiredProtocols = JSON.parse(String(row.requiredProtocols ?? "[]")) as string[];
+  const assuranceKey = row.assuranceKey ? String(row.assuranceKey) : String(row.serviceKey ?? "");
+  const serviceKey = row.serviceKey ? String(row.serviceKey) : assuranceKey;
+  return {
+    id: String(row.id),
+    deviceId: String(row.deviceId),
+    workloadId: row.workloadId ? String(row.workloadId) : undefined,
+    assuranceKey,
+    displayName: String(row.displayName),
+    criticality: row.criticality as Assurance["criticality"],
+    desiredState: row.desiredState as Assurance["desiredState"],
+    checkIntervalSec: Number(row.checkIntervalSec ?? 60),
+    monitorType: row.monitorType ? String(row.monitorType) : undefined,
+    requiredProtocols: Array.isArray(requiredProtocols) ? requiredProtocols : [],
+    rationale: row.rationale ? String(row.rationale) : undefined,
+    configJson,
+    createdAt: String(row.createdAt),
+    updatedAt: String(row.updatedAt),
+    serviceKey,
+    policyJson,
+  };
+}
+
+function assuranceRunFromRow(row: Record<string, unknown>): AssuranceRun {
+  return {
+    id: String(row.id),
+    assuranceId: String(row.assuranceId),
+    deviceId: String(row.deviceId),
+    workloadId: row.workloadId ? String(row.workloadId) : undefined,
+    status: row.status as AssuranceRun["status"],
+    summary: String(row.summary),
+    evidenceJson: JSON.parse(String(row.evidenceJson ?? "{}")) as Record<string, unknown>,
+    evaluatedAt: String(row.evaluatedAt),
+  };
+}
+
+function slugifyKey(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+/, "")
+    .replace(/-+$/, "")
+    .slice(0, 64);
+}
+
+function inferWorkloadCategoryFromText(value: string): Workload["category"] {
+  const text = value.toLowerCase();
+  if (/\b(mysql|postgres|redis|mongo|database|db)\b/.test(text)) return "data";
+  if (/\b(nginx|apache|proxy|traefik|haproxy|web|api)\b/.test(text)) return "application";
+  if (/\b(dns|dhcp|gateway|router|switch|firewall|vpn)\b/.test(text)) return "network";
+  if (/\b(storage|nas|nfs|smb|cifs|minio)\b/.test(text)) return "storage";
+  if (/\b(backup|cron|queue|scheduler|worker|replication|sync)\b/.test(text)) return "background";
+  if (/\b(metrics|monitor|telemetry|logging|prometheus|grafana)\b/.test(text)) return "telemetry";
+  return "unknown";
 }
 
 function deviceFindingFromRow(row: Record<string, unknown>): DeviceFinding {
@@ -381,6 +456,60 @@ function deviceFindingFromRow(row: Record<string, unknown>): DeviceFinding {
     status: row.status as DeviceFinding["status"],
     firstSeenAt: String(row.firstSeenAt),
     lastSeenAt: String(row.lastSeenAt),
+  };
+}
+
+function deviceWidgetFromRow(row: Record<string, unknown>): DeviceWidget {
+  return {
+    id: String(row.id),
+    deviceId: String(row.deviceId),
+    slug: String(row.slug),
+    name: String(row.name),
+    description: row.description ? String(row.description) : undefined,
+    status: row.status as DeviceWidget["status"],
+    html: String(row.html ?? ""),
+    css: String(row.css ?? ""),
+    js: String(row.js ?? ""),
+    capabilities: JSON.parse(String(row.capabilitiesJson ?? "[]")) as DeviceWidget["capabilities"],
+    sourcePrompt: row.sourcePrompt ? String(row.sourcePrompt) : undefined,
+    createdBy: row.createdBy as DeviceWidget["createdBy"],
+    revision: Number(row.revision ?? 1),
+    createdAt: String(row.createdAt),
+    updatedAt: String(row.updatedAt),
+  };
+}
+
+function deviceWidgetRuntimeStateFromRow(row: Record<string, unknown>): DeviceWidgetRuntimeState {
+  return {
+    widgetId: String(row.widgetId),
+    deviceId: String(row.deviceId),
+    stateJson: JSON.parse(String(row.stateJson ?? "{}")) as Record<string, unknown>,
+    updatedAt: String(row.updatedAt),
+  };
+}
+
+function deviceWidgetOperationRunFromRow(row: Record<string, unknown>): DeviceWidgetOperationRun {
+  return {
+    id: String(row.id),
+    widgetId: String(row.widgetId),
+    deviceId: String(row.deviceId),
+    widgetRevision: Number(row.widgetRevision ?? 1),
+    operationKind: row.operationKind as DeviceWidgetOperationRun["operationKind"],
+    operationMode: row.operationMode as DeviceWidgetOperationRun["operationMode"],
+    brokerProtocol: row.brokerProtocol ? row.brokerProtocol as DeviceWidgetOperationRun["brokerProtocol"] : undefined,
+    status: row.status as DeviceWidgetOperationRun["status"],
+    phase: row.phase as DeviceWidgetOperationRun["phase"],
+    proof: row.proof as DeviceWidgetOperationRun["proof"],
+    approvalRequired: Number(row.approvalRequired ?? 0) > 0,
+    policyDecision: row.policyDecision as DeviceWidgetOperationRun["policyDecision"],
+    policyReason: String(row.policyReason ?? ""),
+    approved: Number(row.approved ?? 0) > 0,
+    idempotencyKey: String(row.idempotencyKey ?? ""),
+    summary: String(row.summary ?? ""),
+    output: String(row.output ?? ""),
+    operationJson: JSON.parse(String(row.operationJson ?? "{}")) as Record<string, unknown>,
+    detailsJson: JSON.parse(String(row.detailsJson ?? "{}")) as Record<string, unknown>,
+    createdAt: String(row.createdAt),
   };
 }
 
@@ -538,6 +667,64 @@ class StateStore {
       enableMdnsDiscovery: asBool(raw.enableMdnsDiscovery, defaults.enableMdnsDiscovery),
       enableSsdpDiscovery: asBool(raw.enableSsdpDiscovery, defaults.enableSsdpDiscovery),
       enableSnmpProbe: asBool(raw.enableSnmpProbe, defaults.enableSnmpProbe),
+      enableAdvancedNmapFingerprint: asBool(raw.enableAdvancedNmapFingerprint, defaults.enableAdvancedNmapFingerprint),
+      nmapFingerprintTimeoutMs: asPositiveInt(raw.nmapFingerprintTimeoutMs, defaults.nmapFingerprintTimeoutMs),
+      incrementalNmapTargets: Math.max(1, asPositiveInt(raw.incrementalNmapTargets, defaults.incrementalNmapTargets)),
+      deepNmapTargets: Math.max(
+        1,
+        asPositiveInt(raw.deepNmapTargets, defaults.deepNmapTargets),
+      ),
+      enablePacketIntel: asBool(raw.enablePacketIntel, defaults.enablePacketIntel),
+      packetIntelDurationSec: Math.max(
+        1,
+        asPositiveInt(raw.packetIntelDurationSec, defaults.packetIntelDurationSec),
+      ),
+      packetIntelMaxPackets: Math.max(
+        100,
+        asPositiveInt(raw.packetIntelMaxPackets, defaults.packetIntelMaxPackets),
+      ),
+      packetIntelTopTalkers: Math.max(
+        1,
+        asPositiveInt(raw.packetIntelTopTalkers, defaults.packetIntelTopTalkers),
+      ),
+      enableBrowserObservation: asBool(raw.enableBrowserObservation, defaults.enableBrowserObservation),
+      browserObservationTimeoutMs: asPositiveInt(
+        raw.browserObservationTimeoutMs,
+        defaults.browserObservationTimeoutMs,
+      ),
+      incrementalBrowserObservationTargets: Math.max(
+        1,
+        asPositiveInt(
+          raw.incrementalBrowserObservationTargets,
+          defaults.incrementalBrowserObservationTargets,
+        ),
+      ),
+      deepBrowserObservationTargets: Math.max(
+        1,
+        asPositiveInt(raw.deepBrowserObservationTargets, defaults.deepBrowserObservationTargets),
+      ),
+      browserObservationCaptureScreenshots: asBool(
+        raw.browserObservationCaptureScreenshots,
+        defaults.browserObservationCaptureScreenshots,
+      ),
+      enableWebResearch: asBool(raw.enableWebResearch, defaults.enableWebResearch),
+      webResearchTimeoutMs: asPositiveInt(raw.webResearchTimeoutMs, defaults.webResearchTimeoutMs),
+      webResearchMaxResults: Math.max(
+        1,
+        asPositiveInt(raw.webResearchMaxResults, defaults.webResearchMaxResults),
+      ),
+      webResearchDeepReadPages: (() => {
+        const parsed = Number(raw.webResearchDeepReadPages);
+        if (Number.isFinite(parsed) && parsed >= 0) {
+          return Math.floor(parsed);
+        }
+        return defaults.webResearchDeepReadPages;
+      })(),
+      enableDhcpLeaseIntel: asBool(raw.enableDhcpLeaseIntel, defaults.enableDhcpLeaseIntel),
+      dhcpLeaseCommandTimeoutMs: asPositiveInt(
+        raw.dhcpLeaseCommandTimeoutMs,
+        defaults.dhcpLeaseCommandTimeoutMs,
+      ),
       ouiUpdateIntervalMs: asPositiveInt(raw.ouiUpdateIntervalMs, defaults.ouiUpdateIntervalMs),
       laneBEnabled: asBool(raw.laneBEnabled, defaults.laneBEnabled),
       laneBAllowedEnvironments: asStringArray(
@@ -558,6 +745,25 @@ class StateStore {
       quarantineThresholdWindowMs: asPositiveInt(
         raw.quarantineThresholdWindowMs,
         defaults.quarantineThresholdWindowMs,
+      ),
+      availabilityScannerAlertsEnabled: asBool(
+        raw.availabilityScannerAlertsEnabled,
+        defaults.availabilityScannerAlertsEnabled,
+      ),
+      securityScannerAlertsEnabled: asBool(
+        raw.securityScannerAlertsEnabled,
+        defaults.securityScannerAlertsEnabled,
+      ),
+      serviceContractScannerAlertsEnabled: asBool(
+        raw.serviceContractScannerAlertsEnabled,
+        defaults.serviceContractScannerAlertsEnabled,
+      ),
+      ignoredIncidentTypes: Array.from(
+        new Set(
+          asStringArray(raw.ignoredIncidentTypes, defaults.ignoredIncidentTypes)
+            .map((value) => value.trim())
+            .filter((value) => value.length > 0),
+        ),
       ),
     };
   }
@@ -757,6 +963,25 @@ class StateStore {
       enableMdnsDiscovery: map.get("runtime.enableMdnsDiscovery"),
       enableSsdpDiscovery: map.get("runtime.enableSsdpDiscovery"),
       enableSnmpProbe: map.get("runtime.enableSnmpProbe"),
+      enableAdvancedNmapFingerprint: map.get("runtime.enableAdvancedNmapFingerprint"),
+      nmapFingerprintTimeoutMs: map.get("runtime.nmapFingerprintTimeoutMs"),
+      incrementalNmapTargets: map.get("runtime.incrementalNmapTargets"),
+      deepNmapTargets: map.get("runtime.deepNmapTargets"),
+      enablePacketIntel: map.get("runtime.enablePacketIntel"),
+      packetIntelDurationSec: map.get("runtime.packetIntelDurationSec"),
+      packetIntelMaxPackets: map.get("runtime.packetIntelMaxPackets"),
+      packetIntelTopTalkers: map.get("runtime.packetIntelTopTalkers"),
+      enableBrowserObservation: map.get("runtime.enableBrowserObservation"),
+      browserObservationTimeoutMs: map.get("runtime.browserObservationTimeoutMs"),
+      incrementalBrowserObservationTargets: map.get("runtime.incrementalBrowserObservationTargets"),
+      deepBrowserObservationTargets: map.get("runtime.deepBrowserObservationTargets"),
+      browserObservationCaptureScreenshots: map.get("runtime.browserObservationCaptureScreenshots"),
+      enableWebResearch: map.get("runtime.enableWebResearch"),
+      webResearchTimeoutMs: map.get("runtime.webResearchTimeoutMs"),
+      webResearchMaxResults: map.get("runtime.webResearchMaxResults"),
+      webResearchDeepReadPages: map.get("runtime.webResearchDeepReadPages"),
+      enableDhcpLeaseIntel: map.get("runtime.enableDhcpLeaseIntel"),
+      dhcpLeaseCommandTimeoutMs: map.get("runtime.dhcpLeaseCommandTimeoutMs"),
       ouiUpdateIntervalMs: map.get("runtime.ouiUpdateIntervalMs"),
       laneBEnabled: map.get("runtime.laneBEnabled"),
       laneBAllowedEnvironments: map.get("runtime.laneBAllowedEnvironments"),
@@ -769,6 +994,10 @@ class StateStore {
       approvalTtlClassDMs: map.get("runtime.approvalTtlClassDMs"),
       quarantineThresholdCount: map.get("runtime.quarantineThresholdCount"),
       quarantineThresholdWindowMs: map.get("runtime.quarantineThresholdWindowMs"),
+      availabilityScannerAlertsEnabled: map.get("runtime.availabilityScannerAlertsEnabled"),
+      securityScannerAlertsEnabled: map.get("runtime.securityScannerAlertsEnabled"),
+      serviceContractScannerAlertsEnabled: map.get("runtime.serviceContractScannerAlertsEnabled"),
+      ignoredIncidentTypes: map.get("runtime.ignoredIncidentTypes"),
     });
   }
 
@@ -895,6 +1124,25 @@ class StateStore {
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.enableMdnsDiscovery', ?)").run(state.runtimeSettings.enableMdnsDiscovery ? "true" : "false");
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.enableSsdpDiscovery', ?)").run(state.runtimeSettings.enableSsdpDiscovery ? "true" : "false");
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.enableSnmpProbe', ?)").run(state.runtimeSettings.enableSnmpProbe ? "true" : "false");
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.enableAdvancedNmapFingerprint', ?)").run(state.runtimeSettings.enableAdvancedNmapFingerprint ? "true" : "false");
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.nmapFingerprintTimeoutMs', ?)").run(String(state.runtimeSettings.nmapFingerprintTimeoutMs));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.incrementalNmapTargets', ?)").run(String(state.runtimeSettings.incrementalNmapTargets));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.deepNmapTargets', ?)").run(String(state.runtimeSettings.deepNmapTargets));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.enablePacketIntel', ?)").run(state.runtimeSettings.enablePacketIntel ? "true" : "false");
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.packetIntelDurationSec', ?)").run(String(state.runtimeSettings.packetIntelDurationSec));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.packetIntelMaxPackets', ?)").run(String(state.runtimeSettings.packetIntelMaxPackets));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.packetIntelTopTalkers', ?)").run(String(state.runtimeSettings.packetIntelTopTalkers));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.enableBrowserObservation', ?)").run(state.runtimeSettings.enableBrowserObservation ? "true" : "false");
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.browserObservationTimeoutMs', ?)").run(String(state.runtimeSettings.browserObservationTimeoutMs));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.incrementalBrowserObservationTargets', ?)").run(String(state.runtimeSettings.incrementalBrowserObservationTargets));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.deepBrowserObservationTargets', ?)").run(String(state.runtimeSettings.deepBrowserObservationTargets));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.browserObservationCaptureScreenshots', ?)").run(state.runtimeSettings.browserObservationCaptureScreenshots ? "true" : "false");
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.enableWebResearch', ?)").run(state.runtimeSettings.enableWebResearch ? "true" : "false");
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.webResearchTimeoutMs', ?)").run(String(state.runtimeSettings.webResearchTimeoutMs));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.webResearchMaxResults', ?)").run(String(state.runtimeSettings.webResearchMaxResults));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.webResearchDeepReadPages', ?)").run(String(state.runtimeSettings.webResearchDeepReadPages));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.enableDhcpLeaseIntel', ?)").run(state.runtimeSettings.enableDhcpLeaseIntel ? "true" : "false");
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.dhcpLeaseCommandTimeoutMs', ?)").run(String(state.runtimeSettings.dhcpLeaseCommandTimeoutMs));
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.ouiUpdateIntervalMs', ?)").run(String(state.runtimeSettings.ouiUpdateIntervalMs));
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.laneBEnabled', ?)").run(state.runtimeSettings.laneBEnabled ? "true" : "false");
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.laneBAllowedEnvironments', ?)").run(JSON.stringify(state.runtimeSettings.laneBAllowedEnvironments));
@@ -907,6 +1155,10 @@ class StateStore {
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.approvalTtlClassDMs', ?)").run(String(state.runtimeSettings.approvalTtlClassDMs));
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.quarantineThresholdCount', ?)").run(String(state.runtimeSettings.quarantineThresholdCount));
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.quarantineThresholdWindowMs', ?)").run(String(state.runtimeSettings.quarantineThresholdWindowMs));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.availabilityScannerAlertsEnabled', ?)").run(state.runtimeSettings.availabilityScannerAlertsEnabled ? "true" : "false");
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.securityScannerAlertsEnabled', ?)").run(state.runtimeSettings.securityScannerAlertsEnabled ? "true" : "false");
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.serviceContractScannerAlertsEnabled', ?)").run(state.runtimeSettings.serviceContractScannerAlertsEnabled ? "true" : "false");
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.ignoredIncidentTypes', ?)").run(JSON.stringify(state.runtimeSettings.ignoredIncidentTypes));
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('system.nodeIdentity', ?)").run(state.systemSettings.nodeIdentity);
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('system.timezone', ?)").run(state.systemSettings.timezone);
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('system.digestScheduleEnabled', ?)").run(String(state.systemSettings.digestScheduleEnabled));
@@ -1460,6 +1712,25 @@ class StateStore {
         put.run("runtime.enableMdnsDiscovery", String(normalized.enableMdnsDiscovery));
         put.run("runtime.enableSsdpDiscovery", String(normalized.enableSsdpDiscovery));
         put.run("runtime.enableSnmpProbe", String(normalized.enableSnmpProbe));
+        put.run("runtime.enableAdvancedNmapFingerprint", String(normalized.enableAdvancedNmapFingerprint));
+        put.run("runtime.nmapFingerprintTimeoutMs", String(normalized.nmapFingerprintTimeoutMs));
+        put.run("runtime.incrementalNmapTargets", String(normalized.incrementalNmapTargets));
+        put.run("runtime.deepNmapTargets", String(normalized.deepNmapTargets));
+        put.run("runtime.enablePacketIntel", String(normalized.enablePacketIntel));
+        put.run("runtime.packetIntelDurationSec", String(normalized.packetIntelDurationSec));
+        put.run("runtime.packetIntelMaxPackets", String(normalized.packetIntelMaxPackets));
+        put.run("runtime.packetIntelTopTalkers", String(normalized.packetIntelTopTalkers));
+        put.run("runtime.enableBrowserObservation", String(normalized.enableBrowserObservation));
+        put.run("runtime.browserObservationTimeoutMs", String(normalized.browserObservationTimeoutMs));
+        put.run("runtime.incrementalBrowserObservationTargets", String(normalized.incrementalBrowserObservationTargets));
+        put.run("runtime.deepBrowserObservationTargets", String(normalized.deepBrowserObservationTargets));
+        put.run("runtime.browserObservationCaptureScreenshots", String(normalized.browserObservationCaptureScreenshots));
+        put.run("runtime.enableWebResearch", String(normalized.enableWebResearch));
+        put.run("runtime.webResearchTimeoutMs", String(normalized.webResearchTimeoutMs));
+        put.run("runtime.webResearchMaxResults", String(normalized.webResearchMaxResults));
+        put.run("runtime.webResearchDeepReadPages", String(normalized.webResearchDeepReadPages));
+        put.run("runtime.enableDhcpLeaseIntel", String(normalized.enableDhcpLeaseIntel));
+        put.run("runtime.dhcpLeaseCommandTimeoutMs", String(normalized.dhcpLeaseCommandTimeoutMs));
         put.run("runtime.ouiUpdateIntervalMs", String(normalized.ouiUpdateIntervalMs));
         put.run("runtime.laneBEnabled", String(normalized.laneBEnabled));
         put.run("runtime.laneBAllowedEnvironments", JSON.stringify(normalized.laneBAllowedEnvironments));
@@ -1472,6 +1743,10 @@ class StateStore {
         put.run("runtime.approvalTtlClassDMs", String(normalized.approvalTtlClassDMs));
         put.run("runtime.quarantineThresholdCount", String(normalized.quarantineThresholdCount));
         put.run("runtime.quarantineThresholdWindowMs", String(normalized.quarantineThresholdWindowMs));
+        put.run("runtime.availabilityScannerAlertsEnabled", String(normalized.availabilityScannerAlertsEnabled));
+        put.run("runtime.securityScannerAlertsEnabled", String(normalized.securityScannerAlertsEnabled));
+        put.run("runtime.serviceContractScannerAlertsEnabled", String(normalized.serviceContractScannerAlertsEnabled));
+        put.run("runtime.ignoredIncidentTypes", JSON.stringify(normalized.ignoredIncidentTypes));
         this.appendSettingsHistory(
           db,
           "runtime",
@@ -2039,6 +2314,9 @@ class StateStore {
           provider: (row.provider as string) ?? undefined,
           error: Boolean(row.error),
           createdAt: row.createdAt as string,
+          metadata: row.metadata
+            ? JSON.parse(row.metadata as string) as ChatMessage["metadata"]
+            : undefined,
         }),
       );
     });
@@ -2065,8 +2343,8 @@ class StateStore {
     this.withDbRecovery("StateStore.addChatMessage", (db) => {
       const tx = db.transaction(() => {
         db.prepare(`
-          INSERT INTO chat_messages (id, sessionId, role, content, provider, error, createdAt)
-          VALUES (@id, @sessionId, @role, @content, @provider, @error, @createdAt)
+          INSERT INTO chat_messages (id, sessionId, role, content, provider, error, createdAt, metadata)
+          VALUES (@id, @sessionId, @role, @content, @provider, @error, @createdAt, @metadata)
         `).run({
           id: message.id,
           sessionId: message.sessionId,
@@ -2075,6 +2353,7 @@ class StateStore {
           provider: message.provider ?? null,
           error: message.error ? 1 : 0,
           createdAt: message.createdAt,
+          metadata: JSON.stringify(message.metadata ?? {}),
         });
 
         // Touch the session's updatedAt
@@ -2312,67 +2591,128 @@ class StateStore {
         SELECT DISTINCT protocol
         FROM device_credentials
         WHERE deviceId = ?
+          AND status = 'validated'
+      `).all(deviceId) as Array<{ protocol: string }>;
+      return rows.map((row) => String(row.protocol));
+    });
+  }
+
+  getUsableCredentialProtocols(deviceId: string): string[] {
+    return this.withDbRecovery("StateStore.getUsableCredentialProtocols", (db) => {
+      const rows = db.prepare(`
+        SELECT DISTINCT protocol
+        FROM device_credentials
+        WHERE deviceId = ?
           AND status IN ('provided', 'validated')
       `).all(deviceId) as Array<{ protocol: string }>;
       return rows.map((row) => String(row.protocol));
     });
   }
 
-  /* ---------- Device Adapter Bindings ---------- */
+  logCredentialAccess(
+    entry: Omit<CredentialAccessLog, "id" | "accessedAt"> & { accessedAt?: string },
+  ): CredentialAccessLog {
+    return this.withAuditDbRecovery("StateStore.logCredentialAccess", (auditDb) => {
+      const accessedAt = entry.accessedAt ?? new Date().toISOString();
+      const record: CredentialAccessLog = {
+        id: randomUUID(),
+        credentialId: entry.credentialId,
+        deviceId: entry.deviceId,
+        protocol: entry.protocol,
+        playbookRunId: entry.playbookRunId,
+        operationId: entry.operationId,
+        adapterId: entry.adapterId,
+        actor: entry.actor,
+        purpose: entry.purpose,
+        result: entry.result,
+        details: entry.details ?? {},
+        accessedAt,
+      };
 
-  getDeviceAdapterBindings(deviceId: string): DeviceAdapterBinding[] {
-    return this.withDbRecovery("StateStore.getDeviceAdapterBindings", (db) => {
-      const rows = db.prepare(`
-        SELECT * FROM device_adapter_bindings
-        WHERE deviceId = ?
-        ORDER BY selected DESC, score DESC, updatedAt DESC
-      `).all(deviceId) as Record<string, unknown>[];
-      return rows.map(deviceAdapterBindingFromRow);
+      auditDb.prepare(`
+        INSERT INTO credential_access_events (
+          id, credentialId, deviceId, protocol, playbookRunId, operationId, adapterId,
+          actor, purpose, result, details, accessedAt, createdAt
+        )
+        VALUES (
+          @id, @credentialId, @deviceId, @protocol, @playbookRunId, @operationId, @adapterId,
+          @actor, @purpose, @result, @details, @accessedAt, @createdAt
+        )
+      `).run({
+        id: record.id,
+        credentialId: record.credentialId ?? null,
+        deviceId: record.deviceId,
+        protocol: record.protocol,
+        playbookRunId: record.playbookRunId ?? null,
+        operationId: record.operationId ?? null,
+        adapterId: record.adapterId ?? null,
+        actor: record.actor,
+        purpose: record.purpose,
+        result: record.result,
+        details: JSON.stringify(record.details ?? {}),
+        accessedAt: record.accessedAt,
+        createdAt: record.accessedAt,
+      });
+
+      return record;
     });
   }
 
-  upsertDeviceAdapterBinding(binding: DeviceAdapterBinding): DeviceAdapterBinding {
-    return this.withDbRecovery("StateStore.upsertDeviceAdapterBinding", (db) => {
+  /* ---------- Access Surfaces ---------- */
+
+  getAccessSurfaces(deviceId: string): AccessSurface[] {
+    return this.withDbRecovery("StateStore.getAccessSurfaces", (db) => {
+      const rows = db.prepare(`
+        SELECT * FROM access_surfaces
+        WHERE deviceId = ?
+        ORDER BY selected DESC, score DESC, updatedAt DESC
+      `).all(deviceId) as Record<string, unknown>[];
+      return rows.map(accessSurfaceFromRow);
+    });
+  }
+
+  upsertAccessSurface(surface: AccessSurface): AccessSurface {
+    return this.withDbRecovery("StateStore.upsertAccessSurface", (db) => {
       db.prepare(`
-        INSERT OR REPLACE INTO device_adapter_bindings (
+        INSERT OR REPLACE INTO access_surfaces (
           id, deviceId, adapterId, protocol, score, selected, reason, configJson, createdAt, updatedAt
         )
         VALUES (
           @id, @deviceId, @adapterId, @protocol, @score, @selected, @reason, @configJson, @createdAt, @updatedAt
         )
       `).run({
-        id: binding.id,
-        deviceId: binding.deviceId,
-        adapterId: binding.adapterId,
-        protocol: binding.protocol,
-        score: binding.score,
-        selected: binding.selected ? 1 : 0,
-        reason: binding.reason,
-        configJson: JSON.stringify(binding.configJson ?? {}),
-        createdAt: binding.createdAt,
-        updatedAt: binding.updatedAt,
+        id: surface.id,
+        deviceId: surface.deviceId,
+        adapterId: surface.adapterId,
+        protocol: surface.protocol,
+        score: surface.score,
+        selected: surface.selected ? 1 : 0,
+        reason: surface.reason,
+        configJson: JSON.stringify(surface.configJson ?? {}),
+        createdAt: surface.createdAt,
+        updatedAt: surface.updatedAt,
       });
-      return binding;
+      return surface;
     });
   }
 
-  clearDeviceAdapterBindings(deviceId: string): void {
-    this.withDbRecovery("StateStore.clearDeviceAdapterBindings", (db) => {
-      db.prepare("DELETE FROM device_adapter_bindings WHERE deviceId = ?").run(deviceId);
+  clearAccessSurfaces(deviceId: string): void {
+    this.withDbRecovery("StateStore.clearAccessSurfaces", (db) => {
+      db.prepare("DELETE FROM access_surfaces WHERE deviceId = ?").run(deviceId);
     });
   }
 
-  selectDeviceAdapterBinding(deviceId: string, adapterId: string, protocol: string): void {
-    this.withDbRecovery("StateStore.selectDeviceAdapterBinding", (db) => {
+  selectAccessSurface(deviceId: string, adapterId: string, protocol: string): void {
+    this.withDbRecovery("StateStore.selectAccessSurface", (db) => {
       const now = new Date().toISOString();
       const tx = db.transaction(() => {
         db.prepare(`
-          UPDATE device_adapter_bindings
+          UPDATE access_surfaces
           SET selected = 0, updatedAt = ?
           WHERE deviceId = ? AND protocol = ?
         `).run(now, deviceId, protocol);
         db.prepare(`
-          UPDATE device_adapter_bindings
+          UPDATE access_surfaces
           SET selected = 1, updatedAt = ?
           WHERE deviceId = ? AND adapterId = ? AND protocol = ?
         `).run(now, deviceId, adapterId, protocol);
@@ -2381,48 +2721,270 @@ class StateStore {
     });
   }
 
-  /* ---------- Service Contracts ---------- */
+  getDeviceAdapterBindings(deviceId: string): DeviceAdapterBinding[] {
+    return this.getAccessSurfaces(deviceId);
+  }
 
-  getServiceContracts(deviceId: string): ServiceContract[] {
-    return this.withDbRecovery("StateStore.getServiceContracts", (db) => {
+  upsertDeviceAdapterBinding(binding: DeviceAdapterBinding): DeviceAdapterBinding {
+    return this.upsertAccessSurface(binding);
+  }
+
+  clearDeviceAdapterBindings(deviceId: string): void {
+    this.clearAccessSurfaces(deviceId);
+  }
+
+  selectDeviceAdapterBinding(deviceId: string, adapterId: string, protocol: string): void {
+    this.selectAccessSurface(deviceId, adapterId, protocol);
+  }
+
+  /* ---------- Workloads ---------- */
+
+  getWorkloads(deviceId: string): Workload[] {
+    return this.withDbRecovery("StateStore.getWorkloads", (db) => {
       const rows = db.prepare(`
-        SELECT * FROM service_contracts
+        SELECT * FROM workloads
         WHERE deviceId = ?
         ORDER BY criticality DESC, updatedAt DESC
       `).all(deviceId) as Record<string, unknown>[];
-      return rows.map(serviceContractFromRow);
+      return rows.map(workloadFromRow);
     });
   }
 
-  upsertServiceContract(contract: ServiceContract): ServiceContract {
-    return this.withDbRecovery("StateStore.upsertServiceContract", (db) => {
+  getWorkloadById(id: string): Workload | null {
+    return this.withDbRecovery("StateStore.getWorkloadById", (db) => {
+      const row = db.prepare("SELECT * FROM workloads WHERE id = ? LIMIT 1").get(id) as Record<string, unknown> | undefined;
+      return row ? workloadFromRow(row) : null;
+    });
+  }
+
+  upsertWorkload(workload: Workload): Workload {
+    return this.withDbRecovery("StateStore.upsertWorkload", (db) => {
       db.prepare(`
-        INSERT OR REPLACE INTO service_contracts (
-          id, deviceId, serviceKey, displayName, criticality, desiredState, checkIntervalSec, policyJson, createdAt, updatedAt
+        INSERT OR REPLACE INTO workloads (
+          id, deviceId, workloadKey, displayName, category, criticality, source, summary, evidenceJson, createdAt, updatedAt
         )
         VALUES (
-          @id, @deviceId, @serviceKey, @displayName, @criticality, @desiredState, @checkIntervalSec, @policyJson, @createdAt, @updatedAt
+          @id, @deviceId, @workloadKey, @displayName, @category, @criticality, @source, @summary, @evidenceJson, @createdAt, @updatedAt
         )
       `).run({
-        id: contract.id,
-        deviceId: contract.deviceId,
-        serviceKey: contract.serviceKey,
-        displayName: contract.displayName,
-        criticality: contract.criticality,
-        desiredState: contract.desiredState,
-        checkIntervalSec: contract.checkIntervalSec,
-        policyJson: JSON.stringify(contract.policyJson ?? {}),
-        createdAt: contract.createdAt,
-        updatedAt: contract.updatedAt,
+        id: workload.id,
+        deviceId: workload.deviceId,
+        workloadKey: workload.workloadKey,
+        displayName: workload.displayName,
+        category: workload.category,
+        criticality: workload.criticality,
+        source: workload.source,
+        summary: workload.summary ?? null,
+        evidenceJson: JSON.stringify(workload.evidenceJson ?? {}),
+        createdAt: workload.createdAt,
+        updatedAt: workload.updatedAt,
       });
-      return contract;
+      return workload;
+    });
+  }
+
+  clearWorkloads(deviceId: string): void {
+    this.withDbRecovery("StateStore.clearWorkloads", (db) => {
+      db.prepare("DELETE FROM workloads WHERE deviceId = ?").run(deviceId);
+    });
+  }
+
+  /* ---------- Assurances ---------- */
+
+  getAssurances(deviceId: string): Assurance[] {
+    return this.withDbRecovery("StateStore.getAssurances", (db) => {
+      const rows = db.prepare(`
+        SELECT * FROM assurances
+        WHERE deviceId = ?
+        ORDER BY criticality DESC, updatedAt DESC
+      `).all(deviceId) as Record<string, unknown>[];
+      return rows.map(assuranceFromRow);
+    });
+  }
+
+  getAssurancesForWorkload(workloadId: string): Assurance[] {
+    return this.withDbRecovery("StateStore.getAssurancesForWorkload", (db) => {
+      const rows = db.prepare(`
+        SELECT * FROM assurances
+        WHERE workloadId = ?
+        ORDER BY criticality DESC, updatedAt DESC
+      `).all(workloadId) as Record<string, unknown>[];
+      return rows.map(assuranceFromRow);
+    });
+  }
+
+  upsertAssurance(assurance: Assurance): Assurance {
+    return this.withDbRecovery("StateStore.upsertAssurance", (db) => {
+      const tx = db.transaction((input: Assurance) => {
+        const assuranceKey = input.assuranceKey || input.serviceKey || slugifyKey(input.displayName) || input.id;
+        const serviceKey = input.serviceKey || assuranceKey;
+        const policyJson = input.policyJson ?? input.configJson ?? {};
+        const configJson = input.configJson ?? input.policyJson ?? {};
+        const requiredProtocols = input.requiredProtocols
+          ?? (Array.isArray(policyJson.requiredProtocols)
+            ? policyJson.requiredProtocols.map((item) => String(item))
+            : []);
+
+        let workloadId = input.workloadId;
+        if (!workloadId) {
+          const workloadKey = slugifyKey(serviceKey || input.displayName || input.id) || input.id;
+          const existing = db.prepare(`
+            SELECT * FROM workloads
+            WHERE deviceId = ? AND workloadKey = ?
+            LIMIT 1
+          `).get(input.deviceId, workloadKey) as Record<string, unknown> | undefined;
+          if (existing) {
+            workloadId = String(existing.id);
+          } else {
+            workloadId = `workload-${randomUUID()}`;
+            db.prepare(`
+              INSERT INTO workloads (
+                id, deviceId, workloadKey, displayName, category, criticality, source, summary, evidenceJson, createdAt, updatedAt
+              )
+              VALUES (
+                @id, @deviceId, @workloadKey, @displayName, @category, @criticality, @source, @summary, @evidenceJson, @createdAt, @updatedAt
+              )
+            `).run({
+              id: workloadId,
+              deviceId: input.deviceId,
+              workloadKey,
+              displayName: input.displayName,
+              category: inferWorkloadCategoryFromText(`${input.displayName} ${serviceKey}`),
+              criticality: input.criticality,
+              source: "migration",
+              summary: input.rationale ?? null,
+              evidenceJson: JSON.stringify({
+                synthesizedFrom: "assurance",
+                assuranceKey,
+              }),
+              createdAt: input.createdAt,
+              updatedAt: input.updatedAt,
+            });
+          }
+        }
+
+        db.prepare(`
+          INSERT OR REPLACE INTO assurances (
+            id, deviceId, workloadId, assuranceKey, displayName, criticality, desiredState, checkIntervalSec,
+            monitorType, requiredProtocols, rationale, configJson, serviceKey, policyJson, createdAt, updatedAt
+          )
+          VALUES (
+            @id, @deviceId, @workloadId, @assuranceKey, @displayName, @criticality, @desiredState, @checkIntervalSec,
+            @monitorType, @requiredProtocols, @rationale, @configJson, @serviceKey, @policyJson, @createdAt, @updatedAt
+          )
+        `).run({
+          id: input.id,
+          deviceId: input.deviceId,
+          workloadId,
+          assuranceKey,
+          displayName: input.displayName,
+          criticality: input.criticality,
+          desiredState: input.desiredState,
+          checkIntervalSec: input.checkIntervalSec,
+          monitorType: input.monitorType ?? null,
+          requiredProtocols: JSON.stringify(requiredProtocols),
+          rationale: input.rationale ?? null,
+          configJson: JSON.stringify(configJson),
+          serviceKey,
+          policyJson: JSON.stringify(policyJson),
+          createdAt: input.createdAt,
+          updatedAt: input.updatedAt,
+        });
+
+        return {
+          ...input,
+          workloadId,
+          assuranceKey,
+          requiredProtocols,
+          configJson,
+          serviceKey,
+          policyJson,
+        } satisfies Assurance;
+      });
+      return tx(assurance);
+    });
+  }
+
+  clearAssurances(deviceId: string): void {
+    this.withDbRecovery("StateStore.clearAssurances", (db) => {
+      db.prepare("DELETE FROM assurances WHERE deviceId = ?").run(deviceId);
+    });
+  }
+
+  appendAssuranceRun(
+    run: Omit<AssuranceRun, "id"> & { id?: string },
+  ): AssuranceRun {
+    return this.withDbRecovery("StateStore.appendAssuranceRun", (db) => {
+      const record: AssuranceRun = {
+        id: run.id ?? randomUUID(),
+        assuranceId: run.assuranceId,
+        deviceId: run.deviceId,
+        workloadId: run.workloadId,
+        status: run.status,
+        summary: run.summary,
+        evidenceJson: run.evidenceJson ?? {},
+        evaluatedAt: run.evaluatedAt,
+      };
+      db.prepare(`
+        INSERT OR REPLACE INTO assurance_runs (
+          id, assuranceId, deviceId, workloadId, status, summary, evidenceJson, evaluatedAt
+        )
+        VALUES (
+          @id, @assuranceId, @deviceId, @workloadId, @status, @summary, @evidenceJson, @evaluatedAt
+        )
+      `).run({
+        id: record.id,
+        assuranceId: record.assuranceId,
+        deviceId: record.deviceId,
+        workloadId: record.workloadId ?? null,
+        status: record.status,
+        summary: record.summary,
+        evidenceJson: JSON.stringify(record.evidenceJson ?? {}),
+        evaluatedAt: record.evaluatedAt,
+      });
+      return record;
+    });
+  }
+
+  getLatestAssuranceRuns(deviceId: string): AssuranceRun[] {
+    return this.withDbRecovery("StateStore.getLatestAssuranceRuns", (db) => {
+      const rows = db.prepare(`
+        SELECT * FROM assurance_runs
+        WHERE deviceId = ?
+        ORDER BY evaluatedAt DESC
+      `).all(deviceId) as Record<string, unknown>[];
+      const latest = new Map<string, AssuranceRun>();
+      for (const row of rows) {
+        const run = assuranceRunFromRow(row);
+        if (!latest.has(run.assuranceId)) {
+          latest.set(run.assuranceId, run);
+        }
+      }
+      return Array.from(latest.values()).sort((a, b) => b.evaluatedAt.localeCompare(a.evaluatedAt));
+    });
+  }
+
+  /* ---------- Legacy Service Contract Compatibility ---------- */
+
+  getServiceContracts(deviceId: string): ServiceContract[] {
+    return this.getAssurances(deviceId);
+  }
+
+  upsertServiceContract(contract: ServiceContract): ServiceContract {
+    return this.upsertAssurance({
+      ...contract,
+      assuranceKey: contract.assuranceKey || contract.serviceKey,
+      configJson: contract.configJson ?? contract.policyJson ?? {},
+      policyJson: contract.policyJson ?? contract.configJson ?? {},
+      requiredProtocols: contract.requiredProtocols
+        ?? (Array.isArray(contract.policyJson.requiredProtocols)
+          ? contract.policyJson.requiredProtocols.map((item) => String(item))
+          : []),
     });
   }
 
   clearServiceContracts(deviceId: string): void {
-    this.withDbRecovery("StateStore.clearServiceContracts", (db) => {
-      db.prepare("DELETE FROM service_contracts WHERE deviceId = ?").run(deviceId);
-    });
+    this.clearAssurances(deviceId);
   }
 
   /* ---------- Device Findings ---------- */
@@ -2518,6 +3080,195 @@ class StateStore {
       });
 
       return next;
+    });
+  }
+
+  /* ---------- Device Widgets ---------- */
+
+  getDeviceWidgets(deviceId: string): DeviceWidget[] {
+    return this.withDbRecovery("StateStore.getDeviceWidgets", (db) => {
+      const rows = db.prepare(`
+        SELECT * FROM device_widgets
+        WHERE deviceId = ?
+        ORDER BY updatedAt DESC, createdAt DESC
+      `).all(deviceId) as Record<string, unknown>[];
+      return rows.map(deviceWidgetFromRow);
+    });
+  }
+
+  getDeviceWidgetById(widgetId: string): DeviceWidget | null {
+    return this.withDbRecovery("StateStore.getDeviceWidgetById", (db) => {
+      const row = db.prepare("SELECT * FROM device_widgets WHERE id = ? LIMIT 1").get(widgetId) as Record<string, unknown> | undefined;
+      return row ? deviceWidgetFromRow(row) : null;
+    });
+  }
+
+  getDeviceWidgetBySlug(deviceId: string, slug: string): DeviceWidget | null {
+    return this.withDbRecovery("StateStore.getDeviceWidgetBySlug", (db) => {
+      const row = db.prepare(`
+        SELECT * FROM device_widgets
+        WHERE deviceId = ? AND slug = ?
+        LIMIT 1
+      `).get(deviceId, slug) as Record<string, unknown> | undefined;
+      return row ? deviceWidgetFromRow(row) : null;
+    });
+  }
+
+  upsertDeviceWidget(widget: DeviceWidget): DeviceWidget {
+    return this.withDbRecovery("StateStore.upsertDeviceWidget", (db) => {
+      const existing = db.prepare("SELECT revision FROM device_widgets WHERE id = ? LIMIT 1").get(widget.id) as { revision?: number } | undefined;
+      const revision = existing?.revision
+        ? Math.max(Number(existing.revision) + 1, Number(widget.revision ?? 1))
+        : Math.max(1, Number(widget.revision ?? 1));
+
+      const next: DeviceWidget = {
+        ...widget,
+        revision,
+      };
+
+      db.prepare(`
+        INSERT OR REPLACE INTO device_widgets (
+          id, deviceId, slug, name, description, status, html, css, js, capabilitiesJson,
+          sourcePrompt, createdBy, revision, createdAt, updatedAt
+        )
+        VALUES (
+          @id, @deviceId, @slug, @name, @description, @status, @html, @css, @js, @capabilitiesJson,
+          @sourcePrompt, @createdBy, @revision, @createdAt, @updatedAt
+        )
+      `).run({
+        id: next.id,
+        deviceId: next.deviceId,
+        slug: next.slug,
+        name: next.name,
+        description: next.description ?? null,
+        status: next.status,
+        html: next.html,
+        css: next.css,
+        js: next.js,
+        capabilitiesJson: JSON.stringify(next.capabilities ?? []),
+        sourcePrompt: next.sourcePrompt ?? null,
+        createdBy: next.createdBy,
+        revision: next.revision,
+        createdAt: next.createdAt,
+        updatedAt: next.updatedAt,
+      });
+
+      return next;
+    });
+  }
+
+  deleteDeviceWidget(widgetId: string): boolean {
+    return this.withDbRecovery("StateStore.deleteDeviceWidget", (db) => {
+      const result = db.prepare("DELETE FROM device_widgets WHERE id = ?").run(widgetId);
+      return result.changes > 0;
+    });
+  }
+
+  getDeviceWidgetRuntimeState(widgetId: string): DeviceWidgetRuntimeState | null {
+    return this.withDbRecovery("StateStore.getDeviceWidgetRuntimeState", (db) => {
+      const row = db.prepare(`
+        SELECT * FROM device_widget_state
+        WHERE widgetId = ?
+        LIMIT 1
+      `).get(widgetId) as Record<string, unknown> | undefined;
+      return row ? deviceWidgetRuntimeStateFromRow(row) : null;
+    });
+  }
+
+  upsertDeviceWidgetRuntimeState(state: DeviceWidgetRuntimeState): DeviceWidgetRuntimeState {
+    return this.withDbRecovery("StateStore.upsertDeviceWidgetRuntimeState", (db) => {
+      db.prepare(`
+        INSERT OR REPLACE INTO device_widget_state (
+          widgetId, deviceId, stateJson, updatedAt
+        )
+        VALUES (
+          @widgetId, @deviceId, @stateJson, @updatedAt
+        )
+      `).run({
+        widgetId: state.widgetId,
+        deviceId: state.deviceId,
+        stateJson: JSON.stringify(state.stateJson ?? {}),
+        updatedAt: state.updatedAt,
+      });
+      return state;
+    });
+  }
+
+  getDeviceWidgetOperationRuns(widgetId: string, limit = 20): DeviceWidgetOperationRun[] {
+    return this.withDbRecovery("StateStore.getDeviceWidgetOperationRuns", (db) => {
+      const rows = db.prepare(`
+        SELECT * FROM device_widget_operation_runs
+        WHERE widgetId = ?
+        ORDER BY createdAt DESC
+        LIMIT ?
+      `).all(widgetId, Math.max(1, Math.min(limit, 100))) as Record<string, unknown>[];
+      return rows.map(deviceWidgetOperationRunFromRow);
+    });
+  }
+
+  getDeviceWidgetOperationRunsForDevice(deviceId: string, limit = 20): DeviceWidgetOperationRun[] {
+    return this.withDbRecovery("StateStore.getDeviceWidgetOperationRunsForDevice", (db) => {
+      const rows = db.prepare(`
+        SELECT * FROM device_widget_operation_runs
+        WHERE deviceId = ?
+        ORDER BY createdAt DESC
+        LIMIT ?
+      `).all(deviceId, Math.max(1, Math.min(limit, 100))) as Record<string, unknown>[];
+      return rows.map(deviceWidgetOperationRunFromRow);
+    });
+  }
+
+  addDeviceWidgetOperationRun(run: DeviceWidgetOperationRun): DeviceWidgetOperationRun {
+    return this.withDbRecovery("StateStore.addDeviceWidgetOperationRun", (db) => {
+      const tx = db.transaction((next: DeviceWidgetOperationRun) => {
+        db.prepare(`
+          INSERT INTO device_widget_operation_runs (
+            id, widgetId, deviceId, widgetRevision, operationKind, operationMode, brokerProtocol,
+            status, phase, proof, approvalRequired, policyDecision, policyReason, approved,
+            idempotencyKey, summary, output, operationJson, detailsJson, createdAt
+          )
+          VALUES (
+            @id, @widgetId, @deviceId, @widgetRevision, @operationKind, @operationMode, @brokerProtocol,
+            @status, @phase, @proof, @approvalRequired, @policyDecision, @policyReason, @approved,
+            @idempotencyKey, @summary, @output, @operationJson, @detailsJson, @createdAt
+          )
+        `).run({
+          id: next.id,
+          widgetId: next.widgetId,
+          deviceId: next.deviceId,
+          widgetRevision: next.widgetRevision,
+          operationKind: next.operationKind,
+          operationMode: next.operationMode,
+          brokerProtocol: next.brokerProtocol ?? null,
+          status: next.status,
+          phase: next.phase,
+          proof: next.proof,
+          approvalRequired: next.approvalRequired ? 1 : 0,
+          policyDecision: next.policyDecision,
+          policyReason: next.policyReason,
+          approved: next.approved ? 1 : 0,
+          idempotencyKey: next.idempotencyKey,
+          summary: next.summary,
+          output: next.output,
+          operationJson: JSON.stringify(next.operationJson ?? {}),
+          detailsJson: JSON.stringify(next.detailsJson ?? {}),
+          createdAt: next.createdAt,
+        });
+
+        db.prepare(`
+          DELETE FROM device_widget_operation_runs
+          WHERE widgetId = ?
+            AND id NOT IN (
+              SELECT id FROM device_widget_operation_runs
+              WHERE widgetId = ?
+              ORDER BY createdAt DESC
+              LIMIT 250
+            )
+        `).run(next.widgetId, next.widgetId);
+      });
+
+      tx(run);
+      return run;
     });
   }
 

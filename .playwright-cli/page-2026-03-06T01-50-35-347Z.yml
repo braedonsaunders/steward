@@ -1,0 +1,236 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - img [ref=e7]
+          - generic [ref=e9]:
+            - heading "Steward" [level=1] [ref=e10]
+            - paragraph [ref=e11]: Network Operations
+          - button [ref=e12]:
+            - img [ref=e13]
+        - navigation [ref=e19]:
+          - generic [ref=e20]:
+            - paragraph [ref=e21]: Overview
+            - link "Dashboard" [ref=e23] [cursor=pointer]:
+              - /url: /
+              - generic [ref=e24]:
+                - img [ref=e25]
+                - generic [ref=e30]: Dashboard
+            - link "Digest" [ref=e32] [cursor=pointer]:
+              - /url: /digest
+              - generic [ref=e33]:
+                - img [ref=e34]
+                - generic [ref=e37]: Digest
+          - generic [ref=e38]:
+            - paragraph [ref=e39]: Network
+            - link "Devices" [ref=e41] [cursor=pointer]:
+              - /url: /devices
+              - generic [ref=e43]:
+                - img [ref=e44]
+                - generic [ref=e47]: Devices
+            - link "Discovery" [ref=e49] [cursor=pointer]:
+              - /url: /discovery
+              - generic [ref=e50]:
+                - img [ref=e51]
+                - generic [ref=e54]: Discovery
+            - link "Topology" [ref=e56] [cursor=pointer]:
+              - /url: /topology
+              - generic [ref=e57]:
+                - img [ref=e58]
+                - generic [ref=e63]: Topology
+          - generic [ref=e64]:
+            - paragraph [ref=e65]: Health
+            - link "Incidents 3" [ref=e165] [cursor=pointer]:
+              - /url: /incidents
+              - generic [ref=e68]:
+                - img [ref=e69]
+                - generic [ref=e71]: Incidents
+              - generic [ref=e166]: "3"
+            - link "Activity" [ref=e73] [cursor=pointer]:
+              - /url: /activity
+              - generic [ref=e74]:
+                - img [ref=e75]
+                - generic [ref=e77]: Activity
+          - generic [ref=e78]:
+            - paragraph [ref=e79]: Control
+            - link "Approvals" [ref=e81] [cursor=pointer]:
+              - /url: /approvals
+              - generic [ref=e82]:
+                - img [ref=e83]
+                - generic [ref=e86]: Approvals
+            - link "Policies" [ref=e88] [cursor=pointer]:
+              - /url: /policies
+              - generic [ref=e89]:
+                - img [ref=e90]
+                - generic [ref=e93]: Policies
+          - generic [ref=e94]:
+            - paragraph [ref=e95]: Assistant
+            - link "Chat" [ref=e97] [cursor=pointer]:
+              - /url: /chat
+              - generic [ref=e98]:
+                - img [ref=e99]
+                - generic [ref=e101]: Chat
+          - generic [ref=e102]:
+            - paragraph [ref=e103]: System
+            - link "Adapters" [ref=e105] [cursor=pointer]:
+              - /url: /adapters
+              - generic [ref=e106]:
+                - img [ref=e107]
+                - generic [ref=e109]: Adapters
+            - link "Access" [ref=e111] [cursor=pointer]:
+              - /url: /access
+              - generic [ref=e112]:
+                - img [ref=e113]
+                - generic [ref=e125]: Access
+            - link "Settings" [ref=e127] [cursor=pointer]:
+              - /url: /settings
+              - generic [ref=e128]:
+                - img [ref=e129]
+                - generic [ref=e132]: Settings
+        - generic [ref=e167]:
+          - img [ref=e168]
+          - generic [ref=e170]: "Vault: Unlocked"
+    - main [ref=e134]:
+      - main [ref=e137]:
+        - generic [ref=e172]:
+          - generic [ref=e173]:
+            - generic [ref=e174]:
+              - generic [ref=e175]:
+                - img [ref=e176]
+                - heading "Devices Overview" [level=1] [ref=e179]
+                - generic [ref=e180]: "4"
+              - paragraph [ref=e181]: Managed assets, current health, and signal quality in one viewport.
+            - button "Add Device" [ref=e183]:
+              - img [ref=e184]
+              - text: Add Device
+          - generic [ref=e185]:
+            - generic [ref=e186]:
+              - paragraph [ref=e187]: Online
+              - paragraph [ref=e188]: "4"
+            - generic [ref=e189]:
+              - paragraph [ref=e190]: Offline
+              - paragraph [ref=e191]: "0"
+            - generic [ref=e192]:
+              - paragraph [ref=e193]: Degraded
+              - paragraph [ref=e194]: "0"
+            - generic [ref=e195]:
+              - paragraph [ref=e196]: Adopted
+              - paragraph [ref=e197]: "4"
+            - generic [ref=e198]:
+              - paragraph [ref=e199]: Fingerprinted
+              - paragraph [ref=e200]: "4"
+            - generic [ref=e201]:
+              - paragraph [ref=e202]: Rich Services
+              - paragraph [ref=e203]: "5"
+          - generic [ref=e204]:
+            - generic [ref=e206]:
+              - generic [ref=e207]: iot
+              - generic [ref=e208]: "2"
+            - generic [ref=e212]:
+              - generic [ref=e213]: server
+              - generic [ref=e214]: "2"
+        - generic [ref=e143]:
+          - generic [ref=e217]:
+            - img [ref=e218]
+            - textbox "Search by name, IP, hostname, or vendor..." [ref=e221]
+          - combobox [ref=e222]:
+            - generic: All Statuses
+            - img
+          - combobox [ref=e223]:
+            - generic: All Types
+            - img
+        - generic [ref=e148]:
+          - table [ref=e225]:
+            - rowgroup [ref=e226]:
+              - row "Status Name IP Type Services Tier Last Seen" [ref=e227]:
+                - columnheader "Status" [ref=e228]:
+                  - button "Status" [ref=e229]:
+                    - text: Status
+                    - img [ref=e230]
+                - columnheader "Name" [ref=e233]:
+                  - button "Name" [ref=e234]:
+                    - text: Name
+                    - img [ref=e235]
+                - columnheader "IP" [ref=e238]:
+                  - button "IP" [ref=e239]:
+                    - text: IP
+                    - img [ref=e240]
+                - columnheader "Type" [ref=e243]:
+                  - button "Type" [ref=e244]:
+                    - text: Type
+                    - img [ref=e245]
+                - columnheader "Services" [ref=e248]:
+                  - button "Services" [ref=e249]:
+                    - text: Services
+                    - img [ref=e250]
+                - columnheader "Tier" [ref=e253]:
+                  - button "Tier" [ref=e254]:
+                    - text: Tier
+                    - img [ref=e255]
+                - columnheader "Last Seen" [ref=e258]:
+                  - button "Last Seen" [ref=e259]:
+                    - text: Last Seen
+                    - img [ref=e260]
+            - rowgroup [ref=e263]:
+              - row "online asustek-computer-iot-192-168-68-85 192.168.68.85 server 2 1 1m ago" [ref=e264] [cursor=pointer]:
+                - cell "online" [ref=e265]:
+                  - generic [ref=e268]: online
+                - cell "asustek-computer-iot-192-168-68-85" [ref=e269]
+                - cell "192.168.68.85" [ref=e270]
+                - cell "server" [ref=e271]
+                - cell "2" [ref=e272]
+                - cell "1" [ref=e273]:
+                  - generic [ref=e274]:
+                    - img [ref=e275]
+                    - generic [ref=e277]: "1"
+                - cell "1m ago" [ref=e278]
+              - row "online iot-192-168-68-67 192.168.68.67 iot 1 1 1m ago" [ref=e279] [cursor=pointer]:
+                - cell "online" [ref=e280]:
+                  - generic [ref=e283]: online
+                - cell "iot-192-168-68-67" [ref=e284]
+                - cell "192.168.68.67" [ref=e285]
+                - cell "iot" [ref=e286]
+                - cell "1" [ref=e287]
+                - cell "1" [ref=e288]:
+                  - generic [ref=e289]:
+                    - img [ref=e290]
+                    - generic [ref=e292]: "1"
+                - cell "1m ago" [ref=e293]
+              - row "online raspberry-pi-foundation-iot-192-168-68-70 192.168.68.70 iot 2 1 1m ago" [ref=e294] [cursor=pointer]:
+                - cell "online" [ref=e295]:
+                  - generic [ref=e298]: online
+                - cell "raspberry-pi-foundation-iot-192-168-68-70" [ref=e299]
+                - cell "192.168.68.70" [ref=e300]
+                - cell "iot" [ref=e301]
+                - cell "2" [ref=e302]
+                - cell "1" [ref=e303]:
+                  - generic [ref=e304]:
+                    - img [ref=e305]
+                    - generic [ref=e307]: "1"
+                - cell "1m ago" [ref=e308]
+              - row "online server-192-168-68-83 192.168.68.83 server 1 1 1m ago" [ref=e309] [cursor=pointer]:
+                - cell "online" [ref=e310]:
+                  - generic [ref=e313]: online
+                - cell "server-192-168-68-83" [ref=e314]
+                - cell "192.168.68.83" [ref=e315]
+                - cell "server" [ref=e316]
+                - cell "1" [ref=e317]
+                - cell "1" [ref=e318]:
+                  - generic [ref=e319]:
+                    - img [ref=e320]
+                    - generic [ref=e322]: "1"
+                - cell "1m ago" [ref=e323]
+          - generic [ref=e324]:
+            - paragraph [ref=e325]:
+              - img [ref=e326]
+              - text: Showing 1-4 of 4
+            - generic [ref=e331]:
+              - generic [ref=e332]:
+                - img [ref=e333]
+                - text: page 1/1
+              - button "Prev" [disabled]
+              - button "Next" [disabled]
+  - button "Open Next.js Dev Tools" [ref=e161] [cursor=pointer]:
+    - img [ref=e162]
+  - alert [ref=e335]

@@ -33,6 +33,7 @@ import type {
   Incident,
   PlaybookRun,
   Recommendation,
+  RuntimeSettings,
 } from "@/lib/state/types";
 
 interface StewardCycleSummary {
@@ -44,6 +45,26 @@ interface StewardCycleSummary {
   playbooksCompleted: number;
   approvalsCreated: number;
 }
+
+const AVAILABILITY_OFFLINE_INCIDENT_TYPE = "availability.offline";
+const SECURITY_TELNET_INCIDENT_TYPE = "security.telnet-exposure";
+const ASSURANCE_FAILURE_INCIDENT_TYPE = "assurance.failure";
+const LEGACY_SERVICE_CONTRACT_FAILURE_INCIDENT_TYPE = "service-contract.failure";
+const TLS_CERT_WARNING_WINDOW_DAYS = 30;
+const TLS_CERT_CRITICAL_WINDOW_DAYS = 7;
+
+const daysUntilIso = (value: string): number | null => {
+  const at = new Date(value).getTime();
+  if (!Number.isFinite(at)) {
+    return null;
+  }
+  return Math.ceil((at - Date.now()) / (24 * 60 * 60 * 1000));
+};
+
+const tlsServiceLabel = (device: Device, service: Device["services"][number]): string => {
+  const base = service.httpInfo?.title?.trim() || service.product?.trim() || service.name;
+  return `${base} on ${device.name}:${service.port}`;
+};
 
 const latencyFromPingOutput = (stdout: string): number | undefined => {
   const match = stdout.match(/time[=<]([\d.]+)\s*ms/i);
@@ -282,10 +303,18 @@ const resolveIncidentByKey = (
   });
 };
 
-const evaluateServiceContractsForDevice = async (
+const normalizedIgnoredIncidentTypes = (settings: RuntimeSettings): Set<string> =>
+  new Set(
+    (settings.ignoredIncidentTypes ?? [])
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0),
+  );
+
+const evaluateAssurancesForDevice = async (
   device: Device,
   incidents: Incident[],
   recommendations: Recommendation[],
+  runtimeSettings: RuntimeSettings,
 ): Promise<{
   incidents: Incident[];
   recommendations: Recommendation[];
@@ -297,8 +326,8 @@ const evaluateServiceContractsForDevice = async (
   let incidentsOpened = 0;
   let recommendationsAdded = 0;
 
-  const contracts = stateStore.getServiceContracts(device.id);
-  if (contracts.length === 0) {
+  const assurances = stateStore.getAssurances(device.id);
+  if (assurances.length === 0) {
     return {
       incidents: nextIncidents,
       recommendations: nextRecommendations,
@@ -311,8 +340,12 @@ const evaluateServiceContractsForDevice = async (
   const validated = new Set(
     stateStore.getValidatedCredentialProtocols(device.id).map((protocol) => protocol.toLowerCase()),
   );
+  const ignoredTypes = normalizedIgnoredIncidentTypes(runtimeSettings);
+  const assuranceAlertsEnabled = runtimeSettings.serviceContractScannerAlertsEnabled
+    && !ignoredTypes.has(ASSURANCE_FAILURE_INCIDENT_TYPE)
+    && !ignoredTypes.has(LEGACY_SERVICE_CONTRACT_FAILURE_INCIDENT_TYPE);
 
-  for (const contract of contracts) {
+  for (const contract of assurances) {
     if (!isServiceContractDue(contract, nowMs)) {
       continue;
     }
@@ -328,8 +361,9 @@ const evaluateServiceContractsForDevice = async (
         findingType: "missing_credentials",
         severity: "warning",
         title: `${contract.displayName} waiting for credentials`,
-        summary: `Monitor "${contract.displayName}" cannot run until credentials are provided for: ${missingProtocols.join(", ")}.`,
+        summary: `Assurance "${contract.displayName}" cannot run until credentials are provided for: ${missingProtocols.join(", ")}.`,
         evidenceJson: {
+          assuranceId: contract.id,
           serviceContractId: contract.id,
           requiredProtocols,
           missingProtocols,
@@ -339,7 +373,7 @@ const evaluateServiceContractsForDevice = async (
 
       const credentialRecommendation = ensureRecommendation(nextRecommendations, {
         title: `Provide ${missingProtocols.join(", ")} credentials for ${device.name}`,
-        rationale: `Custom monitor "${contract.displayName}" is blocked by missing credentials.`,
+        rationale: `Assurance "${contract.displayName}" is blocked by missing credentials.`,
         impact: "Enables monitor execution and automated incident detection.",
         priority: "high",
         relatedDeviceIds: [device.id],
@@ -347,7 +381,7 @@ const evaluateServiceContractsForDevice = async (
       nextRecommendations = credentialRecommendation.next;
       recommendationsAdded += credentialRecommendation.added ? 1 : 0;
 
-      stateStore.upsertServiceContract({
+      const pendingCredentialsContract = stateStore.upsertAssurance({
         ...contract,
         policyJson: {
           ...contract.policyJson,
@@ -357,23 +391,44 @@ const evaluateServiceContractsForDevice = async (
         },
         updatedAt: new Date().toISOString(),
       });
+      stateStore.appendAssuranceRun({
+        assuranceId: pendingCredentialsContract.id,
+        deviceId: device.id,
+        workloadId: pendingCredentialsContract.workloadId,
+        status: "pending",
+        summary: `Awaiting credentials for ${contract.displayName}.`,
+        evidenceJson: {
+          requiredProtocols,
+          missingProtocols,
+        },
+        evaluatedAt: new Date().toISOString(),
+      });
       continue;
     }
 
     const evaluation = await evaluateServiceContract(device, contract);
-    stateStore.upsertServiceContract({
+    const persistedContract = stateStore.upsertAssurance({
       ...contract,
       policyJson: evaluation.updatedPolicyJson,
       updatedAt: new Date().toISOString(),
+    });
+    stateStore.appendAssuranceRun({
+      assuranceId: persistedContract.id,
+      deviceId: device.id,
+      workloadId: persistedContract.workloadId,
+      status: evaluation.status,
+      summary: evaluation.summary,
+      evidenceJson: evaluation.evidenceJson,
+      evaluatedAt: new Date().toISOString(),
     });
 
     if (evaluation.status === "pass") {
       stateStore.upsertDeviceFindingByDedupe({
         deviceId: device.id,
         dedupeKey: findingKey,
-        findingType: "service_contract",
+        findingType: "assurance",
         severity: "info",
-        title: `${contract.displayName} monitor healthy`,
+        title: `${contract.displayName} assurance healthy`,
         summary: evaluation.summary,
         evidenceJson: evaluation.evidenceJson,
         status: "resolved",
@@ -381,7 +436,7 @@ const evaluateServiceContractsForDevice = async (
       nextIncidents = resolveIncidentByKey(
         nextIncidents,
         findingKey,
-        `Monitor recovered: ${contract.displayName}`,
+        `Assurance recovered: ${contract.displayName}`,
       );
       continue;
     }
@@ -390,18 +445,18 @@ const evaluateServiceContractsForDevice = async (
       stateStore.upsertDeviceFindingByDedupe({
         deviceId: device.id,
         dedupeKey: findingKey,
-        findingType: "service_contract_pending",
+        findingType: "assurance_pending",
         severity: "info",
-        title: `${contract.displayName} monitor pending`,
+        title: `${contract.displayName} assurance pending`,
         summary: evaluation.summary,
         evidenceJson: evaluation.evidenceJson,
         status: "open",
       });
 
       const configRecommendation = ensureRecommendation(nextRecommendations, {
-        title: `Complete monitor setup: ${contract.displayName}`,
+        title: `Complete assurance setup: ${contract.displayName}`,
         rationale: evaluation.summary,
-        impact: "Allows Steward to actively validate this monitor contract.",
+        impact: "Allows Steward to actively validate this assurance.",
         priority: "medium",
         relatedDeviceIds: [device.id],
       });
@@ -411,16 +466,38 @@ const evaluateServiceContractsForDevice = async (
     }
 
     const severity = criticalityToIncidentSeverity(contract.criticality);
+    if (!assuranceAlertsEnabled) {
+      nextIncidents = resolveIncidentByKey(
+        nextIncidents,
+        findingKey,
+        `Assurance alerts disabled: ${contract.displayName}`,
+      );
+      stateStore.upsertDeviceFindingByDedupe({
+        deviceId: device.id,
+        dedupeKey: findingKey,
+        findingType: "assurance",
+        severity,
+        title: `Assurance failed: ${contract.displayName}`,
+        summary: `${evaluation.summary} (alert suppressed by runtime settings).`,
+        evidenceJson: evaluation.evidenceJson,
+        status: "resolved",
+      });
+      continue;
+    }
+
     const incidentResult = upsertIncident(nextIncidents, {
-      title: `Monitor failed: ${contract.displayName}`,
+      title: `Assurance failed: ${contract.displayName}`,
       summary: evaluation.summary,
       severity,
       deviceIds: [device.id],
       status: "open",
-      diagnosis: "Service contract monitor drifted from expected state.",
-      remediationPlan: "Inspect contract evidence, confirm credentials, and remediate service drift.",
+      diagnosis: "Device assurance drifted from its expected state.",
+      remediationPlan: "Inspect assurance evidence, confirm credentials, and remediate the workload drift.",
       metadata: {
         key: findingKey,
+        incidentType: ASSURANCE_FAILURE_INCIDENT_TYPE,
+        scannerType: "assurance",
+        assuranceId: contract.id,
         serviceContractId: contract.id,
         monitorType: evaluation.monitorType,
       },
@@ -431,16 +508,16 @@ const evaluateServiceContractsForDevice = async (
     stateStore.upsertDeviceFindingByDedupe({
       deviceId: device.id,
       dedupeKey: findingKey,
-      findingType: "service_contract",
+      findingType: "assurance",
       severity,
-      title: `Monitor failed: ${contract.displayName}`,
+      title: `Assurance failed: ${contract.displayName}`,
       summary: evaluation.summary,
       evidenceJson: evaluation.evidenceJson,
       status: "open",
     });
 
     const driftRecommendation = ensureRecommendation(nextRecommendations, {
-      title: `Remediate monitor drift: ${contract.displayName}`,
+      title: `Remediate assurance drift: ${contract.displayName}`,
       rationale: evaluation.summary,
       impact: "Restores expected runtime behavior and keeps automated checks green.",
       priority: criticalityToRecommendationPriority(contract.criticality),
@@ -704,7 +781,7 @@ const discoverPhase = async (
 const inferCredentialTypes = (protocols: string[]): string[] => {
   const requirements = new Set<string>();
   if (protocols.includes("ssh")) requirements.add("ssh");
-  if (protocols.includes("winrm") || protocols.includes("windows")) requirements.add("winrm");
+  if (protocols.includes("winrm")) requirements.add("winrm");
   if (protocols.includes("snmp")) requirements.add("snmp");
   if (protocols.includes("http-api")) requirements.add("api/web-admin");
   if (protocols.includes("docker")) requirements.add("docker");
@@ -830,6 +907,13 @@ const actPhase = async (devices: Device[]): Promise<{
   approvalsCreated: number;
 }> => {
   const state = await stateStore.getState();
+  const runtimeSettings = stateStore.getRuntimeSettings();
+  const ignoredIncidentTypes = normalizedIgnoredIncidentTypes(runtimeSettings);
+  const availabilityAlertsEnabled = runtimeSettings.availabilityScannerAlertsEnabled
+    && !ignoredIncidentTypes.has(AVAILABILITY_OFFLINE_INCIDENT_TYPE);
+  const securityAlertsEnabled = runtimeSettings.securityScannerAlertsEnabled
+    && !ignoredIncidentTypes.has(SECURITY_TELNET_INCIDENT_TYPE);
+
   let incidents = [...state.incidents];
   let recommendations = [...state.recommendations];
 
@@ -854,32 +938,58 @@ const actPhase = async (devices: Device[]): Promise<{
     }
 
     if (device.status === "offline") {
-      const upserted = upsertIncident(incidents, {
-        title: `${device.name} is offline`,
-        summary: `${device.name} (${device.ip}) has not been seen recently and appears offline.`,
-        severity: "warning",
-        deviceIds: [device.id],
-        status: "open",
-        metadata: {
-          key: `offline:${device.id}`,
-        },
-      });
-      incidents = upserted.next;
-      incidentsOpened += upserted.opened ? 1 : 0;
+      const incidentKeyValue = `offline:${device.id}`;
+      if (!availabilityAlertsEnabled) {
+        incidents = resolveIncidentByKey(
+          incidents,
+          incidentKeyValue,
+          "Availability alerts are disabled for offline checks",
+        );
+        stateStore.upsertDeviceFindingByDedupe({
+          deviceId: device.id,
+          dedupeKey: incidentKeyValue,
+          findingType: "availability",
+          severity: "warning",
+          title: `${device.name} is offline`,
+          summary: `${device.name} (${device.ip}) is offline, but this alert type is currently suppressed.`,
+          evidenceJson: {
+            incidentType: AVAILABILITY_OFFLINE_INCIDENT_TYPE,
+            incidentKey: incidentKeyValue,
+            deviceStatus: device.status,
+          },
+          status: "resolved",
+        });
+      } else {
+        const upserted = upsertIncident(incidents, {
+          title: `${device.name} is offline`,
+          summary: `${device.name} (${device.ip}) has not been seen recently and appears offline.`,
+          severity: "warning",
+          deviceIds: [device.id],
+          status: "open",
+          metadata: {
+            key: incidentKeyValue,
+            incidentType: AVAILABILITY_OFFLINE_INCIDENT_TYPE,
+            scannerType: "availability",
+          },
+        });
+        incidents = upserted.next;
+        incidentsOpened += upserted.opened ? 1 : 0;
 
-      stateStore.upsertDeviceFindingByDedupe({
-        deviceId: device.id,
-        dedupeKey: `offline:${device.id}`,
-        findingType: "availability",
-        severity: "warning",
-        title: `${device.name} is offline`,
-        summary: `${device.name} (${device.ip}) has not been seen recently and appears offline.`,
-        evidenceJson: {
-          incidentKey: `offline:${device.id}`,
-          deviceStatus: device.status,
-        },
-        status: "open",
-      });
+        stateStore.upsertDeviceFindingByDedupe({
+          deviceId: device.id,
+          dedupeKey: incidentKeyValue,
+          findingType: "availability",
+          severity: "warning",
+          title: `${device.name} is offline`,
+          summary: `${device.name} (${device.ip}) has not been seen recently and appears offline.`,
+          evidenceJson: {
+            incidentType: AVAILABILITY_OFFLINE_INCIDENT_TYPE,
+            incidentKey: incidentKeyValue,
+            deviceStatus: device.status,
+          },
+          status: "open",
+        });
+      }
     }
 
     const telnetOpen = device.services.some((service) => service.port === 23);
@@ -899,46 +1009,146 @@ const actPhase = async (devices: Device[]): Promise<{
       });
     }
     if (telnetOpen) {
-      const upserted = upsertIncident(incidents, {
-        title: `${device.name} exposes Telnet`,
-        summary: `Port 23 is open on ${device.name} (${device.ip}), which is insecure for management traffic.`,
-        severity: "critical",
-        deviceIds: [device.id],
-        status: "open",
-        diagnosis: "Cleartext management protocol exposed.",
-        remediationPlan: "Disable Telnet and enforce SSH or HTTPS management access.",
-        metadata: {
-          key: `telnet:${device.id}`,
-        },
-      });
-      incidents = upserted.next;
-      incidentsOpened += upserted.opened ? 1 : 0;
+      const incidentKeyValue = `telnet:${device.id}`;
+      if (!securityAlertsEnabled) {
+        incidents = resolveIncidentByKey(
+          incidents,
+          incidentKeyValue,
+          "Security exposure alerts are disabled for Telnet checks",
+        );
+        stateStore.upsertDeviceFindingByDedupe({
+          deviceId: device.id,
+          dedupeKey: incidentKeyValue,
+          findingType: "security_exposure",
+          severity: "critical",
+          title: `${device.name} exposes Telnet`,
+          summary: `Port 23 remains open on ${device.name}, but this alert type is currently suppressed.`,
+          evidenceJson: {
+            incidentType: SECURITY_TELNET_INCIDENT_TYPE,
+            incidentKey: incidentKeyValue,
+            port: 23,
+            open: true,
+          },
+          status: "resolved",
+        });
+      } else {
+        const upserted = upsertIncident(incidents, {
+          title: `${device.name} exposes Telnet`,
+          summary: `Port 23 is open on ${device.name} (${device.ip}), which is insecure for management traffic.`,
+          severity: "critical",
+          deviceIds: [device.id],
+          status: "open",
+          diagnosis: "Cleartext management protocol exposed.",
+          remediationPlan: "Disable Telnet and enforce SSH or HTTPS management access.",
+          metadata: {
+            key: incidentKeyValue,
+            incidentType: SECURITY_TELNET_INCIDENT_TYPE,
+            scannerType: "security",
+          },
+        });
+        incidents = upserted.next;
+        incidentsOpened += upserted.opened ? 1 : 0;
+
+        stateStore.upsertDeviceFindingByDedupe({
+          deviceId: device.id,
+          dedupeKey: incidentKeyValue,
+          findingType: "security_exposure",
+          severity: "critical",
+          title: `${device.name} exposes Telnet`,
+          summary: `Port 23 is open on ${device.name} (${device.ip}), which is insecure for management traffic.`,
+          evidenceJson: {
+            incidentType: SECURITY_TELNET_INCIDENT_TYPE,
+            incidentKey: incidentKeyValue,
+            port: 23,
+            open: true,
+          },
+          status: "open",
+        });
+
+        const recommendation = ensureRecommendation(recommendations, {
+          title: `Disable Telnet on ${device.name}`,
+          rationale:
+            "Cleartext device administration creates credential exposure and lateral movement risk.",
+          impact: "Eliminates insecure remote management path.",
+          priority: "high",
+          relatedDeviceIds: [device.id],
+        });
+        recommendations = recommendation.next;
+        recommendationsAdded += recommendation.added ? 1 : 0;
+      }
+    }
+
+    const tlsServices = device.services
+      .filter((service) => service.tlsCert?.validTo)
+      .map((service) => ({
+        service,
+        daysRemaining: daysUntilIso(service.tlsCert?.validTo ?? ""),
+      }))
+      .filter((item): item is { service: Device["services"][number]; daysRemaining: number } => item.daysRemaining !== null)
+      .sort((a, b) => a.daysRemaining - b.daysRemaining);
+
+    for (const { service, daysRemaining } of tlsServices) {
+      const cert = service.tlsCert;
+      if (!cert) continue;
+
+      const dedupeKey = `tls-cert-expiry:${device.id}:${service.id}`;
+      const label = tlsServiceLabel(device, service);
+
+      if (daysRemaining > TLS_CERT_WARNING_WINDOW_DAYS) {
+        stateStore.upsertDeviceFindingByDedupe({
+          deviceId: device.id,
+          dedupeKey,
+          findingType: "tls_certificate",
+          severity: "info",
+          title: `TLS certificate expiring on ${label}`,
+          summary: `TLS certificate for ${label} is healthy (${daysRemaining} days remaining).`,
+          evidenceJson: {
+            serviceId: service.id,
+            port: service.port,
+            subject: cert.subject,
+            issuer: cert.issuer,
+            validTo: cert.validTo,
+            daysRemaining,
+          },
+          status: "resolved",
+        });
+        continue;
+      }
+
+      const expired = daysRemaining < 0;
+      const severity: Incident["severity"] = daysRemaining <= TLS_CERT_CRITICAL_WINDOW_DAYS ? "critical" : "warning";
+      const summary = expired
+        ? `TLS certificate for ${label} expired ${Math.abs(daysRemaining)} day(s) ago (${cert.validTo}).`
+        : `TLS certificate for ${label} expires in ${daysRemaining} day(s) (${cert.validTo}).`;
 
       stateStore.upsertDeviceFindingByDedupe({
         deviceId: device.id,
-        dedupeKey: `telnet:${device.id}`,
-        findingType: "security_exposure",
-        severity: "critical",
-        title: `${device.name} exposes Telnet`,
-        summary: `Port 23 is open on ${device.name} (${device.ip}), which is insecure for management traffic.`,
+        dedupeKey,
+        findingType: "tls_certificate",
+        severity,
+        title: `TLS certificate expiring on ${label}`,
+        summary,
         evidenceJson: {
-          incidentKey: `telnet:${device.id}`,
-          port: 23,
-          open: true,
+          serviceId: service.id,
+          port: service.port,
+          subject: cert.subject,
+          issuer: cert.issuer,
+          validTo: cert.validTo,
+          daysRemaining,
+          selfSigned: cert.selfSigned,
         },
         status: "open",
       });
 
-      const recommendation = ensureRecommendation(recommendations, {
-        title: `Disable Telnet on ${device.name}`,
-        rationale:
-          "Cleartext device administration creates credential exposure and lateral movement risk.",
-        impact: "Eliminates insecure remote management path.",
-        priority: "high",
+      const certRecommendation = ensureRecommendation(recommendations, {
+        title: `Renew TLS certificate for ${device.name}`,
+        rationale: summary,
+        impact: "Prevents HTTPS management or application outages caused by certificate expiration.",
+        priority: severity === "critical" ? "high" : "medium",
         relatedDeviceIds: [device.id],
       });
-      recommendations = recommendation.next;
-      recommendationsAdded += recommendation.added ? 1 : 0;
+      recommendations = certRecommendation.next;
+      recommendationsAdded += certRecommendation.added ? 1 : 0;
     }
 
     if (device.type === "access-point") {
@@ -1008,7 +1218,12 @@ const actPhase = async (devices: Device[]): Promise<{
       credentialOnboardingRecommendations += recommendation.added ? 1 : 0;
     }
 
-    const contractEvaluation = await evaluateServiceContractsForDevice(device, incidents, recommendations);
+    const contractEvaluation = await evaluateAssurancesForDevice(
+      device,
+      incidents,
+      recommendations,
+      runtimeSettings,
+    );
     incidents = contractEvaluation.incidents;
     recommendations = contractEvaluation.recommendations;
     incidentsOpened += contractEvaluation.incidentsOpened;

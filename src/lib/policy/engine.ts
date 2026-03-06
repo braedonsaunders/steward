@@ -60,6 +60,102 @@ interface PolicyContext {
   quarantineActive?: boolean;
 }
 
+function scorePolicyRisk(
+  actionClass: ActionClass,
+  device: Device,
+  inMaintenanceWindow: boolean,
+  context: Required<PolicyContext>,
+): { riskScore: number; riskFactors: string[] } {
+  let score = 0;
+  const factors: string[] = [];
+
+  const add = (weight: number, factor: string): void => {
+    score += weight;
+    factors.push(factor);
+  };
+
+  switch (actionClass) {
+    case "A":
+      add(0.08, "class-a-read");
+      break;
+    case "B":
+      add(0.24, "class-b-safe-remediation");
+      break;
+    case "C":
+      add(0.52, "class-c-config-change");
+      break;
+    case "D":
+      add(0.76, "class-d-high-impact");
+      break;
+  }
+
+  const envLabel = device.environmentLabel ?? "lab";
+  if (envLabel === "prod") add(0.16, "prod-environment");
+  else if (envLabel === "staging") add(0.08, "staging-environment");
+  else if (envLabel === "dev") add(0.03, "dev-environment");
+
+  if (device.autonomyTier === 1) add(0.08, "low-autonomy-tier");
+  else if (device.autonomyTier === 2) add(0.03, "guarded-autonomy-tier");
+
+  if (context.blastRadius === "multi-device") add(0.16, "multi-device-blast-radius");
+  else if (context.blastRadius === "single-device") add(0.06, "single-device-blast-radius");
+
+  if (context.criticality === "high") add(0.14, "high-criticality");
+  else if (context.criticality === "medium") add(0.06, "medium-criticality");
+
+  if (!inMaintenanceWindow && (actionClass === "C" || actionClass === "D")) {
+    add(0.12, "outside-maintenance-window");
+  }
+
+  if (context.recentFailures > 0) {
+    add(Math.min(0.18, context.recentFailures * 0.06), "recent-failure-history");
+  }
+
+  if (context.lane === "B") add(0.04, "lane-b-execution");
+  else if (context.lane === "C") add(0.08, "lane-c-execution");
+
+  if (context.quarantineActive) add(0.2, "quarantine-active");
+
+  return {
+    riskScore: Math.max(0, Math.min(1, score)),
+    riskFactors: factors,
+  };
+}
+
+function buildPolicyEvaluation(
+  decision: PolicyDecision,
+  ruleId: string | null,
+  reason: string,
+  riskScore: number,
+  riskFactors: string[],
+  actionClass: ActionClass,
+  device: Device,
+  inMaintenanceWindow: boolean,
+  context: Required<PolicyContext>,
+  now: Date,
+): PolicyEvaluation {
+  return {
+    decision,
+    ruleId,
+    reason,
+    riskScore,
+    riskFactors,
+    evaluatedAt: now.toISOString(),
+    inputs: {
+      actionClass,
+      autonomyTier: device.autonomyTier,
+      environmentLabel: device.environmentLabel ?? "lab",
+      inMaintenanceWindow,
+      deviceId: device.id,
+      blastRadius: context.blastRadius,
+      criticality: context.criticality,
+      lane: context.lane,
+      recentFailures: context.recentFailures,
+      quarantineActive: context.quarantineActive,
+    },
+  };
+}
+
 function matchesRule(rule: PolicyRule, actionClass: ActionClass, device: Device): boolean {
   if (!rule.enabled) return false;
 
@@ -98,52 +194,43 @@ export function evaluatePolicy(
   const now = new Date();
   const inWindow = isDeviceInMaintenanceWindow(device.id, windows, now);
   const envLabel: EnvironmentLabel = device.environmentLabel ?? "lab";
-  const blastRadius = context.blastRadius ?? "single-device";
-  const criticality = context.criticality ?? "medium";
-  const lane = context.lane ?? "A";
-  const recentFailures = Math.max(0, context.recentFailures ?? 0);
-  const quarantineActive = context.quarantineActive ?? false;
+  const resolvedContext: Required<PolicyContext> = {
+    blastRadius: context.blastRadius ?? "single-device",
+    criticality: context.criticality ?? "medium",
+    lane: context.lane ?? "A",
+    recentFailures: Math.max(0, context.recentFailures ?? 0),
+    quarantineActive: context.quarantineActive ?? false,
+  };
+  const { riskScore, riskFactors } = scorePolicyRisk(actionClass, device, inWindow, resolvedContext);
 
-  if (quarantineActive) {
-    return {
-      decision: "DENY",
-      ruleId: null,
-      reason: "Execution is quarantined due to repeated failures",
-      evaluatedAt: now.toISOString(),
-      inputs: {
-        actionClass,
-        autonomyTier: device.autonomyTier,
-        environmentLabel: envLabel,
-        inMaintenanceWindow: inWindow,
-        deviceId: device.id,
-        blastRadius,
-        criticality,
-        lane,
-        recentFailures,
-        quarantineActive,
-      },
-    };
+  if (resolvedContext.quarantineActive) {
+    return buildPolicyEvaluation(
+      "DENY",
+      null,
+      "Execution is quarantined due to repeated failures",
+      riskScore,
+      riskFactors,
+      actionClass,
+      device,
+      inWindow,
+      resolvedContext,
+      now,
+    );
   }
 
-  if (recentFailures >= 3) {
-    return {
-      decision: "REQUIRE_APPROVAL",
-      ruleId: null,
-      reason: "Recent failure threshold reached; manual approval required",
-      evaluatedAt: now.toISOString(),
-      inputs: {
-        actionClass,
-        autonomyTier: device.autonomyTier,
-        environmentLabel: envLabel,
-        inMaintenanceWindow: inWindow,
-        deviceId: device.id,
-        blastRadius,
-        criticality,
-        lane,
-        recentFailures,
-        quarantineActive,
-      },
-    };
+  if (resolvedContext.recentFailures >= 3) {
+    return buildPolicyEvaluation(
+      "REQUIRE_APPROVAL",
+      null,
+      "Recent failure threshold reached; manual approval required",
+      riskScore,
+      riskFactors,
+      actionClass,
+      device,
+      inWindow,
+      resolvedContext,
+      now,
+    );
   }
 
   const sorted = [...rules].sort((a, b) => a.priority - b.priority);
@@ -160,50 +247,45 @@ export function evaluatePolicy(
       // Hard safety overrides for high-risk conditions.
       if (actionClass === "D" && envLabel === "prod" && !inWindow) {
         decision = "DENY";
-      } else if (actionClass === "D" && blastRadius === "multi-device") {
+      } else if (actionClass === "D" && resolvedContext.blastRadius === "multi-device") {
         decision = "REQUIRE_APPROVAL";
-      } else if (criticality === "high" && (actionClass === "C" || actionClass === "D")) {
+      } else if (resolvedContext.criticality === "high" && (actionClass === "C" || actionClass === "D")) {
         decision = "REQUIRE_APPROVAL";
       }
 
-      return {
+      if (decision === "ALLOW_AUTO" && riskScore >= 0.7) {
+        decision = "REQUIRE_APPROVAL";
+      }
+      if (riskScore >= 0.95) {
+        decision = "DENY";
+      }
+
+      return buildPolicyEvaluation(
         decision,
-        ruleId: rule.id,
-        reason: `Matched rule "${rule.name}" (priority ${rule.priority})${inWindow ? " [maintenance window active]" : ""}`,
-        evaluatedAt: now.toISOString(),
-        inputs: {
-          actionClass,
-          autonomyTier: device.autonomyTier,
-          environmentLabel: envLabel,
-          inMaintenanceWindow: inWindow,
-          deviceId: device.id,
-          blastRadius,
-          criticality,
-          lane,
-          recentFailures,
-          quarantineActive,
-        },
-      };
+        rule.id,
+        `Matched rule "${rule.name}" (priority ${rule.priority})${inWindow ? " [maintenance window active]" : ""}`,
+        riskScore,
+        riskFactors,
+        actionClass,
+        device,
+        inWindow,
+        resolvedContext,
+        now,
+      );
     }
   }
 
   // Default fallback: require approval for anything not explicitly covered
-  return {
-    decision: "REQUIRE_APPROVAL",
-    ruleId: null,
-    reason: "No matching policy rule found; defaulting to REQUIRE_APPROVAL",
-    evaluatedAt: now.toISOString(),
-    inputs: {
-      actionClass,
-      autonomyTier: device.autonomyTier,
-      environmentLabel: envLabel,
-      inMaintenanceWindow: inWindow,
-      deviceId: device.id,
-      blastRadius,
-      criticality,
-      lane,
-      recentFailures,
-      quarantineActive,
-    },
-  };
+  return buildPolicyEvaluation(
+    "REQUIRE_APPROVAL",
+    null,
+    "No matching policy rule found; defaulting to REQUIRE_APPROVAL",
+    riskScore,
+    riskFactors,
+    actionClass,
+    device,
+    inWindow,
+    resolvedContext,
+    now,
+  );
 }

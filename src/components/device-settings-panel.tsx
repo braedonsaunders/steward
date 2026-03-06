@@ -4,9 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import { withClientApiToken } from "@/lib/auth/client-token";
 import { useSteward } from "@/lib/hooks/use-steward";
 import type { DeviceType } from "@/lib/state/types";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -42,6 +42,8 @@ export function DeviceSettingsPanel({ deviceId }: { deviceId: string }) {
   const [savingNotes, setSavingNotes] = useState(false);
   const [savingStructuredMemory, setSavingStructuredMemory] = useState(false);
   const [savingAdoption, setSavingAdoption] = useState(false);
+  const [confirmAdoptionOpen, setConfirmAdoptionOpen] = useState(false);
+  const [pendingAdoptionStatus, setPendingAdoptionStatus] = useState<"discovered" | "ignored" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const existingOperatorNotes = device
@@ -113,17 +115,37 @@ export function DeviceSettingsPanel({ deviceId }: { deviceId: string }) {
     }
   };
 
-  const saveAdoption = async (status: "discovered" | "adopted" | "ignored") => {
-    if (status === adoptionStatus) return;
+  const saveAdoption = async (status: "discovered" | "adopted" | "ignored"): Promise<boolean> => {
+    if (status === adoptionStatus) return true;
     setSavingAdoption(true);
     try {
       await setDeviceAdoptionStatus(device.id, status);
       setError(null);
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update adoption status");
+      return false;
     } finally {
       setSavingAdoption(false);
     }
+  };
+
+  const onSelectAdoptionStatus = (status: "discovered" | "adopted" | "ignored") => {
+    if (status === adoptionStatus) return;
+    if (adoptionStatus === "adopted" && (status === "discovered" || status === "ignored")) {
+      setPendingAdoptionStatus(status);
+      setConfirmAdoptionOpen(true);
+      return;
+    }
+    void saveAdoption(status);
+  };
+
+  const confirmAdoptionChange = async () => {
+    if (!pendingAdoptionStatus) return;
+    const success = await saveAdoption(pendingAdoptionStatus);
+    if (!success) return;
+    setConfirmAdoptionOpen(false);
+    setPendingAdoptionStatus(null);
   };
 
   const saveOperatorNotes = async () => {
@@ -214,12 +236,30 @@ export function DeviceSettingsPanel({ deviceId }: { deviceId: string }) {
         <div className="space-y-2">
           <Label>Adoption</Label>
           <div className="flex items-center gap-2">
-            <Badge variant={adoptionStatus === "adopted" ? "default" : adoptionStatus === "ignored" ? "outline" : "secondary"}>
-              {adoptionStatus}
-            </Badge>
-            <Button size="sm" variant="outline" onClick={() => void saveAdoption("adopted")} disabled={savingAdoption}>Adopt</Button>
-            <Button size="sm" variant="outline" onClick={() => void saveAdoption("discovered")} disabled={savingAdoption}>Discovered</Button>
-            <Button size="sm" variant="outline" onClick={() => void saveAdoption("ignored")} disabled={savingAdoption}>Ignore</Button>
+            <Button
+              size="sm"
+              variant={adoptionStatus === "adopted" ? "default" : "outline"}
+              onClick={() => onSelectAdoptionStatus("adopted")}
+              disabled={savingAdoption}
+            >
+              Adopt
+            </Button>
+            <Button
+              size="sm"
+              variant={adoptionStatus === "discovered" ? "default" : "outline"}
+              onClick={() => onSelectAdoptionStatus("discovered")}
+              disabled={savingAdoption}
+            >
+              Discovered
+            </Button>
+            <Button
+              size="sm"
+              variant={adoptionStatus === "ignored" ? "default" : "outline"}
+              onClick={() => onSelectAdoptionStatus("ignored")}
+              disabled={savingAdoption}
+            >
+              Ignore
+            </Button>
           </div>
         </div>
 
@@ -260,6 +300,42 @@ export function DeviceSettingsPanel({ deviceId }: { deviceId: string }) {
 
         {error ? <p className="text-xs text-destructive">{error}</p> : null}
       </CardContent>
+
+      <Dialog
+        open={confirmAdoptionOpen}
+        onOpenChange={(open) => {
+          setConfirmAdoptionOpen(open);
+          if (!open) {
+            setPendingAdoptionStatus(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirm status change</DialogTitle>
+            <DialogDescription>
+              {pendingAdoptionStatus === "discovered"
+                ? "This device is currently adopted. Switch it back to discovered?"
+                : "This device is currently adopted. Move it to ignored?"}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setConfirmAdoptionOpen(false);
+                setPendingAdoptionStatus(null);
+              }}
+              disabled={savingAdoption}
+            >
+              Cancel
+            </Button>
+            <Button onClick={() => void confirmAdoptionChange()} disabled={savingAdoption || !pendingAdoptionStatus}>
+              {savingAdoption ? "Saving..." : "Confirm"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }

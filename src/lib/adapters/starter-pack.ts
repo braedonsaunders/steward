@@ -414,9 +414,11 @@ module.exports = {
 `;
 
 const WINDOWS_SERVER_ADAPTER_SOURCE = `
-function hasWindowsMgmtPort(services) {
+function hasWinrmPort(services) {
   return services.some((svc) =>
-    Number(svc.port) === 5985 || Number(svc.port) === 5986 || Number(svc.port) === 3389);
+    Number(svc.port) === 5985
+      || Number(svc.port) === 5986
+      || /winrm/i.test(String(svc.name || "")));
 }
 
 module.exports = {
@@ -426,7 +428,7 @@ module.exports = {
       return candidate;
     }
 
-    if (!hasWindowsMgmtPort(candidate.services || [])) {
+    if (!hasWinrmPort(candidate.services || [])) {
       return candidate;
     }
 
@@ -448,7 +450,7 @@ module.exports = {
     if (config.enabled === false) {
       return [];
     }
-    if (!hasWindowsMgmtPort(device.services || [])) {
+    if (!hasWinrmPort(device.services || [])) {
       return [];
     }
 
@@ -496,6 +498,162 @@ module.exports = {
               timeoutMs: 25000,
               commandTemplate: "Invoke-Command -ComputerName {{host}} -ScriptBlock { Get-Service | Select-Object -First 25 Name,Status,StartType }",
               expectedSemanticTarget: "windows:services",
+              safety: {
+                dryRunSupported: false,
+                requiresConfirmedRevert: false,
+                criticality: "low",
+              },
+            },
+          },
+        ],
+        verificationSteps: [],
+        rollbackSteps: [],
+      },
+    ];
+  },
+};
+`;
+
+const WINDOWS_WORKSTATION_ADAPTER_SOURCE = `
+function hasRdpPort(services) {
+  return services.some((svc) =>
+    Number(svc.port) === 3389 || /rdp/i.test(String(svc.name || "")));
+}
+
+function hasWinrmPort(services) {
+  return services.some((svc) =>
+    Number(svc.port) === 5985
+      || Number(svc.port) === 5986
+      || /winrm/i.test(String(svc.name || "")));
+}
+
+function hasServerPorts(services) {
+  return services.some((svc) =>
+    [53, 88, 389, 5985, 5986, 1433, 1521, 3306, 5432, 6379, 27017].includes(Number(svc.port)));
+}
+
+function looksWindows(candidate) {
+  const os = String(candidate.os || "").toLowerCase();
+  const vendor = String(candidate.vendor || "").toLowerCase();
+  const hostname = String(candidate.hostname || "").toLowerCase();
+  return os.includes("windows") || vendor.includes("microsoft") || hostname.includes("win");
+}
+
+function looksWorkstation(candidate) {
+  const typeHint = String(candidate.typeHint || "").toLowerCase();
+  const role = String(candidate.role || "").toLowerCase();
+  const hostname = String(candidate.hostname || "").toLowerCase();
+  const name = String(candidate.name || "").toLowerCase();
+  const text = typeHint + " " + role + " " + hostname + " " + name;
+  return typeHint === "workstation"
+    || /(workstation|desktop|laptop|gaming|pc|rog|tuf|legion|alienware|omen|zephyrus)/.test(text);
+}
+
+module.exports = {
+  enrich(candidate, context) {
+    const config = context.getConfig();
+    if (config.enabled === false) {
+      return candidate;
+    }
+
+    const services = candidate.services || [];
+    const windowsLike = looksWindows(candidate) || hasRdpPort(services) || hasWinrmPort(services);
+    if (!windowsLike) {
+      return candidate;
+    }
+
+    const workstationLike = candidate.typeHint === "workstation"
+      || looksWorkstation(candidate)
+      || (hasRdpPort(services) && !hasServerPorts(services));
+    if (!workstationLike) {
+      return candidate;
+    }
+
+    return {
+      ...candidate,
+      typeHint: candidate.typeHint === "unknown" || !candidate.typeHint || candidate.typeHint === "server"
+        ? "workstation"
+        : candidate.typeHint,
+      metadata: {
+        ...(candidate.metadata || {}),
+        windowsWorkstation: {
+          managedBy: "steward.windows-workstation",
+          profile: config.profile || "personal",
+          remoteDesktopObserved: hasRdpPort(services),
+          winrmObserved: hasWinrmPort(services),
+        },
+      },
+    };
+  },
+
+  capabilities(device, context) {
+    const config = context.getConfig();
+    if (config.enabled === false) {
+      return [];
+    }
+
+    const services = device.services || [];
+    const capabilities = [];
+
+    if (hasWinrmPort(services)) {
+      capabilities.push({
+        id: "capability.windows-workstation",
+        title: "Windows Workstation Management",
+        protocol: "winrm",
+        actions: [
+          "Collect desktop health snapshots",
+          "Audit active user sessions and startup items",
+          "Inspect GPU/display and patch posture",
+        ],
+      });
+    }
+
+    if (hasRdpPort(services)) {
+      capabilities.push({
+        id: "capability.windows-rdp-surface",
+        title: "Remote Desktop Surface",
+        protocol: "rdp",
+        actions: [
+          "Track RDP reachability",
+          "Review NLA and access posture",
+          "Plan deeper management via WinRM if needed",
+        ],
+      });
+    }
+
+    return capabilities;
+  },
+
+  playbooks(context) {
+    const config = context.getConfig();
+    if (config.enabled === false || config.enableSnapshotPlaybook === false) {
+      return [];
+    }
+
+    return [
+      {
+        id: "playbook:windows-workstation:snapshot",
+        family: "windows-maintenance",
+        name: "Collect Windows workstation snapshot",
+        description: "Runs a read-only workstation posture snapshot against Windows desktops and laptops.",
+        actionClass: "A",
+        blastRadius: "single-device",
+        timeoutMs: 45000,
+        preconditions: {
+          requiredProtocols: ["winrm"],
+        },
+        steps: [
+          {
+            id: "step:windows-workstation:snapshot",
+            label: "Query workstation posture",
+            operation: {
+              id: "op:windows-workstation:snapshot",
+              adapterId: "winrm",
+              kind: "shell.command",
+              mode: "read",
+              timeoutMs: 25000,
+              commandTemplate: "Get-CimInstance Win32_OperatingSystem | Select-Object CSName,Caption,Version,LastBootUpTime; Get-CimInstance Win32_ComputerSystem | Select-Object Manufacturer,Model,UserName,TotalPhysicalMemory",
+              expectedSemanticTarget: "windows:workstation-snapshot",
               safety: {
                 dryRunSupported: false,
                 requiresConfirmedRevert: false,
@@ -631,6 +789,121 @@ module.exports = {
 };
 `;
 
+const ADVANCED_NETWORK_INTEL_ADAPTER_SOURCE = `
+function hasManagedSurface(candidate) {
+  const services = Array.isArray(candidate.services) ? candidate.services : [];
+  return services.some((svc) => {
+    const port = Number(svc.port);
+    return [80, 443, 8080, 8443, 5000, 5001, 22, 161, 445, 5985, 5986].includes(port);
+  });
+}
+
+module.exports = {
+  enrich(candidate, context) {
+    const config = context.getConfig();
+    if (config.enabled === false) {
+      return candidate;
+    }
+    if (!hasManagedSurface(candidate)) {
+      return candidate;
+    }
+    return {
+      ...candidate,
+      metadata: {
+        ...(candidate.metadata || {}),
+        advancedNetworkIntel: {
+          managedBy: "steward.advanced-network-intel",
+          scriptPreset: String(config.nmapScriptPreset || "banner,http-title,http-headers,ssl-cert,upnp-info"),
+        },
+      },
+    };
+  },
+
+  capabilities(device, context) {
+    const config = context.getConfig();
+    if (config.enabled === false) {
+      return [];
+    }
+    if (!hasManagedSurface(device)) {
+      return [];
+    }
+    return [
+      {
+        id: "capability.advanced-network-intel",
+        title: "Advanced Network Intel",
+        protocol: "http",
+        actions: [
+          "Nmap NSE fingerprinting (banner/title/headers/SSL)",
+          "Favicon hashing and appliance signature hints",
+          "HTTP/HTTPS management surface contract analysis",
+        ],
+      },
+    ];
+  },
+};
+`;
+
+const ROUTER_LEASE_INTEL_ADAPTER_SOURCE = `
+function hasRouterHint(candidate) {
+  const typeHint = String(candidate.typeHint || "").toLowerCase();
+  const host = String(candidate.hostname || "").toLowerCase();
+  const vendor = String(candidate.vendor || "").toLowerCase();
+  const services = Array.isArray(candidate.services) ? candidate.services : [];
+  const ports = services.map((svc) => Number(svc.port));
+  return typeHint === "router"
+    || host.includes("router")
+    || host.includes("gateway")
+    || vendor.includes("mikrotik")
+    || vendor.includes("ubiquiti")
+    || ((ports.includes(53) || ports.includes(67)) && (ports.includes(80) || ports.includes(443)));
+}
+
+module.exports = {
+  enrich(candidate, context) {
+    const config = context.getConfig();
+    if (config.enabled === false) {
+      return candidate;
+    }
+    if (!hasRouterHint(candidate)) {
+      return candidate;
+    }
+    return {
+      ...candidate,
+      typeHint: candidate.typeHint && candidate.typeHint !== "unknown" ? candidate.typeHint : "router",
+      metadata: {
+        ...(candidate.metadata || {}),
+        routerLeaseIntel: {
+          managedBy: "steward.router-lease-intel",
+          preferredLeaseEndpoint: String(config.preferredLeaseEndpoint || "/"),
+        },
+      },
+    };
+  },
+
+  capabilities(device, context) {
+    const config = context.getConfig();
+    if (config.enabled === false) {
+      return [];
+    }
+    if (!hasRouterHint(device)) {
+      return [];
+    }
+    return [
+      {
+        id: "capability.router-lease-intel",
+        title: "Router Lease Intelligence",
+        protocol: "http",
+        actions: [
+          "Collect DHCP lease snapshots from router APIs",
+          "Track client inventory drift and unknown clients",
+          "Correlate lease hostnames with discovered devices",
+        ],
+      },
+    ];
+  },
+};
+`;
+
 export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
   {
     dirName: "steward-http-surface",
@@ -713,6 +986,259 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
       },
     },
     entrySource: HTTP_SURFACE_ADAPTER_SOURCE,
+  },
+  {
+    dirName: "steward-advanced-network-intel",
+    manifest: {
+      id: "steward.advanced-network-intel",
+      name: "Advanced Network Intel",
+      description: "Deep network fingerprinting adapter with nmap NSE, favicon signatures, and web-surface contract checks.",
+      version: "1.0.0",
+      author: "Steward",
+      entry: "index.js",
+      provides: ["enrichment", "protocol"],
+      docsUrl: "https://steward.local/docs/adapters/advanced-network-intel",
+      configSchema: [
+        {
+          key: "enabled",
+          label: "Enabled",
+          type: "boolean",
+          default: true,
+        },
+        {
+          key: "nmapScriptPreset",
+          label: "Nmap Script Preset",
+          type: "string",
+          default: "banner,http-title,http-headers,ssl-cert,upnp-info",
+        },
+      ],
+      defaultConfig: {
+        enabled: true,
+        nmapScriptPreset: "banner,http-title,http-headers,ssl-cert,upnp-info",
+      },
+      toolSkills: [
+        {
+          id: "skill.advanced.nmap-nse",
+          name: "Nmap NSE Fingerprint",
+          description: "Run deep service and script fingerprinting against a managed endpoint.",
+          category: "diagnostics",
+          operationKinds: ["shell.command"],
+          enabledByDefault: true,
+          toolCall: {
+            name: "steward_nmap_fingerprint",
+            description: "Run nmap NSE fingerprinting for an attached device.",
+            parameters: {
+              type: "object",
+              properties: {
+                device_id: { type: "string" },
+                input: {
+                  type: "object",
+                  properties: {
+                    timeout_ms: { type: "number" },
+                  },
+                  additionalProperties: true,
+                },
+              },
+              required: ["device_id"],
+              additionalProperties: false,
+            },
+          },
+          execution: {
+            kind: "shell.command",
+            mode: "read",
+            adapterId: "shell",
+            timeoutMs: 45000,
+            commandTemplate: "nmap -Pn -n --open -sV --version-light --script \"banner,http-title,http-headers,ssl-cert,upnp-info\" {{host}}",
+            expectedSemanticTarget: "network:intel:nmap",
+          },
+        },
+        {
+          id: "skill.advanced.favicon-hash",
+          name: "Favicon Fingerprint",
+          description: "Hash /favicon.ico to identify appliance families and web-console lineage.",
+          category: "diagnostics",
+          operationKinds: ["shell.command"],
+          enabledByDefault: true,
+          toolCall: {
+            name: "steward_favicon_fingerprint",
+            description: "Compute favicon hash on a target device.",
+            parameters: {
+              type: "object",
+              properties: {
+                device_id: { type: "string" },
+              },
+              required: ["device_id"],
+              additionalProperties: false,
+            },
+          },
+          execution: {
+            kind: "shell.command",
+            mode: "read",
+            adapterId: "shell",
+            timeoutMs: 15000,
+            commandTemplate: "sh -lc 'curl -fsS -k --max-time 8 http://{{host}}/favicon.ico | shasum -a 256'",
+            expectedSemanticTarget: "network:intel:favicon",
+          },
+        },
+        {
+          id: "skill.advanced.http-contract",
+          name: "HTTP Contract Audit",
+          description: "Profile headers, title, redirects, and auth surface for appliance-style endpoints.",
+          category: "operations",
+          operationKinds: ["http.request"],
+          enabledByDefault: true,
+          toolCall: {
+            name: "steward_http_contract_audit",
+            description: "Run HTTP contract probe against the target device.",
+            parameters: {
+              type: "object",
+              properties: {
+                device_id: { type: "string" },
+                input: {
+                  type: "object",
+                  properties: {
+                    path: { type: "string" },
+                    port: { type: "number" },
+                    secure: { type: "boolean" },
+                    timeout_ms: { type: "number" },
+                  },
+                  additionalProperties: true,
+                },
+              },
+              required: ["device_id"],
+              additionalProperties: false,
+            },
+          },
+          execution: {
+            kind: "http.request",
+            mode: "read",
+            adapterId: "http-api",
+            timeoutMs: 12000,
+            expectedSemanticTarget: "network:intel:http-contract",
+          },
+        },
+      ],
+      defaultToolConfig: {
+        "skill.advanced.nmap-nse": { enabled: true },
+        "skill.advanced.favicon-hash": { enabled: true },
+        "skill.advanced.http-contract": { enabled: true },
+      },
+    },
+    entrySource: ADVANCED_NETWORK_INTEL_ADAPTER_SOURCE,
+  },
+  {
+    dirName: "steward-router-lease-intel",
+    manifest: {
+      id: "steward.router-lease-intel",
+      name: "Router Lease Intel",
+      description: "Router-focused adapter for DHCP lease polling and client inventory correlation.",
+      version: "1.0.0",
+      author: "Steward",
+      entry: "index.js",
+      provides: ["enrichment", "protocol"],
+      docsUrl: "https://steward.local/docs/adapters/router-lease-intel",
+      configSchema: [
+        { key: "enabled", label: "Enabled", type: "boolean", default: true },
+        {
+          key: "preferredLeaseEndpoint",
+          label: "Preferred Lease Endpoint",
+          type: "string",
+          default: "/api/v1/status/dhcp_server/leases",
+        },
+        {
+          key: "fallbackLeaseEndpoint",
+          label: "Fallback Lease Endpoint",
+          type: "string",
+          default: "/proxy/network/api/s/default/stat/sta",
+        },
+      ],
+      defaultConfig: {
+        enabled: true,
+        preferredLeaseEndpoint: "/api/v1/status/dhcp_server/leases",
+        fallbackLeaseEndpoint: "/proxy/network/api/s/default/stat/sta",
+      },
+      toolSkills: [
+        {
+          id: "skill.router.lease-snapshot",
+          name: "Lease Snapshot",
+          description: "Fetch DHCP lease/client inventory snapshots from router APIs.",
+          category: "operations",
+          operationKinds: ["http.request"],
+          enabledByDefault: true,
+          toolCall: {
+            name: "steward_router_lease_snapshot",
+            description: "Collect a lease snapshot from the target router.",
+            parameters: {
+              type: "object",
+              properties: {
+                device_id: { type: "string" },
+                input: {
+                  type: "object",
+                  properties: {
+                    path: { type: "string" },
+                    port: { type: "number" },
+                    secure: { type: "boolean" },
+                    timeout_ms: { type: "number" },
+                  },
+                  additionalProperties: true,
+                },
+              },
+              required: ["device_id"],
+              additionalProperties: false,
+            },
+          },
+          execution: {
+            kind: "http.request",
+            mode: "read",
+            adapterId: "http-api",
+            timeoutMs: 15000,
+            expectedSemanticTarget: "router:leases",
+          },
+        },
+        {
+          id: "skill.router.client-drift",
+          name: "Client Drift Detection",
+          description: "Compare active clients/leases over time and surface new unknown endpoints.",
+          category: "diagnostics",
+          operationKinds: ["http.request"],
+          enabledByDefault: true,
+          toolCall: {
+            name: "steward_router_client_drift",
+            description: "Probe router client inventory for drift analysis.",
+            parameters: {
+              type: "object",
+              properties: {
+                device_id: { type: "string" },
+                input: {
+                  type: "object",
+                  properties: {
+                    path: { type: "string" },
+                    port: { type: "number" },
+                    secure: { type: "boolean" },
+                    timeout_ms: { type: "number" },
+                  },
+                  additionalProperties: true,
+                },
+              },
+              required: ["device_id"],
+              additionalProperties: false,
+            },
+          },
+          execution: {
+            kind: "http.request",
+            mode: "read",
+            adapterId: "http-api",
+            timeoutMs: 15000,
+            expectedSemanticTarget: "router:clients",
+          },
+        },
+      ],
+      defaultToolConfig: {
+        "skill.router.lease-snapshot": { enabled: true },
+        "skill.router.client-drift": { enabled: true },
+      },
+    },
+    entrySource: ROUTER_LEASE_INTEL_ADAPTER_SOURCE,
   },
   {
     dirName: "steward-docker-ops",
@@ -972,8 +1498,8 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
     manifest: {
       id: "steward.windows-server",
       name: "Windows Server",
-      description: "Remote Windows server adapter with WinRM/RDP classification and operational skills.",
-      version: "1.0.0",
+      description: "Remote Windows server adapter with WinRM-based classification and operational skills.",
+      version: "1.1.0",
       author: "Steward",
       entry: "index.js",
       provides: ["enrichment", "protocol", "playbooks"],
@@ -1010,6 +1536,15 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
           category: "operations",
           operationKinds: ["shell.command", "service.restart", "service.stop"],
           enabledByDefault: true,
+          execution: {
+            kind: "shell.command",
+            mode: "read",
+            adapterId: "winrm",
+            timeoutMs: 45000,
+            commandTemplate:
+              "Get-Service | Sort-Object Status,DisplayName | Select-Object -First 40 Status,Name,DisplayName,StartType",
+            expectedSemanticTarget: "windows:service-audit",
+          },
         },
         {
           id: "skill.windows.patch-posture",
@@ -1018,6 +1553,15 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
           category: "security",
           operationKinds: ["shell.command"],
           enabledByDefault: true,
+          execution: {
+            kind: "shell.command",
+            mode: "read",
+            adapterId: "winrm",
+            timeoutMs: 45000,
+            commandTemplate:
+              "Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion' | Select-Object ProductName,DisplayVersion,CurrentBuild,UBR; Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object -First 12 HotFixID,InstalledOn,Description",
+            expectedSemanticTarget: "windows:patch-posture",
+          },
         },
         {
           id: "skill.windows.eventlog-watch",
@@ -1026,6 +1570,15 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
           category: "diagnostics",
           operationKinds: ["shell.command"],
           enabledByDefault: true,
+          execution: {
+            kind: "shell.command",
+            mode: "read",
+            adapterId: "winrm",
+            timeoutMs: 45000,
+            commandTemplate:
+              "Get-WinEvent -FilterHashtable @{LogName='System'; Level=1,2; StartTime=(Get-Date).AddHours(-24)} -MaxEvents 20 | Select-Object TimeCreated,Id,ProviderName,LevelDisplayName,Message",
+            expectedSemanticTarget: "windows:eventlog-watch",
+          },
         },
         {
           id: "skill.windows.rdp-posture",
@@ -1034,6 +1587,15 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
           category: "security",
           operationKinds: ["shell.command"],
           enabledByDefault: true,
+          execution: {
+            kind: "shell.command",
+            mode: "read",
+            adapterId: "winrm",
+            timeoutMs: 45000,
+            commandTemplate:
+              "$ts='HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server'; $rdp='HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp'; Get-ItemProperty $ts | Select-Object fDenyTSConnections,AllowTSConnections; Get-ItemProperty $rdp | Select-Object PortNumber,SecurityLayer,UserAuthentication",
+            expectedSemanticTarget: "windows:rdp-posture",
+          },
         },
       ],
       defaultToolConfig: {
@@ -1044,6 +1606,122 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
       },
     },
     entrySource: WINDOWS_SERVER_ADAPTER_SOURCE,
+  },
+  {
+    dirName: "steward-windows-workstation",
+    manifest: {
+      id: "steward.windows-workstation",
+      name: "Windows Workstation",
+      description: "Desktop/laptop adapter for Windows workstations, gaming PCs, and RDP-exposed personal machines.",
+      version: "1.0.0",
+      author: "Steward",
+      entry: "index.js",
+      provides: ["enrichment", "protocol", "playbooks"],
+      docsUrl: "https://steward.local/docs/adapters/windows-workstation",
+      configSchema: [
+        { key: "enabled", label: "Enabled", type: "boolean", default: true },
+        {
+          key: "profile",
+          label: "Usage Profile",
+          type: "select",
+          default: "personal",
+          options: [
+            { label: "Personal", value: "personal" },
+            { label: "Developer", value: "developer" },
+            { label: "Gaming", value: "gaming" },
+            { label: "Shared", value: "shared" },
+          ],
+        },
+        {
+          key: "enableSnapshotPlaybook",
+          label: "Enable Snapshot Playbook",
+          type: "boolean",
+          default: true,
+        },
+      ],
+      defaultConfig: {
+        enabled: true,
+        profile: "personal",
+        enableSnapshotPlaybook: true,
+      },
+      toolSkills: [
+        {
+          id: "skill.windows-workstation.snapshot",
+          name: "Workstation Snapshot",
+          description: "Collect Windows desktop health, hardware identity, and last boot posture.",
+          category: "operations",
+          operationKinds: ["shell.command"],
+          enabledByDefault: true,
+          execution: {
+            kind: "shell.command",
+            mode: "read",
+            adapterId: "winrm",
+            timeoutMs: 45000,
+            commandTemplate:
+              "Get-CimInstance Win32_OperatingSystem | Select-Object CSName,Caption,Version,LastBootUpTime; Get-CimInstance Win32_ComputerSystem | Select-Object Manufacturer,Model,UserName,TotalPhysicalMemory",
+            expectedSemanticTarget: "windows:workstation-snapshot",
+          },
+        },
+        {
+          id: "skill.windows-workstation.user-session",
+          name: "Interactive Session Audit",
+          description: "Inspect signed-in users and the most active foreground processes on a Windows workstation.",
+          category: "diagnostics",
+          operationKinds: ["shell.command"],
+          enabledByDefault: true,
+          execution: {
+            kind: "shell.command",
+            mode: "read",
+            adapterId: "winrm",
+            timeoutMs: 45000,
+            commandTemplate:
+              "quser 2>$null; Get-Process | Sort-Object CPU -Descending | Select-Object -First 20 ProcessName,Id,CPU,WS",
+            expectedSemanticTarget: "windows:interactive-session",
+          },
+        },
+        {
+          id: "skill.windows-workstation.gpu-posture",
+          name: "GPU / Display Posture",
+          description: "Inspect GPU, monitor, and graphics driver posture for a Windows workstation.",
+          category: "diagnostics",
+          operationKinds: ["shell.command"],
+          enabledByDefault: true,
+          execution: {
+            kind: "shell.command",
+            mode: "read",
+            adapterId: "winrm",
+            timeoutMs: 45000,
+            commandTemplate:
+              "Get-CimInstance Win32_VideoController | Select-Object Name,DriverVersion,AdapterRAM,VideoProcessor; Get-CimInstance Win32_DesktopMonitor | Select-Object Name,ScreenWidth,ScreenHeight,PNPDeviceID",
+            expectedSemanticTarget: "windows:gpu-posture",
+          },
+        },
+        {
+          id: "skill.windows-workstation.startup-posture",
+          name: "Startup Posture",
+          description: "Review startup commands and scheduled tasks that affect workstation boot hygiene.",
+          category: "security",
+          operationKinds: ["shell.command"],
+          enabledByDefault: true,
+          execution: {
+            kind: "shell.command",
+            mode: "read",
+            adapterId: "winrm",
+            timeoutMs: 45000,
+            commandTemplate:
+              "Get-CimInstance Win32_StartupCommand | Select-Object -First 30 Name,Location,User,Command; Get-ScheduledTask | Select-Object -First 20 TaskName,TaskPath,State",
+            expectedSemanticTarget: "windows:startup-posture",
+          },
+        },
+      ],
+      defaultToolConfig: {
+        "skill.windows-workstation.snapshot": { enabled: true },
+        "skill.windows-workstation.user-session": { enabled: true },
+        "skill.windows-workstation.gpu-posture": { enabled: true },
+        "skill.windows-workstation.startup-posture": { enabled: true },
+      },
+    },
+    entrySource: WINDOWS_WORKSTATION_ADAPTER_SOURCE,
   },
   {
     dirName: "steward-ubiquiti-unifi",

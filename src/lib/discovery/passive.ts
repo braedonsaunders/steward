@@ -1,5 +1,6 @@
 import { runShell } from "@/lib/utils/shell";
 import { buildObservation } from "@/lib/discovery/evidence";
+import { getLocalInterfaceIdentity, normalizeMac } from "@/lib/discovery/local";
 import type { DiscoveryCandidate } from "@/lib/discovery/types";
 
 const ARP_LINE = /\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+([0-9a-f:.-]+|\(incomplete\))(?:\s+on\s+(\w+))?/i;
@@ -31,6 +32,7 @@ const isEligibleIp = (ip: string): boolean => {
 
 export const collectPassiveCandidates = async (): Promise<DiscoveryCandidate[]> => {
   const arp = await runShell("arp -a", 10_000);
+  const localIdentity = getLocalInterfaceIdentity();
 
   if (!arp.ok && !arp.stdout) {
     return [];
@@ -48,8 +50,11 @@ export const collectPassiveCandidates = async (): Promise<DiscoveryCandidate[]> 
       }
       const macRaw = unixMatch[2];
       const iface = unixMatch[3];
-      const mac = macRaw && macRaw !== "(incomplete)" ? macRaw.toLowerCase() : undefined;
+      const mac = normalizeMac(macRaw);
       if (!mac) {
+        continue;
+      }
+      if (localIdentity.ipSet.has(ip) || localIdentity.macSet.has(mac)) {
         continue;
       }
 
@@ -86,8 +91,11 @@ export const collectPassiveCandidates = async (): Promise<DiscoveryCandidate[]> 
         continue;
       }
       const macRaw = windowsMatch[2];
-      const mac = macRaw.toLowerCase() !== "incomplete" ? macRaw.toLowerCase().replace(/-/g, ":") : undefined;
+      const mac = normalizeMac(macRaw);
       if (!mac) {
+        continue;
+      }
+      if (localIdentity.ipSet.has(ip) || localIdentity.macSet.has(mac)) {
         continue;
       }
 

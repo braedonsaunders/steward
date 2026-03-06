@@ -30,8 +30,13 @@ export type DiscoveryEvidenceType =
   | "icmp_reply"
   | "tcp_open"
   | "nmap_host_up"
+  | "nmap_script"
   | "mdns_announcement"
   | "ssdp_response"
+  | "dhcp_lease"
+  | "packet_traffic_profile"
+  | "browser_observation"
+  | "favicon_hash"
   | "dns_ptr"
   | "dns_service"
   | "snmp_sysdescr"
@@ -90,11 +95,90 @@ export type OperationKind =
   | "container.restart"
   | "container.stop"
   | "http.request"
+  | "websocket.message"
   | "cert.renew"
   | "file.copy"
   | "network.config";
 
 export type RevertMechanism = "commit-confirmed" | "timed-rollback" | "manual";
+
+export type HttpRequestMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
+export type WebSocketSuccessStrategy = "auto" | "transport" | "response" | "expectation";
+export type WinrmAuthentication =
+  | "default"
+  | "basic"
+  | "negotiate"
+  | "kerberos"
+  | "credssp"
+  | "digest"
+  | (string & {});
+
+export type OperationExecutionStatus = "succeeded" | "failed" | "blocked" | "inconclusive";
+
+export type OperationExecutionPhase =
+  | "not-started"
+  | "blocked"
+  | "connected"
+  | "sent"
+  | "responded"
+  | "executed"
+  | "verified";
+
+export type OperationExecutionProof = "none" | "process" | "transport" | "response" | "expectation";
+
+export interface SshBrokerRequest {
+  protocol: "ssh";
+  argv: string[];
+  port?: number;
+}
+
+export interface HttpBrokerRequest {
+  protocol: "http";
+  method: HttpRequestMethod;
+  scheme?: "http" | "https";
+  schemes?: Array<"http" | "https">;
+  port?: number;
+  path: string;
+  query?: Record<string, string | number | boolean>;
+  headers?: Record<string, string>;
+  body?: string;
+  insecureSkipVerify?: boolean;
+  expectRegex?: string;
+}
+
+export interface WebSocketBrokerRequest {
+  protocol: "websocket";
+  scheme?: "ws" | "wss";
+  port?: number;
+  path: string;
+  query?: Record<string, string | number | boolean>;
+  headers?: Record<string, string>;
+  protocols?: string[];
+  messages?: string[];
+  sendOn?: "open" | "first-message";
+  connectTimeoutMs?: number;
+  responseTimeoutMs?: number;
+  collectMessages?: number;
+  expectRegex?: string;
+  successStrategy?: WebSocketSuccessStrategy;
+}
+
+export interface WinrmBrokerRequest {
+  protocol: "winrm";
+  command: string;
+  port?: number;
+  useSsl?: boolean;
+  skipCertChecks?: boolean;
+  authentication?: WinrmAuthentication;
+  expectRegex?: string;
+}
+
+export type ProtocolBrokerRequest =
+  | SshBrokerRequest
+  | HttpBrokerRequest
+  | WebSocketBrokerRequest
+  | WinrmBrokerRequest;
 
 export interface OperationSafetyProfile {
   dryRunSupported: boolean;
@@ -112,6 +196,7 @@ export interface OperationSpec {
   mode: OperationMode;
   timeoutMs: number;
   commandTemplate?: string;
+  brokerRequest?: ProtocolBrokerRequest;
   args?: Record<string, string | number | boolean>;
   expectedSemanticTarget?: string;
   safety: OperationSafetyProfile;
@@ -172,6 +257,9 @@ export type PlaybookRunStatus =
 export type GraphNodeType =
   | "device"
   | "service"
+  | "workload"
+  | "assurance"
+  | "access_surface"
   | "incident"
   | "credential"
   | "baseline"
@@ -197,7 +285,7 @@ export interface HttpInfo {
   redirectsTo?: string;
 }
 
-export interface ServiceFingerprint {
+export interface ObservedEndpoint {
   id: string;
   port: number;
   transport: "tcp" | "udp";
@@ -209,6 +297,66 @@ export interface ServiceFingerprint {
   tlsCert?: TlsCertInfo;
   httpInfo?: HttpInfo;
   lastSeenAt: string;
+}
+
+export type ServiceFingerprint = ObservedEndpoint;
+
+export type WorkloadCategory =
+  | "application"
+  | "platform"
+  | "data"
+  | "network"
+  | "perimeter"
+  | "storage"
+  | "telemetry"
+  | "background"
+  | "unknown";
+
+export interface Workload {
+  id: string;
+  deviceId: string;
+  workloadKey: string;
+  displayName: string;
+  category: WorkloadCategory;
+  criticality: "low" | "medium" | "high";
+  source: "legacy_contract" | "onboarding_profile" | "onboarding_conversation" | "chat_monitor" | "operator" | "migration";
+  summary?: string;
+  evidenceJson: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Assurance {
+  id: string;
+  deviceId: string;
+  workloadId?: string;
+  assuranceKey: string;
+  displayName: string;
+  criticality: "low" | "medium" | "high";
+  desiredState: "running" | "stopped";
+  checkIntervalSec: number;
+  monitorType?: string;
+  requiredProtocols?: string[];
+  rationale?: string;
+  configJson: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  // Legacy compatibility while the rest of the codebase finishes cutting over.
+  serviceKey: string;
+  policyJson: Record<string, unknown>;
+}
+
+export type ServiceContract = Assurance;
+
+export interface AssuranceRun {
+  id: string;
+  assuranceId: string;
+  deviceId: string;
+  workloadId?: string;
+  status: "pass" | "fail" | "pending";
+  summary: string;
+  evidenceJson: Record<string, unknown>;
+  evaluatedAt: string;
 }
 
 export interface Device {
@@ -227,7 +375,7 @@ export interface Device {
   environmentLabel?: EnvironmentLabel;
   tags: string[];
   protocols: string[];
-  services: ServiceFingerprint[];
+  services: ObservedEndpoint[];
   firstSeenAt: string;
   lastSeenAt: string;
   lastChangedAt: string;
@@ -291,7 +439,22 @@ export interface DeviceCredential {
   updatedAt: string;
 }
 
-export interface DeviceAdapterBinding {
+export interface CredentialAccessLog {
+  id: string;
+  credentialId?: string;
+  deviceId: string;
+  protocol: string;
+  playbookRunId?: string;
+  operationId?: string;
+  adapterId?: string;
+  actor: "steward" | "user";
+  purpose: string;
+  result: "granted" | "missing_secret" | "no_validated_credential" | "skipped_unvalidated";
+  details: Record<string, unknown>;
+  accessedAt: string;
+}
+
+export interface AccessSurface {
   id: string;
   deviceId: string;
   adapterId: string;
@@ -304,18 +467,7 @@ export interface DeviceAdapterBinding {
   updatedAt: string;
 }
 
-export interface ServiceContract {
-  id: string;
-  deviceId: string;
-  serviceKey: string;
-  displayName: string;
-  criticality: "low" | "medium" | "high";
-  desiredState: "running" | "stopped";
-  checkIntervalSec: number;
-  policyJson: Record<string, unknown>;
-  createdAt: string;
-  updatedAt: string;
-}
+export type DeviceAdapterBinding = AccessSurface;
 
 export interface DeviceFinding {
   id: string;
@@ -329,6 +481,78 @@ export interface DeviceFinding {
   status: "open" | "resolved";
   firstSeenAt: string;
   lastSeenAt: string;
+}
+
+export type DeviceWidgetStatus = "active" | "disabled";
+
+export type DeviceWidgetCapability = "context" | "state" | "device-control";
+
+export interface DeviceWidget {
+  id: string;
+  deviceId: string;
+  slug: string;
+  name: string;
+  description?: string;
+  status: DeviceWidgetStatus;
+  html: string;
+  css: string;
+  js: string;
+  capabilities: DeviceWidgetCapability[];
+  sourcePrompt?: string;
+  createdBy: "steward" | "user";
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DeviceWidgetRuntimeState {
+  widgetId: string;
+  deviceId: string;
+  stateJson: Record<string, unknown>;
+  updatedAt: string;
+}
+
+export type WidgetOperationStatus = OperationExecutionStatus | "requires-approval";
+
+export interface WidgetOperationResult {
+  ok: boolean;
+  status: WidgetOperationStatus;
+  phase: OperationExecutionPhase;
+  proof: OperationExecutionProof;
+  summary: string;
+  output: string;
+  details: Record<string, unknown>;
+  gateResults: SafetyGateResult[];
+  idempotencyKey: string;
+  policyDecision: PolicyDecision;
+  policyReason: string;
+  approvalRequired: boolean;
+  approved: boolean;
+  startedAt: string;
+  completedAt: string;
+}
+
+export interface DeviceWidgetOperationRun {
+  id: string;
+  widgetId: string;
+  deviceId: string;
+  widgetRevision: number;
+  operationKind: OperationKind;
+  operationMode: OperationMode;
+  brokerProtocol?: ProtocolBrokerRequest["protocol"];
+  status: WidgetOperationStatus;
+  phase: OperationExecutionPhase;
+  proof: OperationExecutionProof;
+  approvalRequired: boolean;
+  policyDecision: PolicyDecision;
+  policyReason: string;
+  approved: boolean;
+  idempotencyKey: string;
+  summary: string;
+  output: string;
+  operationJson: Record<string, unknown>;
+  detailsJson: Record<string, unknown>;
+  createdAt: string;
 }
 
 export interface DeviceBaseline {
@@ -464,6 +688,25 @@ export interface RuntimeSettings {
   enableMdnsDiscovery: boolean;
   enableSsdpDiscovery: boolean;
   enableSnmpProbe: boolean;
+  enableAdvancedNmapFingerprint: boolean;
+  nmapFingerprintTimeoutMs: number;
+  incrementalNmapTargets: number;
+  deepNmapTargets: number;
+  enablePacketIntel: boolean;
+  packetIntelDurationSec: number;
+  packetIntelMaxPackets: number;
+  packetIntelTopTalkers: number;
+  enableBrowserObservation: boolean;
+  browserObservationTimeoutMs: number;
+  incrementalBrowserObservationTargets: number;
+  deepBrowserObservationTargets: number;
+  browserObservationCaptureScreenshots: boolean;
+  enableWebResearch: boolean;
+  webResearchTimeoutMs: number;
+  webResearchMaxResults: number;
+  webResearchDeepReadPages: number;
+  enableDhcpLeaseIntel: boolean;
+  dhcpLeaseCommandTimeoutMs: number;
   ouiUpdateIntervalMs: number;
   laneBEnabled: boolean;
   laneBAllowedEnvironments: EnvironmentLabel[];
@@ -476,6 +719,10 @@ export interface RuntimeSettings {
   approvalTtlClassDMs: number;
   quarantineThresholdCount: number;
   quarantineThresholdWindowMs: number;
+  availabilityScannerAlertsEnabled: boolean;
+  securityScannerAlertsEnabled: boolean;
+  serviceContractScannerAlertsEnabled: boolean;
+  ignoredIncidentTypes: string[];
 }
 
 export type UserRole = "Owner" | "Admin" | "Operator" | "Auditor" | "ReadOnly";
@@ -562,6 +809,8 @@ export interface PolicyEvaluation {
   decision: PolicyDecision;
   ruleId: string | null;
   reason: string;
+  riskScore: number;
+  riskFactors: string[];
   evaluatedAt: string;
   inputs: {
     actionClass: ActionClass;
@@ -704,6 +953,30 @@ export interface ChatSession {
   updatedAt: string;
 }
 
+export type ChatToolEventStatus = "running" | "completed" | "failed";
+
+export type ChatToolEventKind = "tool" | "probe" | "terminal";
+
+export interface ChatToolEvent {
+  id: string;
+  toolName: string;
+  label: string;
+  kind: ChatToolEventKind;
+  status: ChatToolEventStatus;
+  startedAt: string;
+  finishedAt?: string;
+  anchorOffset?: number;
+  inputPreview?: string;
+  summary?: string;
+  outputPreview?: string;
+  error?: string;
+}
+
+export interface ChatMessageMetadata {
+  toolEvents?: ChatToolEvent[];
+  interrupted?: boolean;
+}
+
 export interface ChatMessage {
   id: string;
   sessionId: string;
@@ -712,6 +985,7 @@ export interface ChatMessage {
   provider?: string;
   error: boolean;
   createdAt: string;
+  metadata?: ChatMessageMetadata;
 }
 
 export interface AuthUser {

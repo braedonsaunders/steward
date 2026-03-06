@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import dns from "node:dns/promises";
 import net from "node:net";
-import os from "node:os";
 import { runShell } from "@/lib/utils/shell";
 import { buildObservation } from "@/lib/discovery/evidence";
+import { getLocalInterfaceIdentity } from "@/lib/discovery/local";
 import type { DiscoveryCandidate } from "@/lib/discovery/types";
 import type { ServiceFingerprint } from "@/lib/state/types";
 
@@ -181,39 +181,10 @@ const parseNmapLine = (line: string): DiscoveryCandidate | undefined => {
   };
 };
 
-const VIRTUAL_IFACE_HINTS = ["virtual", "veth", "docker", "wsl", "hyper-v", "vmware", "loopback"];
-
-const scoreInterfaceName = (name: string): number => {
-  const lower = name.toLowerCase();
-  return VIRTUAL_IFACE_HINTS.some((hint) => lower.includes(hint)) ? 1 : 0;
-};
-
 const tryGetLocalIps = async (): Promise<string[]> => {
-  const interfaces = os.networkInterfaces();
-  const fromInterfaces: Array<{ ip: string; score: number }> = [];
-
-  for (const [name, iface] of Object.entries(interfaces)) {
-    if (!iface) continue;
-    for (const address of iface) {
-      if (address.family !== "IPv4" || address.internal) {
-        continue;
-      }
-
-      if (/^(10\.|172\.(1[6-9]|2\d|3[0-1])\.|192\.168\.)/.test(address.address)) {
-        fromInterfaces.push({
-          ip: address.address,
-          score: scoreInterfaceName(name),
-        });
-      }
-    }
-  }
-
-  const orderedInterfaceIps = fromInterfaces
-    .sort((a, b) => a.score - b.score || a.ip.localeCompare(b.ip))
-    .map((item) => item.ip);
-
-  if (orderedInterfaceIps.length > 0) {
-    return Array.from(new Set(orderedInterfaceIps));
+  const localInterfaceIps = getLocalInterfaceIdentity().ips;
+  if (localInterfaceIps.length > 0) {
+    return localInterfaceIps;
   }
 
   const candidates = [
@@ -230,7 +201,7 @@ const tryGetLocalIps = async (): Promise<string[]> => {
       continue;
     }
 
-    const ip = result.stdout.split(/\s+/).find((item) => /\d+\.\d+\.\d+\.\d+/.test(item));
+    const ip = result.stdout.split(/\s+/).find((item) => isEligibleIp(item));
     if (ip) {
       return [ip];
     }
@@ -432,7 +403,8 @@ export const collectActiveCandidates = async (
 
   const hasNmap = await runShell(process.platform === "win32" ? "where nmap" : "command -v nmap", 1_500);
 
-  const localIps = await tryGetLocalIps();
+  const localIps = new Set(await tryGetLocalIps());
+  const isRemoteIp = (ip: string): boolean => !localIps.has(ip);
   const nmapSubnets = uniqueSubnetsFromIps([
     ...seedIps,
     ...localIps,
@@ -449,21 +421,22 @@ export const collectActiveCandidates = async (
         .filter((item): item is DiscoveryCandidate => Boolean(item));
 
       if (parsed.length > 0) {
-        return parsed;
+        return parsed.filter((candidate) => isRemoteIp(candidate.ip));
       }
     }
   }
 
-  const deduped = Array.from(new Set(seedIps.filter(isEligibleIp))).sort();
+  const deduped = Array.from(new Set(seedIps.filter((ip) => isEligibleIp(ip) && isRemoteIp(ip)))).sort();
   let targets = sliceWithOffset(deduped, targetOffset, maxTargets);
 
   if (targets.length === 0) {
-    const localIp = localIps[0];
+    const localIp = [...localIps][0];
     if (!localIp) {
       return [];
     }
 
-    targets = sliceWithOffset(buildHostCandidatesFromLocalSubnet(localIp), targetOffset, maxTargets);
+    targets = sliceWithOffset(buildHostCandidatesFromLocalSubnet(localIp), targetOffset, maxTargets)
+      .filter((ip) => isRemoteIp(ip));
   }
 
   if (targets.length < maxTargets) {
@@ -472,16 +445,18 @@ export const collectActiveCandidates = async (
       ...targets,
       ...localIps,
     ]);
-    const fallbackHosts = buildHostCandidatesFromSubnets(fallbackSubnets).filter((ip) => !targets.includes(ip));
+    const fallbackHosts = buildHostCandidatesFromSubnets(fallbackSubnets)
+      .filter((ip) => !targets.includes(ip) && isRemoteIp(ip));
     if (fallbackHosts.length > 0) {
       const needed = maxTargets - targets.length;
       targets = [...targets, ...sliceWithOffset(fallbackHosts, targetOffset, needed)];
     }
   }
 
+  targets = targets.filter((ip) => isRemoteIp(ip));
   const pingCandidates = await pingSweep(targets);
   const ipsToPortScan = sliceWithOffset(
-    Array.from(new Set([...targets, ...pingCandidates.map((candidate) => candidate.ip)])),
+    Array.from(new Set([...targets, ...pingCandidates.map((candidate) => candidate.ip)])).filter((ip) => isRemoteIp(ip)),
     targetOffset,
     maxPortScanHosts,
   );
@@ -544,5 +519,6 @@ export const collectActiveCandidates = async (
     }),
   );
 
-  return [...pingCandidates, ...enriched.filter((item): item is DiscoveryCandidate => Boolean(item))];
+  return [...pingCandidates, ...enriched.filter((item): item is DiscoveryCandidate => Boolean(item))]
+    .filter((candidate) => isRemoteIp(candidate.ip));
 };

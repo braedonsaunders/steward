@@ -1,6 +1,8 @@
+import { executeBrokerOperation } from "@/lib/adapters/protocol-broker";
+import { parseWinrmCommandTemplate } from "@/lib/adapters/winrm";
 import { randomUUID } from "node:crypto";
 import { runShell } from "@/lib/utils/shell";
-import type { Device, ServiceContract } from "@/lib/state/types";
+import type { Device, OperationSpec, ProtocolBrokerRequest, ServiceContract } from "@/lib/state/types";
 
 export type MonitorType =
   | "service_presence"
@@ -30,6 +32,10 @@ function nowIso(): string {
 
 function normalizeProtocol(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function toStringArray(value: unknown): string[] {
@@ -188,6 +194,41 @@ function buildServiceCommandTemplate(protocol: string, serviceName: string): str
   return undefined;
 }
 
+function buildServiceBrokerRequest(protocol: string, serviceName: string): ProtocolBrokerRequest | undefined {
+  if (protocol === "winrm") {
+    return {
+      protocol: "winrm",
+      command: `(Get-Service -Name '${serviceName}').Status`,
+    };
+  }
+  return undefined;
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function adapterIdForBroker(protocol: ProtocolBrokerRequest["protocol"]): string {
+  switch (protocol) {
+    case "ssh":
+      return "ssh";
+    case "winrm":
+      return "winrm";
+    case "http":
+    case "websocket":
+      return "http-api";
+    default:
+      return "ssh";
+  }
+}
+
+function brokerRequestFromPolicy(policy: Record<string, unknown>, commandTemplate: string): ProtocolBrokerRequest | undefined {
+  if (isRecord(policy.brokerRequest) && typeof policy.brokerRequest.protocol === "string") {
+    return policy.brokerRequest as unknown as ProtocolBrokerRequest;
+  }
+  return parseWinrmCommandTemplate(commandTemplate) ?? undefined;
+}
+
 export function buildCustomMonitorContractFromPrompt(
   device: Device,
   prompt: string,
@@ -238,8 +279,15 @@ export function buildCustomMonitorContractFromPrompt(
     } else if (serviceToken) {
       const preferredProtocol = requiredProtocols[0] ?? "ssh";
       const generatedTemplate = buildServiceCommandTemplate(preferredProtocol, serviceToken);
+      const generatedBrokerRequest = buildServiceBrokerRequest(preferredProtocol, serviceToken);
       if (generatedTemplate) {
         basePolicy.commandTemplate = generatedTemplate;
+        if (generatedBrokerRequest) {
+          basePolicy.brokerRequest = generatedBrokerRequest;
+          if (typeof basePolicy.expectedText !== "string" || basePolicy.expectedText.trim().length === 0) {
+            basePolicy.expectedText = "Running";
+          }
+        }
       } else {
         notes.push("No executable command template could be generated for this monitor.");
       }
@@ -272,11 +320,16 @@ export function buildCustomMonitorContractFromPrompt(
   const contract: ServiceContract = {
     id: randomUUID(),
     deviceId: device.id,
+    assuranceKey: serviceKey,
     serviceKey,
     displayName: displayName || "Custom monitor",
     criticality: inferCriticality(cleanedPrompt),
     desiredState: "running",
     checkIntervalSec: intervalSec,
+    monitorType,
+    requiredProtocols,
+    rationale: cleanedPrompt,
+    configJson: basePolicy,
     policyJson: basePolicy,
     createdAt,
     updatedAt: createdAt,
@@ -496,10 +549,61 @@ export async function evaluateServiceContract(
       ? Math.min(10 * 60_000, Math.max(1_000, Math.floor(Number(policy.timeoutMs))))
       : 30_000;
     const command = interpolateHost(commandTemplate, device);
-    const result = await runShell(command, timeoutMs);
     const expectedText = typeof policy.expectedText === "string" && policy.expectedText.trim().length > 0
       ? policy.expectedText.trim()
       : undefined;
+    const brokerRequest = brokerRequestFromPolicy(policy, command);
+
+    if (brokerRequest) {
+      const operation: OperationSpec = {
+        id: `contract:${contract.id}`,
+        adapterId: adapterIdForBroker(brokerRequest.protocol),
+        kind: "shell.command",
+        mode: "read",
+        timeoutMs,
+        brokerRequest: expectedText && brokerRequest.protocol === "winrm" && !brokerRequest.expectRegex
+          ? {
+            ...brokerRequest,
+            expectRegex: escapeRegex(expectedText),
+          }
+          : brokerRequest,
+        expectedSemanticTarget: contract.displayName,
+        safety: {
+          dryRunSupported: false,
+          requiresConfirmedRevert: false,
+          criticality: "low",
+        },
+      };
+      const result = await executeBrokerOperation(operation, device, {}, { actor: "steward" });
+      const matchesExpectation = expectedText ? result.output.includes(expectedText) : result.ok;
+      const passed = result.ok && matchesExpectation;
+
+      return {
+        status: passed ? "pass" : "fail",
+        summary: passed
+          ? `${contract.displayName} check passed (remote assertion satisfied).`
+          : `${contract.displayName} check failed (remote assertion did not pass).`,
+        evidenceJson: {
+          monitorType,
+          brokerProtocol: brokerRequest.protocol,
+          status: result.status,
+          phase: result.phase,
+          proof: result.proof,
+          expectedText: expectedText ?? null,
+          matchesExpectation,
+          summary: result.summary,
+          output: result.output.slice(0, 800),
+          details: result.details,
+        },
+        updatedPolicyJson: {
+          ...defaultPolicy,
+          lastStatus: passed ? "pass" : "fail",
+        },
+        monitorType,
+      };
+    }
+
+    const result = await runShell(command, timeoutMs);
     const output = `${result.stdout}${result.stderr ? `\n${result.stderr}` : ""}`.trim();
     const matchesExpectation = expectedText ? output.includes(expectedText) : true;
     const passed = result.ok && matchesExpectation;

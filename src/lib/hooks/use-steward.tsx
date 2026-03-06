@@ -11,6 +11,7 @@ import {
 } from "react";
 import type {
   ActionLog,
+  AuthUser,
   AgentRunRecord,
   AuthSettings,
   DailyDigest,
@@ -28,9 +29,33 @@ import type {
   RuntimeSettings,
   StewardState,
   SystemSettings,
+  UserRole,
 } from "@/lib/state/types";
 import type { DeviceAdoptionStatus } from "@/lib/state/device-adoption";
+import { defaultRuntimeSettings } from "@/lib/state/defaults";
 import { persistApiToken, withApiTokenQuery, withClientApiToken } from "@/lib/auth/client-token";
+
+export interface AuthClientStatus {
+  authenticated: boolean;
+  authRequired: boolean;
+  requiresBootstrap: boolean;
+  mode: AuthSettings["mode"];
+  usersCount: number;
+  apiTokenEnabled: boolean;
+  role?: UserRole;
+  source?: "token" | "session";
+  user?: AuthUser;
+}
+
+class UnauthorizedError extends Error {
+  status: number;
+
+  constructor(message: string, status = 401) {
+    super(message);
+    this.name = "UnauthorizedError";
+    this.status = status;
+  }
+}
 
 async function fetchJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
   const res = await fetch(input, withClientApiToken(init));
@@ -47,9 +72,24 @@ async function fetchJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> 
     } catch {
       // Use raw response text as-is.
     }
+    if (res.status === 401 || res.status === 403) {
+      throw new UnauthorizedError(message || `Request failed with status ${res.status}`, res.status);
+    }
     throw new Error(message || `Request failed with status ${res.status}`);
   }
   return (await res.json()) as T;
+}
+
+async function fetchAuthStatus(): Promise<AuthClientStatus> {
+  const res = await fetch("/api/auth/me", withClientApiToken());
+  if (!res.ok) {
+    throw new Error(`Failed to load auth status (${res.status})`);
+  }
+  return (await res.json()) as AuthClientStatus;
+}
+
+function requiresInteractiveAuth(status: AuthClientStatus | null): boolean {
+  return Boolean(status?.authRequired);
 }
 
 export interface VaultStatus {
@@ -165,6 +205,8 @@ export interface StewardContextValue {
   runtimeSettings: RuntimeSettings;
   systemSettings: SystemSettings;
   authSettings: AuthSettings;
+  authStatus: AuthClientStatus | null;
+  authRequired: boolean;
 
   // Status
   loading: boolean;
@@ -186,7 +228,8 @@ export interface StewardContextValue {
   runAgentCycle: () => Promise<{ started: boolean; summary?: Record<string, number> }>;
   addDevice: (name: string, ip: string) => Promise<void>;
   renameDevice: (id: string, name: string) => Promise<void>;
-  updateIncidentStatus: (id: string, status: string) => Promise<void>;
+  updateIncidentStatus: (id: string, status: Incident["status"]) => Promise<void>;
+  ignoreIncidentType: (id: string) => Promise<{ incidentType: string; resolvedCount: number }>;
   dismissRecommendation: (id: string) => Promise<void>;
   saveProvider: (
     provider: LLMProvider,
@@ -231,11 +274,29 @@ export function StewardProvider({ children }: { children: ReactNode }) {
   const [pendingApprovals, setPendingApprovals] = useState<PlaybookRun[]>([]);
   const [latestDigest, setLatestDigest] = useState<DailyDigest | null>(null);
   const [adapters, setAdapters] = useState<AdapterRecordClient[]>([]);
+  const [authStatus, setAuthStatus] = useState<AuthClientStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const clearProtectedState = useCallback(() => {
+    setState(null);
+    setVaultStatus(null);
+    setPendingApprovals([]);
+    setLatestDigest(null);
+    setAdapters([]);
+  }, []);
+
   const loadState = useCallback(async () => {
+    setLoading(true);
     try {
+      const nextAuthStatus = await fetchAuthStatus();
+      setAuthStatus(nextAuthStatus);
+      if (requiresInteractiveAuth(nextAuthStatus)) {
+        clearProtectedState();
+        setError(null);
+        return;
+      }
+
       const [s, v, approvals, digest, adapterList] = await Promise.all([
         fetchJson<StewardState>("/api/state"),
         fetchJson<VaultStatus>("/api/vault"),
@@ -250,17 +311,34 @@ export function StewardProvider({ children }: { children: ReactNode }) {
       setAdapters(adapterList);
       setError(null);
     } catch (err) {
+      if (err instanceof UnauthorizedError) {
+        try {
+          const nextAuthStatus = await fetchAuthStatus();
+          setAuthStatus(nextAuthStatus);
+          if (requiresInteractiveAuth(nextAuthStatus)) {
+            clearProtectedState();
+            setError(null);
+            return;
+          }
+        } catch {
+          // Fall through to generic error handling below.
+        }
+      }
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [clearProtectedState]);
 
   useEffect(() => {
     void loadState();
   }, [loadState]);
 
   useEffect(() => {
+    if (!authStatus || requiresInteractiveAuth(authStatus)) {
+      return;
+    }
+
     let disposed = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let stream: EventSource | null = null;
@@ -298,11 +376,31 @@ export function StewardProvider({ children }: { children: ReactNode }) {
         if (disposed) {
           return;
         }
-        setError("Lost live state stream. Reconnecting...");
         stream?.close();
         stream = null;
         clearReconnect();
-        reconnectTimer = setTimeout(connect, 2000);
+        void (async () => {
+          try {
+            const nextAuthStatus = await fetchAuthStatus();
+            if (disposed) {
+              return;
+            }
+            setAuthStatus(nextAuthStatus);
+            if (requiresInteractiveAuth(nextAuthStatus)) {
+              clearProtectedState();
+              setError(null);
+              setLoading(false);
+              return;
+            }
+          } catch {
+            // Fall back to reconnect behavior below.
+          }
+          if (disposed) {
+            return;
+          }
+          setError("Lost live state stream. Reconnecting...");
+          reconnectTimer = setTimeout(connect, 2000);
+        })();
       };
 
       stream.addEventListener("state", onState as EventListener);
@@ -317,7 +415,7 @@ export function StewardProvider({ children }: { children: ReactNode }) {
       stream?.close();
       stream = null;
     };
-  }, [loadState]);
+  }, [authStatus, clearProtectedState]);
 
   const overview = useMemo(() => {
     if (!state) return { devices: 0, online: 0, offline: 0, incidents: 0, recommendations: 0, pendingApprovals: 0, playbooksRunning: 0 };
@@ -335,6 +433,8 @@ export function StewardProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async () => {
     await loadState();
   }, [loadState]);
+
+  const authRequired = useMemo(() => requiresInteractiveAuth(authStatus), [authStatus]);
 
   const runAgentCycle = useCallback(async () => {
     const result = await fetchJson<{ ok: boolean; started?: boolean; summary?: Record<string, number> }>(
@@ -372,13 +472,30 @@ export function StewardProvider({ children }: { children: ReactNode }) {
   );
 
   const updateIncidentStatus = useCallback(
-    async (id: string, status: string) => {
+    async (id: string, status: Incident["status"]) => {
       await fetchJson("/api/incidents", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ id, status }),
       });
       await loadState();
+    },
+    [loadState],
+  );
+
+  const ignoreIncidentType = useCallback(
+    async (id: string) => {
+      const result = await fetchJson<{ ok: boolean; incidentType: string; resolvedCount: number }>(
+        `/api/incidents/${encodeURIComponent(id)}/ignore`,
+        {
+          method: "POST",
+        },
+      );
+      await loadState();
+      return {
+        incidentType: result.incidentType,
+        resolvedCount: result.resolvedCount,
+      };
     },
     [loadState],
   );
@@ -604,32 +721,7 @@ export function StewardProvider({ children }: { children: ReactNode }) {
       pendingApprovals,
       latestDigest,
       adapters,
-      runtimeSettings: state?.runtimeSettings ?? {
-        agentIntervalMs: 120_000,
-        deepScanIntervalMs: 30 * 60 * 1000,
-        incrementalActiveTargets: 32,
-        deepActiveTargets: 256,
-        incrementalPortScanHosts: 16,
-        deepPortScanHosts: 96,
-        llmDiscoveryLimit: 10,
-        incrementalFingerprintTargets: 6,
-        deepFingerprintTargets: 24,
-        enableMdnsDiscovery: true,
-        enableSsdpDiscovery: true,
-        enableSnmpProbe: true,
-        ouiUpdateIntervalMs: 7 * 24 * 60 * 60 * 1000,
-        laneBEnabled: false,
-        laneBAllowedEnvironments: ["lab", "dev"],
-        laneBAllowedFamilies: ["service-recovery", "disk-cleanup", "backup-retry"],
-        laneCMutationsInLab: false,
-        laneCMutationsInProd: false,
-        mutationRequireDryRunWhenSupported: true,
-        approvalTtlClassBMs: 2 * 60 * 60 * 1000,
-        approvalTtlClassCMs: 60 * 60 * 1000,
-        approvalTtlClassDMs: 30 * 60 * 1000,
-        quarantineThresholdCount: 3,
-        quarantineThresholdWindowMs: 10 * 60 * 1000,
-      },
+      runtimeSettings: state?.runtimeSettings ?? defaultRuntimeSettings(),
       systemSettings: state?.systemSettings ?? {
         nodeIdentity: "steward-local",
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? "America/Toronto",
@@ -663,6 +755,8 @@ export function StewardProvider({ children }: { children: ReactNode }) {
           bindPasswordConfigured: false,
         },
       },
+      authStatus,
+      authRequired,
       loading,
       error,
       overview,
@@ -671,6 +765,7 @@ export function StewardProvider({ children }: { children: ReactNode }) {
       addDevice,
       renameDevice,
       updateIncidentStatus,
+      ignoreIncidentType,
       dismissRecommendation,
       saveProvider,
       sendChat,
@@ -696,6 +791,8 @@ export function StewardProvider({ children }: { children: ReactNode }) {
       pendingApprovals,
       latestDigest,
       adapters,
+      authStatus,
+      authRequired,
       loading,
       error,
       overview,
@@ -704,6 +801,7 @@ export function StewardProvider({ children }: { children: ReactNode }) {
       addDevice,
       renameDevice,
       updateIncidentStatus,
+      ignoreIncidentType,
       dismissRecommendation,
       saveProvider,
       sendChat,

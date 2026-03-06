@@ -1,6 +1,9 @@
 import { collectActiveCandidates } from "@/lib/discovery/active";
+import { observeBrowserSurfaces } from "@/lib/discovery/browser-observer";
 import { mergeDiscoveryCandidates } from "@/lib/discovery/classify";
-import { buildObservation } from "@/lib/discovery/evidence";
+import { buildObservation, dedupeObservations } from "@/lib/discovery/evidence";
+import { runNmapDeepFingerprint } from "@/lib/discovery/nmap-deep";
+import { collectPacketIntelSnapshot } from "@/lib/discovery/packet-intel";
 import { collectPassiveCandidates } from "@/lib/discovery/passive";
 import {
   CURRENT_FINGERPRINT_VERSION,
@@ -8,12 +11,14 @@ import {
   fingerprintBatch,
 } from "@/lib/discovery/fingerprint";
 import { discoverMulticast } from "@/lib/discovery/multicast";
+import { getLocalInterfaceIdentity } from "@/lib/discovery/local";
 import { updateOuiDatabase } from "@/lib/discovery/oui";
 import dns from "node:dns/promises";
 import { adapterRegistry } from "@/lib/adapters/registry";
 import { stateStore } from "@/lib/state/store";
 import { runShell } from "@/lib/utils/shell";
 import type { DiscoveryCandidate, DiscoverySnapshot } from "@/lib/discovery/types";
+import type { ServiceFingerprint } from "@/lib/state/types";
 
 interface DiscoveryRunOptions {
   forceDeepScan?: boolean;
@@ -52,6 +57,7 @@ const WINRM_PORTS = new Set([5985, 5986]);
 const MQTT_PORTS = new Set([1883, 8883]);
 const SMB_PORTS = new Set([445]);
 const NETBIOS_PORTS = new Set([137, 139]);
+const UNKNOWN_SERVICE_NAMES = new Set(["", "unknown", "tcpwrapped", "generic"]);
 
 const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> => {
   let timer: NodeJS.Timeout | undefined;
@@ -246,10 +252,150 @@ const selectFingerprintTargets = (
   return selected;
 };
 
+const isUnknownServiceName = (name: string | undefined): boolean =>
+  !name || UNKNOWN_SERVICE_NAMES.has(name.trim().toLowerCase());
+
+const mergeServiceSets = (
+  current: ServiceFingerprint[],
+  patches: ServiceFingerprint[],
+): ServiceFingerprint[] => {
+  const byKey = new Map<string, ServiceFingerprint>();
+  for (const service of current) {
+    byKey.set(`${service.transport}:${service.port}`, service);
+  }
+
+  for (const patch of patches) {
+    const key = `${patch.transport}:${patch.port}`;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, patch);
+      continue;
+    }
+    byKey.set(key, {
+      ...existing,
+      ...patch,
+      id: existing.id,
+      name: !isUnknownServiceName(patch.name) ? patch.name : existing.name,
+      secure: existing.secure || patch.secure,
+      product: patch.product ?? existing.product,
+      version: patch.version ?? existing.version,
+      banner: patch.banner ?? existing.banner,
+      httpInfo: patch.httpInfo ?? existing.httpInfo,
+      tlsCert: patch.tlsCert ?? existing.tlsCert,
+      lastSeenAt: patch.lastSeenAt ?? existing.lastSeenAt,
+    });
+  }
+
+  return Array.from(byKey.values()).sort((a, b) => a.port - b.port);
+};
+
+const applyProbeResults = <
+  T extends {
+    ip: string;
+    services: ServiceFingerprint[];
+    observations: DiscoveryCandidate["observations"];
+    metadata: Record<string, unknown>;
+  },
+>(
+  candidates: DiscoveryCandidate[],
+  results: T[],
+  metadataKey: string,
+): DiscoveryCandidate[] => {
+  if (results.length === 0) {
+    return candidates;
+  }
+  const byIp = new Map(results.map((result) => [result.ip, result]));
+  return candidates.map((candidate) => {
+    const match = byIp.get(candidate.ip);
+    if (!match) {
+      return candidate;
+    }
+    return {
+      ...candidate,
+      services: mergeServiceSets(candidate.services, match.services),
+      observations: dedupeObservations([...(candidate.observations ?? []), ...(match.observations ?? [])]),
+      metadata: {
+        ...candidate.metadata,
+        [metadataKey]: match.metadata,
+      },
+    };
+  });
+};
+
+const applyPacketIntelSnapshot = (
+  candidates: DiscoveryCandidate[],
+  snapshot: Awaited<ReturnType<typeof collectPacketIntelSnapshot>>,
+  options: { includeDhcpLeaseEvidence: boolean },
+): DiscoveryCandidate[] => {
+  if (!snapshot) {
+    return candidates;
+  }
+
+  const existingByIp = new Map(candidates.map((candidate) => [candidate.ip, candidate]));
+  const next = [...candidates];
+
+  for (const host of snapshot.hosts) {
+    const hostObservations = options.includeDhcpLeaseEvidence
+      ? host.observations
+      : host.observations.filter((observation) => observation.evidenceType !== "dhcp_lease");
+    if (hostObservations.length === 0) {
+      continue;
+    }
+
+    const existing = existingByIp.get(host.ip);
+    if (existing) {
+      const merged: DiscoveryCandidate = {
+        ...existing,
+        hostname: existing.hostname ?? host.hostnameHint,
+        observations: dedupeObservations([...(existing.observations ?? []), ...hostObservations]),
+        metadata: {
+          ...existing.metadata,
+          packetIntel: {
+            ...host.metadata,
+            collectedAt: snapshot.collectedAt,
+            collector: snapshot.collector,
+          },
+        },
+      };
+      const idx = next.findIndex((candidate) => candidate.ip === host.ip);
+      if (idx !== -1) {
+        next[idx] = merged;
+      }
+      continue;
+    }
+
+    if (!isEligibleManagedIp(host.ip)) {
+      continue;
+    }
+
+    const created: DiscoveryCandidate = {
+      ip: host.ip,
+      hostname: host.hostnameHint,
+      services: [],
+      source: "passive",
+      observations: hostObservations,
+      metadata: {
+        packetIntel: {
+          ...host.metadata,
+          collectedAt: snapshot.collectedAt,
+          collector: snapshot.collector,
+        },
+      },
+    };
+    next.push(created);
+    existingByIp.set(host.ip, created);
+  }
+
+  return next;
+};
+
 /* ---------- Main Discovery Pipeline ---------- */
 
 export const runDiscovery = async (options: DiscoveryRunOptions = {}): Promise<DiscoverySnapshot> => {
   const settings = stateStore.getRuntimeSettings();
+  const localIps = getLocalInterfaceIdentity().ipSet;
+  const isManagedCandidate = (candidate: DiscoveryCandidate): boolean =>
+    isEligibleManagedIp(candidate.ip) && !localIps.has(candidate.ip);
 
   const now = Date.now();
   const manualScan = options.forceDeepScan === true;
@@ -269,7 +415,7 @@ export const runDiscovery = async (options: DiscoveryRunOptions = {}): Promise<D
   const passiveRaw = await collectPassiveCandidates();
   const passive = passiveRaw
     .map(normalizeCandidate)
-    .filter((candidate) => isEligibleManagedIp(candidate.ip));
+    .filter(isManagedCandidate);
 
   // Multicast discovery (mDNS + SSDP)
   let multicastCandidates: DiscoveryCandidate[] = [];
@@ -281,7 +427,7 @@ export const runDiscovery = async (options: DiscoveryRunOptions = {}): Promise<D
       });
       multicastCandidates = multicastRaw
         .map(normalizeCandidate)
-        .filter((c) => isEligibleManagedIp(c.ip));
+        .filter(isManagedCandidate);
     } catch (err) {
       console.error("[discovery] Multicast discovery failed:", err);
     }
@@ -298,7 +444,7 @@ export const runDiscovery = async (options: DiscoveryRunOptions = {}): Promise<D
   });
   const active = activeRaw
     .map(normalizeCandidate)
-    .filter((candidate) => isEligibleManagedIp(candidate.ip));
+    .filter(isManagedCandidate);
 
   if (deepScan) {
     lastDeepScanAt = now;
@@ -312,7 +458,7 @@ export const runDiscovery = async (options: DiscoveryRunOptions = {}): Promise<D
   const adapterCandidatesRaw = await adapterRegistry.runAdapterDiscovery(knownIps);
   const adapterCandidates = adapterCandidatesRaw
     .map(normalizeCandidate)
-    .filter((candidate) => isEligibleManagedIp(candidate.ip));
+    .filter(isManagedCandidate);
 
   /* ── Phase 3+4: Merge, Fingerprint, Enrich ────────────────────────── */
 
@@ -337,6 +483,73 @@ export const runDiscovery = async (options: DiscoveryRunOptions = {}): Promise<D
     }
   }
 
+  // Deep nmap service/version + NSE script fingerprinting
+  if (settings.enableAdvancedNmapFingerprint) {
+    const maxNmapTargets = deepScan ? settings.deepNmapTargets : settings.incrementalNmapTargets;
+    const nmapCandidates = fpTargets
+      .filter((candidate) => candidate.services.length > 0)
+      .slice(0, Math.max(0, maxNmapTargets));
+    if (nmapCandidates.length > 0) {
+      try {
+        const nmapResults = await runNmapDeepFingerprint(nmapCandidates, {
+          timeoutMs: settings.nmapFingerprintTimeoutMs,
+          maxConcurrency: deepScan ? 4 : 2,
+        });
+        merged = applyProbeResults(merged, nmapResults, "nmapDeep");
+      } catch (err) {
+        console.error("[discovery] Deep nmap fingerprinting failed:", err);
+      }
+    }
+  }
+
+  // Browser-aware HTTP console observation (Playwright when available)
+  if (settings.enableBrowserObservation) {
+    const maxBrowserTargets = deepScan
+      ? settings.deepBrowserObservationTargets
+      : settings.incrementalBrowserObservationTargets;
+    const browserCandidates = merged
+      .filter((candidate) => candidate.services.some((service) => HTTP_PORTS.has(service.port)))
+      .sort((a, b) => {
+        const aUnknown = !a.typeHint || a.typeHint === "unknown" ? 0 : 1;
+        const bUnknown = !b.typeHint || b.typeHint === "unknown" ? 0 : 1;
+        if (aUnknown !== bUnknown) {
+          return aUnknown - bUnknown;
+        }
+        return b.services.length - a.services.length;
+      })
+      .slice(0, Math.max(0, maxBrowserTargets));
+    if (browserCandidates.length > 0) {
+      try {
+        const browserResults = await observeBrowserSurfaces(browserCandidates, {
+          timeoutMs: settings.browserObservationTimeoutMs,
+          maxTargets: maxBrowserTargets,
+          captureScreenshots: settings.browserObservationCaptureScreenshots,
+          maxConcurrency: deepScan ? 3 : 2,
+        });
+        merged = applyProbeResults(merged, browserResults, "browserObservation");
+      } catch (err) {
+        console.error("[discovery] Browser observation failed:", err);
+      }
+    }
+  }
+
+  // Passive packet intelligence (Wireshark-style metadata via tshark)
+  if (settings.enablePacketIntel) {
+    try {
+      const packetSnapshot = await collectPacketIntelSnapshot({
+        durationSec: Math.min(60, settings.packetIntelDurationSec + (deepScan ? 2 : 0)),
+        maxPackets: deepScan ? settings.packetIntelMaxPackets * 2 : settings.packetIntelMaxPackets,
+        topTalkers: settings.packetIntelTopTalkers,
+        timeoutMs: Math.max(3_000, (settings.packetIntelDurationSec + 4) * 1_000),
+      });
+      merged = applyPacketIntelSnapshot(merged, packetSnapshot, {
+        includeDhcpLeaseEvidence: settings.enableDhcpLeaseIntel,
+      });
+    } catch (err) {
+      console.error("[discovery] Packet intelligence failed:", err);
+    }
+  }
+
   // Hostname enrichment
   merged = await enrichHostnames(merged, deepScan);
 
@@ -344,6 +557,7 @@ export const runDiscovery = async (options: DiscoveryRunOptions = {}): Promise<D
   merged = await Promise.all(
     merged.map(async (candidate) => normalizeCandidate(await adapterRegistry.enrichCandidate(candidate))),
   );
+  merged = merged.filter(isManagedCandidate);
 
   /* ── Phase 5: Classification (happens in candidateToDevice, called by loop.ts) ── */
 

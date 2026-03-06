@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { withClientApiToken } from "@/lib/auth/client-token";
 import type { AuthSettings, AuthUser, UserRole } from "@/lib/state/types";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +18,7 @@ type MeResponse = {
   usersCount: number;
   apiTokenEnabled: boolean;
   role?: UserRole;
+  source?: "token" | "session";
   user?: AuthUser;
 };
 
@@ -33,6 +34,7 @@ async function apiFetch<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
 }
 
 function AccessPageContent() {
+  const router = useRouter();
   const params = useSearchParams();
   const [me, setMe] = useState<MeResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -53,6 +55,7 @@ function AccessPageContent() {
 
   const isAdmin = me?.role === "Admin" || me?.role === "Owner";
   const isOwner = me?.role === "Owner";
+  const nextPath = params.get("next");
 
   const loadMe = useCallback(async () => {
     try {
@@ -116,7 +119,12 @@ function AccessPageContent() {
       });
       setBootstrapPassword("");
       const current = await loadMe();
-      if (current?.authenticated) await loadAdminData();
+      if (current?.authenticated) {
+        await loadAdminData();
+        if (nextPath) {
+          router.replace(nextPath);
+        }
+      }
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -137,6 +145,9 @@ function AccessPageContent() {
       const current = await loadMe();
       if (current?.authenticated && (current.role === "Admin" || current.role === "Owner")) {
         await loadAdminData();
+      }
+      if (current?.authenticated && nextPath) {
+        router.replace(nextPath);
       }
       setError(null);
     } catch (err) {
@@ -266,7 +277,7 @@ function AccessPageContent() {
           {statusBadge}
           {me?.authenticated ? (
             <span>
-              Signed in as <strong>{me.user?.displayName}</strong> ({me.role})
+              Signed in as <strong>{me.user?.displayName ?? (me.source === "token" ? "API token" : "authenticated user")}</strong> ({me.role})
             </span>
           ) : (
             <span>Not authenticated</span>

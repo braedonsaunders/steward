@@ -1,4 +1,5 @@
 import type { PlaybookDefinition } from "@/lib/state/types";
+import { sshBrokerRequest } from "@/lib/playbooks/brokers";
 
 const readSafety = {
   dryRunSupported: false,
@@ -35,6 +36,7 @@ export const serviceRecoveryPlaybooks: PlaybookDefinition[] = [
           kind: "service.restart",
           mode: "mutate",
           timeoutMs: 15_000,
+          brokerRequest: sshBrokerRequest("sudo", "systemctl", "restart", "{{service}}"),
           commandTemplate: "ssh {{host}} 'sudo systemctl restart {{service}}'",
           expectedSemanticTarget: "service:{{service}}",
           safety: mutateSafety,
@@ -51,6 +53,7 @@ export const serviceRecoveryPlaybooks: PlaybookDefinition[] = [
           kind: "shell.command",
           mode: "read",
           timeoutMs: 10_000,
+          brokerRequest: sshBrokerRequest("systemctl", "is-active", "{{service}}"),
           commandTemplate: "ssh {{host}} 'systemctl is-active {{service}}'",
           expectedSemanticTarget: "service:{{service}}",
           safety: readSafety,
@@ -67,6 +70,7 @@ export const serviceRecoveryPlaybooks: PlaybookDefinition[] = [
           kind: "service.stop",
           mode: "mutate",
           timeoutMs: 10_000,
+          brokerRequest: sshBrokerRequest("sudo", "systemctl", "stop", "{{service}}"),
           commandTemplate: "ssh {{host}} 'sudo systemctl stop {{service}}'",
           expectedSemanticTarget: "service:{{service}}",
           safety: mutateSafety,

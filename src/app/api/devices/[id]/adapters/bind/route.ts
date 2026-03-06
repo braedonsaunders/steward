@@ -29,19 +29,19 @@ export async function POST(
     return NextResponse.json({ error: "Device not found" }, { status: 404 });
   }
 
-  const bindings = stateStore.getDeviceAdapterBindings(id);
-  const target = bindings.find(
-    (binding) => binding.adapterId === payload.data.adapterId && binding.protocol === payload.data.protocol,
+  const accessSurfaces = stateStore.getAccessSurfaces(id);
+  const target = accessSurfaces.find(
+    (surface) => surface.adapterId === payload.data.adapterId && surface.protocol === payload.data.protocol,
   );
   if (!target) {
-    return NextResponse.json({ error: "Adapter binding candidate not found for protocol" }, { status: 404 });
+    return NextResponse.json({ error: "Access surface candidate not found for protocol" }, { status: 404 });
   }
 
-  stateStore.selectDeviceAdapterBinding(id, payload.data.adapterId, payload.data.protocol);
+  stateStore.selectAccessSurface(id, payload.data.adapterId, payload.data.protocol);
   await stateStore.addAction({
     actor: "user",
     kind: "config",
-    message: `Selected adapter ${payload.data.adapterId} for ${device.name} (${payload.data.protocol})`,
+    message: `Selected access surface ${payload.data.adapterId} for ${device.name} (${payload.data.protocol})`,
     context: {
       deviceId: id,
       adapterId: payload.data.adapterId,
@@ -50,6 +50,7 @@ export async function POST(
   });
 
   return NextResponse.json({
-    bindings: stateStore.getDeviceAdapterBindings(id),
+    accessSurfaces: stateStore.getAccessSurfaces(id),
+    bindings: stateStore.getAccessSurfaces(id),
   });
 }

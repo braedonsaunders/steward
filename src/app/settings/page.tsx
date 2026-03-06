@@ -49,7 +49,8 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import type { LLMProvider } from "@/lib/state/types";
+import type { LLMProvider, RuntimeSettings } from "@/lib/state/types";
+import { formatIncidentType } from "@/lib/incidents/utils";
 import { cn } from "@/lib/utils";
 import { withApiTokenQuery, withClientApiToken } from "@/lib/auth/client-token";
 
@@ -1118,7 +1119,9 @@ function VaultSection() {
 // General Section
 // ---------------------------------------------------------------------------
 
-function GeneralSection() {
+type GeneralTabValue = "agent" | "discovery" | "alerts" | "system";
+
+function GeneralSection({ forcedTab }: { forcedTab?: GeneralTabValue }) {
   const {
     agentRuns,
     runAgentCycle,
@@ -1137,6 +1140,7 @@ function GeneralSection() {
   const [runtimeDraft, setRuntimeDraft] = useState(runtimeSettings);
   const [systemDraft, setSystemDraft] = useState(systemSettings);
   const [apiTokenDraft, setApiTokenDraft] = useState("");
+  const [activeTab, setActiveTab] = useState<GeneralTabValue>(forcedTab ?? "agent");
 
   useEffect(() => {
     setRuntimeDraft(runtimeSettings);
@@ -1145,6 +1149,12 @@ function GeneralSection() {
   useEffect(() => {
     setSystemDraft(systemSettings);
   }, [systemSettings]);
+
+  useEffect(() => {
+    if (forcedTab) {
+      setActiveTab(forcedTab);
+    }
+  }, [forcedTab]);
 
   const lastRun = useMemo(() => {
     if (agentRuns.length === 0) return null;
@@ -1182,8 +1192,31 @@ function GeneralSection() {
     }
   }, [runAgentCycle]);
 
-  const setDraftField = <K extends keyof typeof runtimeDraft>(key: K, value: number) => {
-    setRuntimeDraft((current) => ({ ...current, [key]: Number.isFinite(value) ? Math.max(1, Math.floor(value)) : current[key] }));
+  type RuntimeNumberField = {
+    [K in keyof RuntimeSettings]: RuntimeSettings[K] extends number ? K : never;
+  }[keyof RuntimeSettings];
+  type RuntimeBooleanField = {
+    [K in keyof RuntimeSettings]: RuntimeSettings[K] extends boolean ? K : never;
+  }[keyof RuntimeSettings];
+
+  const setDraftField = (key: RuntimeNumberField, value: number) => {
+    setRuntimeDraft((current) => ({
+      ...current,
+      [key]: Number.isFinite(value)
+        ? Math.max(key === "webResearchDeepReadPages" ? 0 : 1, Math.floor(value))
+        : current[key],
+    }));
+  };
+
+  const setRuntimeToggleField = (key: RuntimeBooleanField, value: boolean) => {
+    setRuntimeDraft((current) => ({ ...current, [key]: value }));
+  };
+
+  const removeIgnoredIncidentType = (incidentType: string) => {
+    setRuntimeDraft((current) => ({
+      ...current,
+      ignoredIncidentTypes: current.ignoredIncidentTypes.filter((value) => value !== incidentType),
+    }));
   };
 
   const handleSaveRuntime = useCallback(async () => {
@@ -1231,249 +1264,455 @@ function GeneralSection() {
 
   return (
     <div className="space-y-4">
-      <Card className="bg-card/60">
-        <CardHeader>
-          <CardTitle className="text-base">Agent Status</CardTitle>
-          <CardDescription>
-            Monitor and trigger the autonomous agent loop.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="rounded-lg border bg-background/50 px-4 py-3">
-            {lastRun ? (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-medium">Last Run</p>
-                  <Badge
-                    variant={lastRun.outcome === "ok" ? "default" : "destructive"}
-                    className="text-[10px]"
-                  >
-                    {lastRun.outcome}
-                  </Badge>
-                </div>
-                <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                  <span className="flex items-center gap-1">
-                    <Clock className="h-3 w-3" />
-                    {new Date(lastRun.startedAt).toLocaleString()}
-                  </span>
-                  <span>({relativeTime(lastRun.startedAt)})</span>
-                </div>
-                {lastRun.summary && (
-                  <p className="text-xs text-muted-foreground">{lastRun.summary}</p>
+      {feedback && (
+        <Alert variant={feedback.type === "error" ? "destructive" : "default"}>
+          <AlertDescription className="text-xs">{feedback.message}</AlertDescription>
+        </Alert>
+      )}
+
+      <Tabs
+        value={forcedTab ?? activeTab}
+        onValueChange={(value) => {
+          if (!forcedTab) {
+            setActiveTab(value as GeneralTabValue);
+          }
+        }}
+        className="space-y-4"
+      >
+        {!forcedTab && (
+          <TabsList className="h-auto w-full flex-wrap justify-start">
+            <TabsTrigger value="agent" className="flex-none">Agent</TabsTrigger>
+            <TabsTrigger value="discovery" className="flex-none">Discovery</TabsTrigger>
+            <TabsTrigger value="alerts" className="flex-none">Alerts</TabsTrigger>
+            <TabsTrigger value="system" className="flex-none">System</TabsTrigger>
+          </TabsList>
+        )}
+
+        <TabsContent value="agent" className="space-y-4">
+          <Card className="bg-card/60">
+            <CardHeader>
+              <CardTitle className="text-base">Agent Status</CardTitle>
+              <CardDescription>
+                Monitor and trigger the autonomous agent loop.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="rounded-lg border bg-background/50 px-4 py-3">
+                {lastRun ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-medium">Last Run</p>
+                      <Badge
+                        variant={lastRun.outcome === "ok" ? "default" : "destructive"}
+                        className="text-[10px]"
+                      >
+                        {lastRun.outcome}
+                      </Badge>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                      <span className="flex items-center gap-1">
+                        <Clock className="h-3 w-3" />
+                        {new Date(lastRun.startedAt).toLocaleString()}
+                      </span>
+                      <span>({relativeTime(lastRun.startedAt)})</span>
+                    </div>
+                    {lastRun.summary && (
+                      <p className="text-xs text-muted-foreground">{lastRun.summary}</p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    No agent runs recorded yet.
+                  </p>
                 )}
               </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                No agent runs recorded yet.
-              </p>
-            )}
-          </div>
 
-          <Button onClick={() => void handleRunCycle()} disabled={running}>
-            {running ? (
-              <>
-                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                Running cycle...
-              </>
-            ) : (
-              <>
-                <Play className="mr-1.5 h-4 w-4" />
-                Run Agent Cycle
-              </>
-            )}
-          </Button>
+              <Button onClick={() => void handleRunCycle()} disabled={running}>
+                {running ? (
+                  <>
+                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                    Running cycle...
+                  </>
+                ) : (
+                  <>
+                    <Play className="mr-1.5 h-4 w-4" />
+                    Run Agent Cycle
+                  </>
+                )}
+              </Button>
 
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <RefreshCw className="h-3.5 w-3.5" />
-            <span>
-              Configured loop interval: <strong className="text-foreground">{Math.round(runtimeSettings.agentIntervalMs / 1000)}s</strong>
-            </span>
-          </div>
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <RefreshCw className="h-3.5 w-3.5" />
+                <span>
+                  Configured loop interval: <strong className="text-foreground">{Math.round(runtimeSettings.agentIntervalMs / 1000)}s</strong>
+                </span>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-          {feedback && (
-            <Alert variant={feedback.type === "error" ? "destructive" : "default"}>
-              <AlertDescription className="text-xs">{feedback.message}</AlertDescription>
-            </Alert>
-          )}
-        </CardContent>
-      </Card>
+        <TabsContent value="discovery" className="space-y-4">
+          <Card className="bg-card/60">
+            <CardHeader>
+              <CardTitle className="text-base">Discovery Runtime Tuning</CardTitle>
+              <CardDescription>
+                Persisted in SQLite and applied by the discovery loop.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border/60 bg-muted/30 px-3 py-2">
+                <p className="text-xs text-muted-foreground">
+                  RBAC users/sessions, OIDC SSO, and LDAP login settings are managed in Access Controls.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    window.location.assign("/access");
+                  }}
+                >
+                  Open Access Controls
+                </Button>
+              </div>
 
-      <Card className="bg-card/60">
-        <CardHeader>
-          <CardTitle className="text-base">Discovery Runtime Tuning</CardTitle>
-          <CardDescription>
-            Persisted in SQLite and applied by the discovery loop.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border/60 bg-muted/30 px-3 py-2">
-            <p className="text-xs text-muted-foreground">
-              RBAC users/sessions, OIDC SSO, and LDAP login settings are managed in Access Controls.
-            </p>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                window.location.assign("/access");
-              }}
-            >
-              Open Access Controls
-            </Button>
-          </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Agent interval (ms)</Label>
+                  <Input type="number" value={runtimeDraft.agentIntervalMs} onChange={(e) => setDraftField("agentIntervalMs", Number(e.target.value))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Deep scan interval (ms)</Label>
+                  <Input type="number" value={runtimeDraft.deepScanIntervalMs} onChange={(e) => setDraftField("deepScanIntervalMs", Number(e.target.value))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Incremental active targets</Label>
+                  <Input type="number" value={runtimeDraft.incrementalActiveTargets} onChange={(e) => setDraftField("incrementalActiveTargets", Number(e.target.value))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Deep active targets</Label>
+                  <Input type="number" value={runtimeDraft.deepActiveTargets} onChange={(e) => setDraftField("deepActiveTargets", Number(e.target.value))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Incremental port-scan hosts</Label>
+                  <Input type="number" value={runtimeDraft.incrementalPortScanHosts} onChange={(e) => setDraftField("incrementalPortScanHosts", Number(e.target.value))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Deep port-scan hosts</Label>
+                  <Input type="number" value={runtimeDraft.deepPortScanHosts} onChange={(e) => setDraftField("deepPortScanHosts", Number(e.target.value))} />
+                </div>
+                <div className="space-y-1.5 md:col-span-2">
+                  <Label className="text-xs text-muted-foreground">LLM discovery advice batch size</Label>
+                  <Input type="number" value={runtimeDraft.llmDiscoveryLimit} onChange={(e) => setDraftField("llmDiscoveryLimit", Number(e.target.value))} />
+                </div>
+              </div>
 
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">Agent interval (ms)</Label>
-              <Input type="number" value={runtimeDraft.agentIntervalMs} onChange={(e) => setDraftField("agentIntervalMs", Number(e.target.value))} />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">Deep scan interval (ms)</Label>
-              <Input type="number" value={runtimeDraft.deepScanIntervalMs} onChange={(e) => setDraftField("deepScanIntervalMs", Number(e.target.value))} />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">Incremental active targets</Label>
-              <Input type="number" value={runtimeDraft.incrementalActiveTargets} onChange={(e) => setDraftField("incrementalActiveTargets", Number(e.target.value))} />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">Deep active targets</Label>
-              <Input type="number" value={runtimeDraft.deepActiveTargets} onChange={(e) => setDraftField("deepActiveTargets", Number(e.target.value))} />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">Incremental port-scan hosts</Label>
-              <Input type="number" value={runtimeDraft.incrementalPortScanHosts} onChange={(e) => setDraftField("incrementalPortScanHosts", Number(e.target.value))} />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">Deep port-scan hosts</Label>
-              <Input type="number" value={runtimeDraft.deepPortScanHosts} onChange={(e) => setDraftField("deepPortScanHosts", Number(e.target.value))} />
-            </div>
-            <div className="space-y-1.5 md:col-span-2">
-              <Label className="text-xs text-muted-foreground">LLM discovery advice batch size</Label>
-              <Input type="number" value={runtimeDraft.llmDiscoveryLimit} onChange={(e) => setDraftField("llmDiscoveryLimit", Number(e.target.value))} />
-            </div>
-          </div>
-          <Button onClick={() => void handleSaveRuntime()} disabled={savingRuntime}>
-            {savingRuntime ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Settings2 className="mr-1.5 h-4 w-4" />}
-            {savingRuntime ? "Saving..." : "Save Discovery Settings"}
-          </Button>
-        </CardContent>
-      </Card>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Incremental fingerprint targets</Label>
+                  <Input type="number" value={runtimeDraft.incrementalFingerprintTargets} onChange={(e) => setDraftField("incrementalFingerprintTargets", Number(e.target.value))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Deep fingerprint targets</Label>
+                  <Input type="number" value={runtimeDraft.deepFingerprintTargets} onChange={(e) => setDraftField("deepFingerprintTargets", Number(e.target.value))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Incremental nmap targets</Label>
+                  <Input type="number" value={runtimeDraft.incrementalNmapTargets} onChange={(e) => setDraftField("incrementalNmapTargets", Number(e.target.value))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Deep nmap targets</Label>
+                  <Input type="number" value={runtimeDraft.deepNmapTargets} onChange={(e) => setDraftField("deepNmapTargets", Number(e.target.value))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Nmap timeout (ms)</Label>
+                  <Input type="number" value={runtimeDraft.nmapFingerprintTimeoutMs} onChange={(e) => setDraftField("nmapFingerprintTimeoutMs", Number(e.target.value))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">OUI update interval (ms)</Label>
+                  <Input type="number" value={runtimeDraft.ouiUpdateIntervalMs} onChange={(e) => setDraftField("ouiUpdateIntervalMs", Number(e.target.value))} />
+                </div>
+              </div>
 
-      <Card className="bg-card/60">
-        <CardHeader>
-          <CardTitle className="text-base">System and Security</CardTitle>
-          <CardDescription>
-            DB-backed system defaults, scheduled digest window, and API token guard.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">Node identity</Label>
-              <Input
-                value={systemDraft.nodeIdentity}
-                onChange={(e) => setSystemDraft((current) => ({ ...current, nodeIdentity: e.target.value }))}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">Timezone (IANA)</Label>
-              <Input
-                value={systemDraft.timezone}
-                onChange={(e) => setSystemDraft((current) => ({ ...current, timezone: e.target.value }))}
-                placeholder="America/Toronto"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">Upgrade channel</Label>
-              <Select
-                value={systemDraft.upgradeChannel}
-                onValueChange={(value) =>
-                  setSystemDraft((current) => ({ ...current, upgradeChannel: value as "stable" | "preview" }))
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="stable">Stable</SelectItem>
-                  <SelectItem value="preview">Preview</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">Daily digest schedule</Label>
-              <div className="flex items-center gap-3 rounded-md border px-3 py-2">
-                <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Packet intel duration (sec)</Label>
+                  <Input type="number" value={runtimeDraft.packetIntelDurationSec} onChange={(e) => setDraftField("packetIntelDurationSec", Number(e.target.value))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Packet intel max packets</Label>
+                  <Input type="number" value={runtimeDraft.packetIntelMaxPackets} onChange={(e) => setDraftField("packetIntelMaxPackets", Number(e.target.value))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Packet intel top talkers</Label>
+                  <Input type="number" value={runtimeDraft.packetIntelTopTalkers} onChange={(e) => setDraftField("packetIntelTopTalkers", Number(e.target.value))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Browser observation timeout (ms)</Label>
+                  <Input type="number" value={runtimeDraft.browserObservationTimeoutMs} onChange={(e) => setDraftField("browserObservationTimeoutMs", Number(e.target.value))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Incremental browser targets</Label>
+                  <Input type="number" value={runtimeDraft.incrementalBrowserObservationTargets} onChange={(e) => setDraftField("incrementalBrowserObservationTargets", Number(e.target.value))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Deep browser targets</Label>
+                  <Input type="number" value={runtimeDraft.deepBrowserObservationTargets} onChange={(e) => setDraftField("deepBrowserObservationTargets", Number(e.target.value))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Web research timeout (ms)</Label>
+                  <Input type="number" value={runtimeDraft.webResearchTimeoutMs} onChange={(e) => setDraftField("webResearchTimeoutMs", Number(e.target.value))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Web research max results</Label>
+                  <Input type="number" value={runtimeDraft.webResearchMaxResults} onChange={(e) => setDraftField("webResearchMaxResults", Number(e.target.value))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Web research deep-read pages</Label>
+                  <Input type="number" value={runtimeDraft.webResearchDeepReadPages} onChange={(e) => setDraftField("webResearchDeepReadPages", Number(e.target.value))} />
+                </div>
+                <div className="space-y-1.5 md:col-span-2">
+                  <Label className="text-xs text-muted-foreground">DHCP lease command timeout (ms)</Label>
+                  <Input type="number" value={runtimeDraft.dhcpLeaseCommandTimeoutMs} onChange={(e) => setDraftField("dhcpLeaseCommandTimeoutMs", Number(e.target.value))} />
+                </div>
+              </div>
+
+              <div className="space-y-3 rounded-md border border-border/60 bg-muted/30 p-3">
+                <label className="flex items-center justify-between gap-3 text-sm">
+                  <span className="text-muted-foreground">Enable mDNS discovery</span>
+                  <input type="checkbox" checked={runtimeDraft.enableMdnsDiscovery} onChange={(e) => setRuntimeToggleField("enableMdnsDiscovery", e.target.checked)} />
+                </label>
+                <label className="flex items-center justify-between gap-3 text-sm">
+                  <span className="text-muted-foreground">Enable SSDP discovery</span>
+                  <input type="checkbox" checked={runtimeDraft.enableSsdpDiscovery} onChange={(e) => setRuntimeToggleField("enableSsdpDiscovery", e.target.checked)} />
+                </label>
+                <label className="flex items-center justify-between gap-3 text-sm">
+                  <span className="text-muted-foreground">Enable SNMP probe</span>
+                  <input type="checkbox" checked={runtimeDraft.enableSnmpProbe} onChange={(e) => setRuntimeToggleField("enableSnmpProbe", e.target.checked)} />
+                </label>
+                <label className="flex items-center justify-between gap-3 text-sm">
+                  <span className="text-muted-foreground">Enable advanced nmap fingerprinting</span>
+                  <input type="checkbox" checked={runtimeDraft.enableAdvancedNmapFingerprint} onChange={(e) => setRuntimeToggleField("enableAdvancedNmapFingerprint", e.target.checked)} />
+                </label>
+                <label className="flex items-center justify-between gap-3 text-sm">
+                  <span className="text-muted-foreground">Enable packet intelligence (tshark)</span>
+                  <input type="checkbox" checked={runtimeDraft.enablePacketIntel} onChange={(e) => setRuntimeToggleField("enablePacketIntel", e.target.checked)} />
+                </label>
+                <label className="flex items-center justify-between gap-3 text-sm">
+                  <span className="text-muted-foreground">Enable browser observation (Playwright)</span>
+                  <input type="checkbox" checked={runtimeDraft.enableBrowserObservation} onChange={(e) => setRuntimeToggleField("enableBrowserObservation", e.target.checked)} />
+                </label>
+                <label className="flex items-center justify-between gap-3 text-sm">
+                  <span className="text-muted-foreground">Capture browser screenshots</span>
+                  <input type="checkbox" checked={runtimeDraft.browserObservationCaptureScreenshots} onChange={(e) => setRuntimeToggleField("browserObservationCaptureScreenshots", e.target.checked)} />
+                </label>
+                <label className="flex items-center justify-between gap-3 text-sm">
+                  <span className="text-muted-foreground">Enable public web research</span>
+                  <input type="checkbox" checked={runtimeDraft.enableWebResearch} onChange={(e) => setRuntimeToggleField("enableWebResearch", e.target.checked)} />
+                </label>
+                <label className="flex items-center justify-between gap-3 text-sm">
+                  <span className="text-muted-foreground">Enable DHCP lease intelligence</span>
+                  <input type="checkbox" checked={runtimeDraft.enableDhcpLeaseIntel} onChange={(e) => setRuntimeToggleField("enableDhcpLeaseIntel", e.target.checked)} />
+                </label>
+              </div>
+              <Button onClick={() => void handleSaveRuntime()} disabled={savingRuntime}>
+                {savingRuntime ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Settings2 className="mr-1.5 h-4 w-4" />}
+                {savingRuntime ? "Saving..." : "Save Discovery Settings"}
+              </Button>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="alerts" className="space-y-4">
+          <Card className="bg-card/60">
+            <CardHeader>
+              <CardTitle className="text-base">Incident Alert Scanners</CardTitle>
+              <CardDescription>
+                Configure which built-in scanners can raise incidents and manage ignored incident types.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-3 rounded-md border border-border/60 bg-muted/30 p-3">
+                <label className="flex items-center justify-between gap-3 text-sm">
+                  <span className="text-muted-foreground">Availability scanner alerts (offline devices)</span>
                   <input
                     type="checkbox"
-                    checked={systemDraft.digestScheduleEnabled}
-                    onChange={(e) =>
-                      setSystemDraft((current) => ({ ...current, digestScheduleEnabled: e.target.checked }))
-                    }
+                    checked={runtimeDraft.availabilityScannerAlertsEnabled}
+                    onChange={(e) => setRuntimeToggleField("availabilityScannerAlertsEnabled", e.target.checked)}
                   />
-                  Enabled
                 </label>
-                <Input
-                  type="number"
-                  min={0}
-                  max={23}
-                  className="h-8 w-20"
-                  value={systemDraft.digestHourLocal}
-                  onChange={(e) =>
-                    setSystemDraft((current) => ({
-                      ...current,
-                      digestHourLocal: Math.max(0, Math.min(23, Number(e.target.value) || 0)),
-                    }))
-                  }
-                />
-                <span className="text-xs text-muted-foreground">:</span>
-                <Input
-                  type="number"
-                  min={0}
-                  max={59}
-                  className="h-8 w-20"
-                  value={systemDraft.digestMinuteLocal}
-                  onChange={(e) =>
-                    setSystemDraft((current) => ({
-                      ...current,
-                      digestMinuteLocal: Math.max(0, Math.min(59, Number(e.target.value) || 0)),
-                    }))
-                  }
-                />
+                <label className="flex items-center justify-between gap-3 text-sm">
+                  <span className="text-muted-foreground">Security scanner alerts (Telnet exposure)</span>
+                  <input
+                    type="checkbox"
+                    checked={runtimeDraft.securityScannerAlertsEnabled}
+                    onChange={(e) => setRuntimeToggleField("securityScannerAlertsEnabled", e.target.checked)}
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-3 text-sm">
+                  <span className="text-muted-foreground">Assurance scanner alerts (workload drift and monitor failures)</span>
+                  <input
+                    type="checkbox"
+                    checked={runtimeDraft.serviceContractScannerAlertsEnabled}
+                    onChange={(e) => setRuntimeToggleField("serviceContractScannerAlertsEnabled", e.target.checked)}
+                  />
+                </label>
               </div>
-            </div>
-          </div>
-          <Button onClick={() => void handleSaveSystem()} disabled={savingSystem}>
-            {savingSystem ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Settings2 className="mr-1.5 h-4 w-4" />}
-            {savingSystem ? "Saving..." : "Save System Settings"}
-          </Button>
 
-          <Separator />
+              <div className="space-y-2">
+                <Label className="text-xs text-muted-foreground">Ignored incident types</Label>
+                {runtimeDraft.ignoredIncidentTypes.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No incident types are currently ignored.</p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {runtimeDraft.ignoredIncidentTypes.map((incidentType) => (
+                      <div
+                        key={incidentType}
+                        className="flex items-center gap-2 rounded-md border bg-background/50 px-2.5 py-1.5"
+                      >
+                        <Badge variant="outline" className="text-[10px]">
+                          {formatIncidentType(incidentType)}
+                        </Badge>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2 text-xs"
+                          onClick={() => removeIgnoredIncidentType(incidentType)}
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
 
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label className="text-xs text-muted-foreground">API auth token</Label>
-              <Badge variant={authSettings.apiTokenEnabled ? "default" : "secondary"} className="text-[10px]">
-                {authSettings.apiTokenEnabled ? "Enabled" : "Disabled"}
-              </Badge>
-            </div>
-            <div className="flex gap-2">
-              <Input
-                type="password"
-                placeholder="Enter new token (min 16 chars)"
-                value={apiTokenDraft}
-                onChange={(e) => setApiTokenDraft(e.target.value)}
-              />
-              <Button onClick={() => void handleSetToken()} disabled={savingToken}>
-                {savingToken ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
-                {savingToken ? "Saving..." : "Set / Clear"}
+              <Button onClick={() => void handleSaveRuntime()} disabled={savingRuntime}>
+                {savingRuntime ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Settings2 className="mr-1.5 h-4 w-4" />}
+                {savingRuntime ? "Saving..." : "Save Alert Settings"}
               </Button>
-            </div>
-            <p className="text-[10px] text-muted-foreground">
-              Token values are never returned by the API. Send it as `Authorization: Bearer &lt;token&gt;` or `x-steward-token`.
-            </p>
-          </div>
-        </CardContent>
-      </Card>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="system" className="space-y-4">
+          <Card className="bg-card/60">
+            <CardHeader>
+              <CardTitle className="text-base">System and Security</CardTitle>
+              <CardDescription>
+                DB-backed system defaults, scheduled digest window, and API token guard.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Node identity</Label>
+                  <Input
+                    value={systemDraft.nodeIdentity}
+                    onChange={(e) => setSystemDraft((current) => ({ ...current, nodeIdentity: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Timezone (IANA)</Label>
+                  <Input
+                    value={systemDraft.timezone}
+                    onChange={(e) => setSystemDraft((current) => ({ ...current, timezone: e.target.value }))}
+                    placeholder="America/Toronto"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Upgrade channel</Label>
+                  <Select
+                    value={systemDraft.upgradeChannel}
+                    onValueChange={(value) =>
+                      setSystemDraft((current) => ({ ...current, upgradeChannel: value as "stable" | "preview" }))
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="stable">Stable</SelectItem>
+                      <SelectItem value="preview">Preview</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Daily digest schedule</Label>
+                  <div className="flex items-center gap-3 rounded-md border px-3 py-2">
+                    <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <input
+                        type="checkbox"
+                        checked={systemDraft.digestScheduleEnabled}
+                        onChange={(e) =>
+                          setSystemDraft((current) => ({ ...current, digestScheduleEnabled: e.target.checked }))
+                        }
+                      />
+                      Enabled
+                    </label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={23}
+                      className="h-8 w-20"
+                      value={systemDraft.digestHourLocal}
+                      onChange={(e) =>
+                        setSystemDraft((current) => ({
+                          ...current,
+                          digestHourLocal: Math.max(0, Math.min(23, Number(e.target.value) || 0)),
+                        }))
+                      }
+                    />
+                    <span className="text-xs text-muted-foreground">:</span>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={59}
+                      className="h-8 w-20"
+                      value={systemDraft.digestMinuteLocal}
+                      onChange={(e) =>
+                        setSystemDraft((current) => ({
+                          ...current,
+                          digestMinuteLocal: Math.max(0, Math.min(59, Number(e.target.value) || 0)),
+                        }))
+                      }
+                    />
+                  </div>
+                </div>
+              </div>
+              <Button onClick={() => void handleSaveSystem()} disabled={savingSystem}>
+                {savingSystem ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Settings2 className="mr-1.5 h-4 w-4" />}
+                {savingSystem ? "Saving..." : "Save System Settings"}
+              </Button>
+
+              <Separator />
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs text-muted-foreground">API auth token</Label>
+                  <Badge variant={authSettings.apiTokenEnabled ? "default" : "secondary"} className="text-[10px]">
+                    {authSettings.apiTokenEnabled ? "Enabled" : "Disabled"}
+                  </Badge>
+                </div>
+                <div className="flex gap-2">
+                  <Input
+                    type="password"
+                    placeholder="Enter new token (min 16 chars)"
+                    value={apiTokenDraft}
+                    onChange={(e) => setApiTokenDraft(e.target.value)}
+                  />
+                  <Button onClick={() => void handleSetToken()} disabled={savingToken}>
+                    {savingToken ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
+                    {savingToken ? "Saving..." : "Set / Clear"}
+                  </Button>
+                </div>
+                <p className="text-[10px] text-muted-foreground">
+                  Token values are never returned by the API. Send it as `Authorization: Bearer &lt;token&gt;` or `x-steward-token`.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
@@ -1508,10 +1747,13 @@ export default function SettingsPage() {
       </div>
 
       <Tabs defaultValue="providers" className="flex min-h-0 flex-1 flex-col">
-        <TabsList>
+        <TabsList className="h-auto flex-wrap justify-start">
           <TabsTrigger value="providers">Providers</TabsTrigger>
           <TabsTrigger value="vault">Vault</TabsTrigger>
-          <TabsTrigger value="general">General</TabsTrigger>
+          <TabsTrigger value="agent">Agent</TabsTrigger>
+          <TabsTrigger value="discovery">Discovery</TabsTrigger>
+          <TabsTrigger value="alerts">Alerts</TabsTrigger>
+          <TabsTrigger value="system">System</TabsTrigger>
         </TabsList>
 
         <TabsContent value="providers" className="mt-4 min-h-0 flex-1 overflow-auto">
@@ -1522,8 +1764,20 @@ export default function SettingsPage() {
           <VaultSection />
         </TabsContent>
 
-        <TabsContent value="general" className="mt-4 min-h-0 flex-1 overflow-auto">
-          <GeneralSection />
+        <TabsContent value="agent" className="mt-4 min-h-0 flex-1 overflow-auto">
+          <GeneralSection forcedTab="agent" />
+        </TabsContent>
+
+        <TabsContent value="discovery" className="mt-4 min-h-0 flex-1 overflow-auto">
+          <GeneralSection forcedTab="discovery" />
+        </TabsContent>
+
+        <TabsContent value="alerts" className="mt-4 min-h-0 flex-1 overflow-auto">
+          <GeneralSection forcedTab="alerts" />
+        </TabsContent>
+
+        <TabsContent value="system" className="mt-4 min-h-0 flex-1 overflow-auto">
+          <GeneralSection forcedTab="system" />
         </TabsContent>
       </Tabs>
     </div>

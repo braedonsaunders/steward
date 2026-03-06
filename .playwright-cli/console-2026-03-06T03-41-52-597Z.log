@@ -1,0 +1,18 @@
+[     148ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://localhost:3011/api/state:0
+[     153ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://localhost:3011/api/vault:0
+[     153ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://localhost:3011/api/approvals:0
+[     153ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://localhost:3011/api/digest:0
+[     153ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://localhost:3011/api/adapters:0
+[     154ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://localhost:3011/api/chat/sessions:0
+[     154ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://localhost:3011/api/state/stream:0
+[     186ms] TypeError: ew.find is not a function
+    at oc (http://localhost:3011/_next/static/chunks/5440c97811f5243e.js:2:8500)
+    at av (http://localhost:3011/_next/static/chunks/7de9141b1af425c3.js:1:63230)
+    at oY (http://localhost:3011/_next/static/chunks/7de9141b1af425c3.js:1:83503)
+    at io (http://localhost:3011/_next/static/chunks/7de9141b1af425c3.js:1:94935)
+    at sc (http://localhost:3011/_next/static/chunks/7de9141b1af425c3.js:1:137956)
+    at http://localhost:3011/_next/static/chunks/7de9141b1af425c3.js:1:137801
+    at ss (http://localhost:3011/_next/static/chunks/7de9141b1af425c3.js:1:137809)
+    at u9 (http://localhost:3011/_next/static/chunks/7de9141b1af425c3.js:1:133734)
+    at sV (http://localhost:3011/_next/static/chunks/7de9141b1af425c3.js:1:159329)
+    at MessagePort.O (http://localhost:3011/_next/static/chunks/7de9141b1af425c3.js:1:8295)

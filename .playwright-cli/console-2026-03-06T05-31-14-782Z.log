@@ -1,0 +1,727 @@
+[   34216ms] [ERROR] The Content Security Policy directive 'frame-ancestors' is ignored when delivered via a <meta> element. @ about:srcdoc:0
+[   66937ms] [ERROR] The Content Security Policy directive 'frame-ancestors' is ignored when delivered via a <meta> element. @ about:srcdoc:0
+[  118671ms] [ERROR] The Content Security Policy directive 'frame-ancestors' is ignored when delivered via a <meta> element. @ about:srcdoc:0
+[  164009ms] [ERROR] The final argument passed to %s changed size between renders. The order and size of this array must remain constant.
+
+Previous: %s
+Incoming: %s useEffect [true, [object Object], async (scope = "widget", limit = 20)=>{
+            const response = await fetch(`/api/devices/${deviceId}/widgets/${widget.id}/runs?scope=${scope}&limit=${Math.max(1, Math.min(limit, 100))}`, (0, __TURBOPACK__imported__module__$5b$project$5d2f$src$2f$lib$2f$auth$2f$client$2d$token$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["withClientApiToken"])());
+            const payload = await response.json();
+            if (!response.ok) {
+                throw new Error(payload.error ?? "Failed to load widget operation history.");
+            }
+            return payload.runs ?? [];
+        }, async ()=>{
+            const response = await fetch(`/api/devices/${deviceId}/widgets/context`, (0, __TURBOPACK__imported__module__$5b$project$5d2f$src$2f$lib$2f$auth$2f$client$2d$token$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["withClientApiToken"])());
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.error ?? "Failed to load widget context.");
+            }
+            setContext(data.context ?? null);
+            return data.context ?? null;
+        }, async (operation, approved)=>{
+            const response = await fetch(`/api/devices/${deviceId}/widgets/${widget.id}/operation`, (0, __TURBOPACK__imported__module__$5b$project$5d2f$src$2f$lib$2f$auth$2f$client$2d$token$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["withClientApiToken"])({
+                method: "POST",
+                headers: {
+                    "content-type": "application/json"
+                },
+                body: JSON.stringify({
+                    operation,
+                    approved
+                })
+            }));
+            const payload = await response.json();
+            if (typeof payload !== "object" || payload === null || typeof payload.status !== "string" || typeof payload.summary !== "string") {
+                throw new Error(payload.error ?? "Widget operation failed.");
+            }
+            return payload;
+        }, (result)=>new Promise({
+                "WidgetRuntimeFrame.useCallback[requestSessionApproval]": (resolve)=>{
+                    setPendingApproval({
+                        widgetName: widget.name,
+                        result,
+                        resolve
+                    });
+                }
+            }["WidgetRuntimeFrame.useCallback[requestSessionApproval]"]), (message)=>{
+            iframeRef.current?.contentWindow?.postMessage({
+                __stewardWidget: true,
+                direction: "host-to-widget",
+                ...message
+            }, "*");
+        }, [object Object], false] [true, [object Object], 7853ecfc-5f1e-41ef-8ab6-40fee2a50407, async (scope = "widget", limit = 20)=>{
+            const response = await fetch(`/api/devices/${deviceId}/widgets/${widget.id}/runs?scope=${scope}&limit=${Math.max(1, Math.min(limit, 100))}`, (0, __TURBOPACK__imported__module__$5b$project$5d2f$src$2f$lib$2f$auth$2f$client$2d$token$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["withClientApiToken"])());
+            const payload = await response.json();
+            if (!response.ok) {
+                throw new Error(payload.error ?? "Failed to load widget operation history.");
+            }
+            return payload.runs ?? [];
+        }, async ()=>{
+            const response = await fetch(`/api/devices/${deviceId}/widgets/context`, (0, __TURBOPACK__imported__module__$5b$project$5d2f$src$2f$lib$2f$auth$2f$client$2d$token$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["withClientApiToken"])());
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.error ?? "Failed to load widget context.");
+            }
+            setContext(data.context ?? null);
+            return data.context ?? null;
+        }, async (operation, approved)=>{
+            const response = await fetch(`/api/devices/${deviceId}/widgets/${widget.id}/operation`, (0, __TURBOPACK__imported__module__$5b$project$5d2f$src$2f$lib$2f$auth$2f$client$2d$token$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["withClientApiToken"])({
+                method: "POST",
+                headers: {
+                    "content-type": "application/json"
+                },
+                body: JSON.stringify({
+                    operation,
+                    approved
+                })
+            }));
+            const payload = await response.json();
+            if (typeof payload !== "object" || payload === null || typeof payload.status !== "string" || typeof payload.summary !== "string") {
+                throw new Error(payload.error ?? "Widget operation failed.");
+            }
+            return payload;
+        }, (result)=>new Promise({
+                "WidgetRuntimeFrame.useCallback[requestSessionApproval]": (resolve)=>{
+                    setPendingApproval({
+                        widgetName: widget.name,
+                        result,
+                        resolve
+                    });
+                }
+            }["WidgetRuntimeFrame.useCallback[requestSessionApproval]"]), (message)=>{
+            iframeRef.current?.contentWindow?.postMessage({
+                __stewardWidget: true,
+                direction: "host-to-widget",
+                ...message
+            }, "*");
+        }, [object Object], false, widget-eaa7f39b-8aad-453f-90c0-8221108a2178] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  164149ms] [ERROR] The Content Security Policy directive 'frame-ancestors' is ignored when delivered via a <meta> element. @ about:srcdoc:0
+[  164550ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  164692ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  164853ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  164853ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://127.0.0.1:3010/api/devices/7853ecfc-5f1e-41ef-8ab6-40fee2a50407/onboarding/session:0
+[  165195ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  165683ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://127.0.0.1:3010/api/devices/7853ecfc-5f1e-41ef-8ab6-40fee2a50407/onboarding/session:0
+[  165709ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  166196ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  166677ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://127.0.0.1:3010/api/devices/7853ecfc-5f1e-41ef-8ab6-40fee2a50407/onboarding/session:0
+[  166706ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  167191ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  167676ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://127.0.0.1:3010/api/devices/7853ecfc-5f1e-41ef-8ab6-40fee2a50407/onboarding/session:0
+[  167704ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  168196ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  168684ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://127.0.0.1:3010/api/devices/7853ecfc-5f1e-41ef-8ab6-40fee2a50407/onboarding/session:0
+[  168711ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  168817ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  169195ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  169681ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://127.0.0.1:3010/api/devices/7853ecfc-5f1e-41ef-8ab6-40fee2a50407/onboarding/session:0
+[  169708ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  170147ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  170685ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://127.0.0.1:3010/api/devices/7853ecfc-5f1e-41ef-8ab6-40fee2a50407/onboarding/session:0
+[  170715ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  171149ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  171680ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://127.0.0.1:3010/api/devices/7853ecfc-5f1e-41ef-8ab6-40fee2a50407/onboarding/session:0
+[  171711ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  172164ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  172698ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://127.0.0.1:3010/api/devices/7853ecfc-5f1e-41ef-8ab6-40fee2a50407/onboarding/session:0
+[  172726ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  173162ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  173684ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://127.0.0.1:3010/api/devices/7853ecfc-5f1e-41ef-8ab6-40fee2a50407/onboarding/session:0
+[  173714ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  174163ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  174692ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://127.0.0.1:3010/api/devices/7853ecfc-5f1e-41ef-8ab6-40fee2a50407/onboarding/session:0
+[  174723ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  175161ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  175696ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://127.0.0.1:3010/api/devices/7853ecfc-5f1e-41ef-8ab6-40fee2a50407/onboarding/session:0
+[  175728ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  176185ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127
+[  176681ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://127.0.0.1:3010/api/devices/7853ecfc-5f1e-41ef-8ab6-40fee2a50407/onboarding/session:0
+[  176713ms] [ERROR] ./src/components/device-access-panel.tsx:379:7
+Parsing ecmascript source code failed
+  377 |         </DialogContent>
+  378 |       </Dialog>
+> 379 |     </Card>
+      |       ^^^^
+  380 |   );
+  381 | }
+  382 |
+
+Expected corresponding JSX closing tag for <div>
+
+Import traces:
+  Client Component Browser:
+    ./src/components/device-access-panel.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Client Component Browser]
+    ./src/app/devices/[id]/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./src/components/device-access-panel.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Client Component SSR]
+    ./src/app/devices/[id]/page.tsx [Server Component] @ http://127.0.0.1:3010/_next/static/chunks/node_modules_next_dist_f3530cac._.js:3127

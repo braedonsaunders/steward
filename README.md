@@ -91,6 +91,9 @@ Providers and Vault:
 npm install
 ```
 
+Playwright browser runtime (Chromium) is auto-installed during dependency install.
+Required network tools (`nmap`, `tshark`) are also auto-checked/installed on launch scripts.
+
 2. Start development server:
 
 ```bash
@@ -153,6 +156,10 @@ docker run --rm -p 3000:3000 -v $(pwd)/.steward:/app/.steward steward
 chmod +x ./scripts/run-prod.sh
 ./scripts/run-prod.sh
 ```
+
+Both launch scripts automatically verify/install Playwright Chromium before building.
+They also verify/install required network tools (`nmap`, `tshark`).
+To manage Windows endpoints over WinRM from Linux or macOS, install PowerShell 7 (`pwsh`) on the Steward host.
 
 ### PM2
 

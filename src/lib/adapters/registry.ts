@@ -439,6 +439,23 @@ const LEGACY_BUILTIN_ID_ALIASES: Record<string, string> = {
   "steward.ubiquiti-unifi": "steward.starter.ubiquiti-unifi",
 };
 
+function shouldRefreshBuiltinFiles(
+  manifestPath: string,
+  normalizedManifest: AdapterManifest,
+  entryPath: string,
+): boolean {
+  if (!existsSync(manifestPath) || !existsSync(entryPath)) {
+    return true;
+  }
+
+  try {
+    const existingManifest = readManifest(path.dirname(manifestPath));
+    return existingManifest.version !== normalizedManifest.version;
+  } catch {
+    return true;
+  }
+}
+
 function ensureBuiltinAdaptersInstalled(): void {
   const dir = adaptersDir();
 
@@ -452,14 +469,14 @@ function ensureBuiltinAdaptersInstalled(): void {
     const targetDir = path.join(dir, builtin.dirName);
     const manifestPath = path.join(targetDir, "manifest.json");
     const entryPath = path.join(targetDir, normalizedManifest.entry ?? "index.js");
+    const refreshBuiltin = shouldRefreshBuiltinFiles(manifestPath, normalizedManifest, entryPath);
 
     mkdirSync(targetDir, { recursive: true });
 
-    // Seed built-ins if missing; do not overwrite user-edited local copies.
-    if (!existsSync(manifestPath)) {
+    if (refreshBuiltin) {
       writeFileSync(manifestPath, `${JSON.stringify(normalizedManifest, null, 2)}\n`, "utf-8");
     }
-    if (!existsSync(entryPath)) {
+    if (refreshBuiltin) {
       writeFileSync(entryPath, builtin.entrySource.trimStart(), "utf-8");
     }
 
@@ -468,7 +485,7 @@ function ensureBuiltinAdaptersInstalled(): void {
       normalizedManifest.skillMdPath ?? DEFAULT_ADAPTER_SKILL_MD_PATH,
     );
     mkdirSync(path.dirname(adapterSkillMdPath), { recursive: true });
-    if (!existsSync(adapterSkillMdPath)) {
+    if (refreshBuiltin || !existsSync(adapterSkillMdPath)) {
       writeFileSync(adapterSkillMdPath, buildAdapterSkillMarkdown(normalizedManifest), "utf-8");
     }
 
@@ -476,7 +493,7 @@ function ensureBuiltinAdaptersInstalled(): void {
       const relativeSkillPath = skill.skillMdPath ?? defaultToolSkillMarkdownPath(skill.id);
       const absoluteSkillPath = path.join(targetDir, relativeSkillPath);
       mkdirSync(path.dirname(absoluteSkillPath), { recursive: true });
-      if (!existsSync(absoluteSkillPath)) {
+      if (refreshBuiltin || !existsSync(absoluteSkillPath)) {
         writeFileSync(absoluteSkillPath, buildToolSkillMarkdown(skill), "utf-8");
       }
     }

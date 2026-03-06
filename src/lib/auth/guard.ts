@@ -97,14 +97,19 @@ export function getAuthContext(request: NextRequest): AuthContext {
   const modeRequiresToken = mode === "token";
   const modeRequiresSession = mode === "session";
   const modeOpen = mode === "open";
+  const legacyHybridOpen = mode === "hybrid"
+    && !hasApiToken
+    && !authSettings.oidc.enabled
+    && !authSettings.ldap.enabled;
 
   if (!identity) {
-    if (firstRunOpen || modeOpen) {
-      // Bootstrap compatibility: first-run or explicitly open mode.
+    if (firstRunOpen || modeOpen || legacyHybridOpen) {
+      // Compatibility: preserve historical open installs unless an explicit
+      // auth surface (token/OIDC/LDAP) has been configured.
       return {
         authorized: true,
         status: 200,
-        reason: firstRunOpen ? "first-run-open" : "open-mode",
+        reason: firstRunOpen ? "first-run-open" : modeOpen ? "open-mode" : "legacy-hybrid-open",
         permission,
         role: "Owner",
       };

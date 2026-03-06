@@ -3,16 +3,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { withClientApiToken } from "@/lib/auth/client-token";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import type {
   AdoptionQuestion,
   AdoptionRun,
-  DeviceAdapterBinding,
+  Assurance,
+  AssuranceRun,
   DeviceCredential,
   DeviceFinding,
-  ServiceContract,
+  Workload,
 } from "@/lib/state/types";
 import { cn } from "@/lib/utils";
 
@@ -22,27 +22,41 @@ interface AdoptionSnapshot {
   questions: AdoptionQuestion[];
   unresolvedRequiredQuestions: number;
   credentials: Array<Omit<DeviceCredential, "vaultSecretRef">>;
-  bindings: DeviceAdapterBinding[];
-  serviceContracts: ServiceContract[];
+  workloads: Workload[];
+  assurances: Assurance[];
+  assuranceRuns: AssuranceRun[];
 }
 
 interface FindingsPayload {
   findings: DeviceFinding[];
 }
 
-const statusVariant = (
+function statusVariant(
   status: AdoptionRun["status"] | "idle",
-): "default" | "destructive" | "secondary" | "outline" => {
+): "default" | "destructive" | "secondary" | "outline" {
   if (status === "completed") return "default";
   if (status === "failed") return "destructive";
   if (status === "awaiting_user") return "secondary";
   return "outline";
-};
+}
 
-export function DeviceContractsPanel({ deviceId, className }: { deviceId: string; className?: string }) {
+function assuranceRunVariant(
+  status: AssuranceRun["status"] | "unknown",
+): "default" | "destructive" | "secondary" | "outline" {
+  if (status === "pass") return "default";
+  if (status === "fail") return "destructive";
+  if (status === "pending") return "secondary";
+  return "outline";
+}
+
+function readString(record: Record<string, unknown> | undefined, key: string): string | null {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+export function DeviceWorkloadsPanel({ deviceId, className }: { deviceId: string; className?: string }) {
   const [snapshot, setSnapshot] = useState<AdoptionSnapshot | null>(null);
   const [findings, setFindings] = useState<DeviceFinding[]>([]);
-  const [mutating, setMutating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -53,7 +67,7 @@ export function DeviceContractsPanel({ deviceId, className }: { deviceId: string
       ]);
       const snapshotData = (await snapshotRes.json()) as AdoptionSnapshot | { error?: string };
       if (!snapshotRes.ok) {
-        throw new Error((snapshotData as { error?: string }).error ?? "Failed to load contract status");
+        throw new Error((snapshotData as { error?: string }).error ?? "Failed to load workload model");
       }
       setSnapshot(snapshotData as AdoptionSnapshot);
 
@@ -65,7 +79,7 @@ export function DeviceContractsPanel({ deviceId, className }: { deviceId: string
       }
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load contract status");
+      setError(err instanceof Error ? err.message : "Failed to load workload model");
     }
   }, [deviceId]);
 
@@ -73,127 +87,218 @@ export function DeviceContractsPanel({ deviceId, className }: { deviceId: string
     void refresh();
   }, [refresh]);
 
-  const dedupedBindings = useMemo(() => {
-    const byKey = new Map<string, DeviceAdapterBinding>();
-    for (const binding of snapshot?.bindings ?? []) {
-      const key = `${binding.adapterId}:${binding.protocol}`;
-      const existing = byKey.get(key);
-      if (!existing || (binding.selected && !existing.selected) || binding.score > existing.score) {
-        byKey.set(key, binding);
-      }
+  const runByAssuranceId = useMemo(
+    () => new Map((snapshot?.assuranceRuns ?? []).map((run) => [run.assuranceId, run])),
+    [snapshot?.assuranceRuns],
+  );
+
+  const assurancesByWorkload = useMemo(() => {
+    const grouped = new Map<string, Assurance[]>();
+    for (const assurance of snapshot?.assurances ?? []) {
+      const key = assurance.workloadId ?? "__unassigned__";
+      const existing = grouped.get(key) ?? [];
+      existing.push(assurance);
+      grouped.set(key, existing);
     }
-    return Array.from(byKey.values()).sort((a, b) => {
-      if (a.selected !== b.selected) return a.selected ? -1 : 1;
-      return b.score - a.score;
-    });
-  }, [snapshot?.bindings]);
+    for (const items of grouped.values()) {
+      items.sort((a, b) => {
+        const criticalityRank = (value: Assurance["criticality"]): number =>
+          value === "high" ? 0 : value === "medium" ? 1 : 2;
+        return criticalityRank(a.criticality) - criticalityRank(b.criticality);
+      });
+    }
+    return grouped;
+  }, [snapshot?.assurances]);
 
-  const sortedServiceContracts = useMemo(() => {
-    const priority = new Map<ServiceContract["criticality"], number>([["high", 0], ["medium", 1], ["low", 2]]);
-    return [...(snapshot?.serviceContracts ?? [])].sort((a, b) => {
-      const criticalityDiff = (priority.get(a.criticality) ?? 99) - (priority.get(b.criticality) ?? 99);
-      if (criticalityDiff !== 0) return criticalityDiff;
-      return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
-    });
-  }, [snapshot]);
-
-  const openContractFindings = useMemo(
-    () => findings.filter((finding) => finding.status === "open" && ["service_contract", "service_contract_pending", "missing_credentials"].includes(finding.findingType)),
+  const openConcerns = useMemo(
+    () => findings.filter((finding) => finding.status === "open" && [
+      "assurance",
+      "assurance_pending",
+      "service_contract",
+      "service_contract_pending",
+      "missing_credentials",
+    ].includes(finding.findingType)),
     [findings],
   );
 
-  const selectBinding = async (binding: DeviceAdapterBinding) => {
-    setMutating(true);
-    try {
-      const res = await fetch(`/api/devices/${deviceId}/adapters/bind`, withClientApiToken({
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ adapterId: binding.adapterId, protocol: binding.protocol }),
-      }));
-      const data = (await res.json()) as { bindings?: DeviceAdapterBinding[]; error?: string };
-      if (!res.ok || !data.bindings) {
-        throw new Error(data.error ?? "Failed to select adapter binding");
-      }
-      setSnapshot((prev) => (prev ? { ...prev, bindings: data.bindings ?? prev.bindings } : prev));
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to select adapter binding");
-    } finally {
-      setMutating(false);
-    }
-  };
+  const proposedWorkloads = useMemo(() => {
+    const profile = snapshot?.run?.profileJson;
+    const value = profile?.proposedWorkloads;
+    return Array.isArray(value) ? value : [];
+  }, [snapshot?.run]);
 
-  const contractMetaString = (contract: ServiceContract, key: string): string | null => {
-    const value = contract.policyJson[key];
-    return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-  };
-  const contractMetaStringArray = (contract: ServiceContract, key: string): string[] => {
-    const value = contract.policyJson[key];
-    return Array.isArray(value) ? value.map((item) => String(item).trim()).filter((item) => item.length > 0) : [];
-  };
+  const proposedAssurances = useMemo(() => {
+    const profile = snapshot?.run?.profileJson;
+    const value = profile?.proposedAssurances ?? profile?.proposedContracts;
+    return Array.isArray(value) ? value : [];
+  }, [snapshot?.run]);
 
   return (
     <Card className={cn("bg-card/85 flex min-h-0 flex-col", className)}>
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between gap-2">
           <div>
-            <CardTitle className="text-base">Contracts</CardTitle>
-            <CardDescription>Contracts and adapter bindings for this device</CardDescription>
+            <CardTitle className="text-base">Workloads</CardTitle>
+            <CardDescription>Responsibilities Steward understands and the assurances it enforces</CardDescription>
           </div>
           <Badge variant={statusVariant(snapshot?.run?.status ?? "idle")}>{snapshot?.run?.status ?? "idle"}</Badge>
         </div>
       </CardHeader>
       <CardContent className="min-h-0 flex-1 space-y-4 overflow-auto pr-1">
-        <div className="grid gap-2 sm:grid-cols-3">
-          <div className="rounded-md border bg-background/50 p-2.5"><p className="text-[10px] uppercase tracking-wide text-muted-foreground">Contracts</p><p className="text-lg font-semibold tabular-nums">{sortedServiceContracts.length}</p></div>
-          <div className="rounded-md border bg-background/50 p-2.5"><p className="text-[10px] uppercase tracking-wide text-muted-foreground">Open Concerns</p><p className="text-lg font-semibold tabular-nums">{openContractFindings.length}</p></div>
-          <div className="rounded-md border bg-background/50 p-2.5"><p className="text-[10px] uppercase tracking-wide text-muted-foreground">High Criticality</p><p className="text-lg font-semibold tabular-nums">{sortedServiceContracts.filter((c) => c.criticality === "high").length}</p></div>
+        <div className="grid gap-2 sm:grid-cols-4">
+          <div className="rounded-md border bg-background/50 p-2.5">
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Workloads</p>
+            <p className="text-lg font-semibold tabular-nums">{snapshot?.workloads.length ?? 0}</p>
+          </div>
+          <div className="rounded-md border bg-background/50 p-2.5">
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Assurances</p>
+            <p className="text-lg font-semibold tabular-nums">{snapshot?.assurances.length ?? 0}</p>
+          </div>
+          <div className="rounded-md border bg-background/50 p-2.5">
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Open Concerns</p>
+            <p className="text-lg font-semibold tabular-nums">{openConcerns.length}</p>
+          </div>
+          <div className="rounded-md border bg-background/50 p-2.5">
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Draft Proposals</p>
+            <p className="text-lg font-semibold tabular-nums">{Math.max(proposedWorkloads.length, proposedAssurances.length)}</p>
+          </div>
         </div>
 
         <p className="text-xs text-muted-foreground">
-          Start or continue onboarding from the device Chat tab. Contract recommendations come from conversation.
+          Use the Chat tab to refine responsibilities, then approve the resulting workload and assurance model.
         </p>
 
         <div className="space-y-2">
-          <Label className="text-xs">Adapter Bindings</Label>
-          {dedupedBindings.length === 0 ? <p className="text-xs text-muted-foreground">No adapter bindings suggested yet.</p> : (
-            <div className="space-y-1.5">{dedupedBindings.map((binding) => (
-              <div key={binding.id} className="flex items-center justify-between rounded-md border px-2 py-1.5 text-xs">
-                <div><p className="font-medium">{binding.adapterId}</p><p className="text-muted-foreground">{binding.protocol} · {(binding.score * 100).toFixed(0)}%</p></div>
-                <Button size="sm" variant={binding.selected ? "secondary" : "outline"} className="h-6 px-2 text-[10px]" disabled={binding.selected || mutating} onClick={() => void selectBinding(binding)}>{binding.selected ? "Selected" : "Select"}</Button>
-              </div>
-            ))}</div>
+          <Label className="text-xs">Active Workload Model</Label>
+          {(snapshot?.workloads.length ?? 0) === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              No workloads have been committed yet. Continue onboarding in Chat to convert observed endpoints into managed responsibilities.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {snapshot?.workloads.map((workload) => {
+                const workloadAssurances = assurancesByWorkload.get(workload.id) ?? [];
+                return (
+                  <div key={workload.id} className="rounded-md border bg-background/45 p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="space-y-0.5">
+                        <p className="text-sm font-medium">{workload.displayName}</p>
+                        <p className="text-[11px] text-muted-foreground">
+                          {workload.category.replace(/_/g, " ")} workload
+                        </p>
+                      </div>
+                      <Badge variant="outline">{workload.criticality}</Badge>
+                    </div>
+                    {workload.summary ? (
+                      <p className="mt-2 text-xs text-muted-foreground">{workload.summary}</p>
+                    ) : null}
+                    <div className="mt-3 space-y-2">
+                      {workloadAssurances.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">No assurances attached yet.</p>
+                      ) : (
+                        workloadAssurances.map((assurance) => {
+                          const latestRun = runByAssuranceId.get(assurance.id);
+                          const rationale = assurance.rationale ?? readString(assurance.configJson, "rationale") ?? readString(assurance.policyJson, "reason");
+                          const monitorType = assurance.monitorType ?? readString(assurance.configJson, "monitorType") ?? readString(assurance.policyJson, "monitorType");
+                          return (
+                            <div key={assurance.id} className="rounded-md border bg-background/70 p-2.5 text-xs">
+                              <div className="flex items-start justify-between gap-2">
+                                <div>
+                                  <p className="font-medium">{assurance.displayName}</p>
+                                  <p className="text-muted-foreground">
+                                    Every {Math.max(1, Math.floor(assurance.checkIntervalSec))}s
+                                    {monitorType ? ` · ${monitorType.replace(/_/g, " ")}` : ""}
+                                  </p>
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                  <Badge variant="outline">{assurance.criticality}</Badge>
+                                  <Badge variant={assuranceRunVariant(latestRun?.status ?? "unknown")}>
+                                    {latestRun?.status ?? "unknown"}
+                                  </Badge>
+                                </div>
+                              </div>
+                              {rationale ? (
+                                <p className="mt-1 text-muted-foreground">{rationale}</p>
+                              ) : null}
+                              {(assurance.requiredProtocols ?? []).length > 0 ? (
+                                <p className="mt-1 text-muted-foreground">
+                                  Needs access: {(assurance.requiredProtocols ?? []).join(", ")}
+                                </p>
+                              ) : null}
+                              {latestRun ? (
+                                <p className="mt-1 text-muted-foreground">
+                                  Last evaluated: {new Date(latestRun.evaluatedAt).toLocaleString()}
+                                </p>
+                              ) : null}
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           )}
         </div>
 
-        <div className="space-y-2">
-          <Label className="text-xs">Contracts Steward Watches</Label>
-          {sortedServiceContracts.length === 0 ? <p className="text-xs text-muted-foreground">No contracts yet. Ask in device chat to explore and propose contracts.</p> : (
-            <div className="space-y-1.5">{sortedServiceContracts.map((contract) => {
-              const monitorType = contractMetaString(contract, "monitorType");
-              const monitorSource = contractMetaString(contract, "source");
-              const lastStatus = contractMetaString(contract, "lastStatus");
-              const lastEvaluatedAt = contractMetaString(contract, "lastEvaluatedAt");
-              const requiredProtocols = contractMetaStringArray(contract, "requiredProtocols");
-              return (
-                <div key={contract.id} className="space-y-1.5 rounded-md border px-2.5 py-2 text-xs">
+        {proposedWorkloads.length > 0 || proposedAssurances.length > 0 ? (
+          <div className="space-y-2">
+            <Label className="text-xs">
+              Draft Onboarding Proposals ({proposedWorkloads.length} workloads, {proposedAssurances.length} assurances)
+            </Label>
+            {proposedWorkloads.length > 0 ? (
+              <div className="space-y-1.5">
+                {proposedWorkloads.map((proposal, idx) => (
+                  <div key={`${proposal.id ?? proposal.workloadKey ?? idx}:workload`} className="rounded-md border px-2.5 py-2 text-xs">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="font-medium">{String(proposal.displayName ?? proposal.workloadKey ?? "Draft workload")}</p>
+                        <p className="text-muted-foreground">
+                          {String(proposal.category ?? "unknown").replace(/_/g, " ")} workload
+                        </p>
+                      </div>
+                      <Badge variant="outline">{String(proposal.criticality ?? "medium")}</Badge>
+                    </div>
+                    {typeof proposal.summary === "string" ? (
+                      <p className="mt-1 text-muted-foreground">{proposal.summary}</p>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <div className="space-y-1.5">
+              {proposedAssurances.map((proposal, idx) => (
+                <div key={`${proposal.id ?? proposal.serviceKey ?? idx}`} className="rounded-md border px-2.5 py-2 text-xs">
                   <div className="flex items-start justify-between gap-2">
-                    <div className="space-y-0.5"><p className="font-medium">{contract.displayName}</p><p className="text-muted-foreground">{contract.serviceKey}</p></div>
-                    <div className="flex items-center gap-1.5"><Badge variant="outline">{contract.criticality}</Badge>{lastStatus ? <Badge variant={lastStatus === "pass" ? "default" : lastStatus === "fail" ? "destructive" : "secondary"}>{lastStatus}</Badge> : null}</div>
+                    <div>
+                      <p className="font-medium">{String(proposal.displayName ?? proposal.serviceKey ?? "Draft assurance")}</p>
+                      <p className="text-muted-foreground">
+                        {String(proposal.monitorType ?? "service_presence").replace(/_/g, " ")}
+                        {proposal.checkIntervalSec ? ` · every ${proposal.checkIntervalSec}s` : ""}
+                      </p>
+                    </div>
+                    <Badge variant="outline">{String(proposal.criticality ?? "medium")}</Badge>
                   </div>
-                  <div>
-                    <p className="text-muted-foreground">Interval {Math.max(1, Math.floor(contract.checkIntervalSec))}s{monitorType ? ` · ${monitorType.replace(/_/g, " ")}` : ""}{monitorSource ? ` · ${monitorSource}` : ""}</p>
-                    {requiredProtocols.length > 0 ? <p className="text-muted-foreground">Needs credentials: {requiredProtocols.join(", ")}</p> : null}
-                    {lastEvaluatedAt ? <p className="text-muted-foreground">Last checked: {new Date(lastEvaluatedAt).toLocaleString()}</p> : null}
-                  </div>
+                  {typeof proposal.rationale === "string" ? (
+                    <p className="mt-1 text-muted-foreground">{proposal.rationale}</p>
+                  ) : null}
                 </div>
-              );
-            })}</div>
-          )}
-        </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {snapshot?.unresolvedRequiredQuestions ? (
+          <p className="rounded-md border border-amber-300/60 bg-amber-50/70 px-2.5 py-2 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-950/20 dark:text-amber-100">
+            Onboarding still has {snapshot.unresolvedRequiredQuestions} required question{snapshot.unresolvedRequiredQuestions === 1 ? "" : "s"} pending.
+          </p>
+        ) : null}
 
         {error ? <p className="rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-2 text-xs text-destructive">{error}</p> : null}
       </CardContent>
     </Card>
   );
 }
+
+export const DeviceContractsPanel = DeviceWorkloadsPanel;

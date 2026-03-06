@@ -1,0 +1,156 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - img [ref=e7]
+          - generic [ref=e9]:
+            - heading "Steward" [level=1] [ref=e10]
+            - paragraph [ref=e11]: Network Operations
+          - button [ref=e12]:
+            - img [ref=e13]
+        - navigation [ref=e19]:
+          - generic [ref=e20]:
+            - paragraph [ref=e21]: Overview
+            - link "Dashboard" [ref=e23] [cursor=pointer]:
+              - /url: /
+              - generic [ref=e24]:
+                - img [ref=e25]
+                - generic [ref=e30]: Dashboard
+            - link "Digest" [ref=e32] [cursor=pointer]:
+              - /url: /digest
+              - generic [ref=e33]:
+                - img [ref=e34]
+                - generic [ref=e37]: Digest
+          - generic [ref=e38]:
+            - paragraph [ref=e39]: Network
+            - link "Devices" [ref=e41] [cursor=pointer]:
+              - /url: /devices
+              - generic [ref=e42]:
+                - img [ref=e43]
+                - generic [ref=e46]: Devices
+            - link "Discovery" [ref=e48] [cursor=pointer]:
+              - /url: /discovery
+              - generic [ref=e49]:
+                - img [ref=e50]
+                - generic [ref=e53]: Discovery
+            - link "Topology" [ref=e55] [cursor=pointer]:
+              - /url: /topology
+              - generic [ref=e56]:
+                - img [ref=e57]
+                - generic [ref=e62]: Topology
+          - generic [ref=e63]:
+            - paragraph [ref=e64]: Health
+            - link "Incidents 3" [ref=e170] [cursor=pointer]:
+              - /url: /incidents
+              - generic [ref=e67]:
+                - img [ref=e68]
+                - generic [ref=e70]: Incidents
+              - generic [ref=e171]: "3"
+            - link "Activity" [ref=e72] [cursor=pointer]:
+              - /url: /activity
+              - generic [ref=e73]:
+                - img [ref=e74]
+                - generic [ref=e76]: Activity
+          - generic [ref=e77]:
+            - paragraph [ref=e78]: Control
+            - link "Approvals" [ref=e80] [cursor=pointer]:
+              - /url: /approvals
+              - generic [ref=e81]:
+                - img [ref=e82]
+                - generic [ref=e85]: Approvals
+            - link "Policies" [ref=e87] [cursor=pointer]:
+              - /url: /policies
+              - generic [ref=e88]:
+                - img [ref=e89]
+                - generic [ref=e92]: Policies
+          - generic [ref=e93]:
+            - paragraph [ref=e94]: Assistant
+            - link "Chat" [active] [ref=e96] [cursor=pointer]:
+              - /url: /chat
+              - generic [ref=e97]:
+                - img [ref=e98]
+                - generic [ref=e100]: Chat
+          - generic [ref=e101]:
+            - paragraph [ref=e102]: System
+            - link "Adapters" [ref=e104] [cursor=pointer]:
+              - /url: /adapters
+              - generic [ref=e105]:
+                - img [ref=e106]
+                - generic [ref=e108]: Adapters
+            - link "Access" [ref=e110] [cursor=pointer]:
+              - /url: /access
+              - generic [ref=e112]:
+                - img [ref=e113]
+                - generic [ref=e125]: Access
+            - link "Settings" [ref=e127] [cursor=pointer]:
+              - /url: /settings
+              - generic [ref=e128]:
+                - img [ref=e129]
+                - generic [ref=e132]: Settings
+    - main [ref=e134]:
+      - generic [ref=e231]:
+        - generic [ref=e232]:
+          - generic [ref=e233]:
+            - generic [ref=e234]:
+              - button "New Chat" [ref=e235]:
+                - img [ref=e236]
+                - text: New Chat
+              - button [ref=e238]:
+                - img [ref=e239]
+            - generic [ref=e242]:
+              - generic [ref=e243]:
+                - generic [ref=e244]: Device
+                - combobox [ref=e245]:
+                  - generic: Any device
+                  - img
+              - generic [ref=e246]:
+                - generic [ref=e247]: Group
+                - generic [ref=e248]:
+                  - button "Recent" [ref=e249]
+                  - button "Device" [ref=e250]
+          - generic [ref=e255]:
+            - generic [ref=e256]:
+              - button "[Onboarding] raspberry-pi-foundation-iot-192-168-68-70 10m ago raspberry-pi-foundation-iot-192-168-68-70" [ref=e257]:
+                - paragraph [ref=e258]: "[Onboarding] raspberry-pi-foundation-iot-192-168-68-70"
+                - paragraph [ref=e259]: 10m ago
+                - paragraph [ref=e260]:
+                  - img [ref=e261]
+                  - generic [ref=e264]: raspberry-pi-foundation-iot-192-168-68-70
+              - generic [ref=e265]:
+                - button "Rename" [ref=e266]
+                - button "Delete" [ref=e267]
+            - generic [ref=e268]:
+              - button "[Onboarding] server-192-168-68-83 1h ago server-192-168-68-83" [ref=e269]:
+                - paragraph [ref=e270]: "[Onboarding] server-192-168-68-83"
+                - paragraph [ref=e271]: 1h ago
+                - paragraph [ref=e272]:
+                  - img [ref=e273]
+                  - generic [ref=e276]: server-192-168-68-83
+              - generic [ref=e277]:
+                - button "Rename" [ref=e278]
+                - button "Delete" [ref=e279]
+        - generic [ref=e280]:
+          - generic [ref=e281]:
+            - generic [ref=e282]:
+              - img [ref=e283]
+              - heading "Chat with Steward" [level=1] [ref=e286]
+            - generic [ref=e287]:
+              - combobox [ref=e288]:
+                - generic: Anthropic
+                - img
+              - generic [ref=e289]: claude-opus-4-6
+          - generic [ref=e292]:
+            - img [ref=e294]
+            - heading "Start a conversation" [level=2] [ref=e297]
+            - paragraph [ref=e298]: Ask Steward about your network, diagnose issues, or request remediation actions.
+            - button "New Chat" [ref=e299]:
+              - img [ref=e300]
+              - text: New Chat
+          - generic [ref=e302]:
+            - generic [ref=e303]:
+              - textbox "Ask Steward anything about your environment..." [ref=e304]
+              - button "Send message" [disabled]:
+                - img
+            - paragraph [ref=e305]: Press Enter to send, Shift+Enter for new line
+  - alert [ref=e168]

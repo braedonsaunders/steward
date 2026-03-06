@@ -1,0 +1,235 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - img [ref=e7]
+          - generic [ref=e9]:
+            - heading "Steward" [level=1] [ref=e10]
+            - paragraph [ref=e11]: Network Operations
+          - button [ref=e12]:
+            - img [ref=e13]
+        - navigation [ref=e19]:
+          - generic [ref=e20]:
+            - paragraph [ref=e21]: Overview
+            - link "Dashboard" [ref=e23] [cursor=pointer]:
+              - /url: /
+              - generic [ref=e24]:
+                - img [ref=e25]
+                - generic [ref=e30]: Dashboard
+            - link "Digest" [ref=e32] [cursor=pointer]:
+              - /url: /digest
+              - generic [ref=e33]:
+                - img [ref=e34]
+                - generic [ref=e37]: Digest
+          - generic [ref=e38]:
+            - paragraph [ref=e39]: Network
+            - link "Devices" [ref=e41] [cursor=pointer]:
+              - /url: /devices
+              - generic [ref=e43]:
+                - img [ref=e44]
+                - generic [ref=e47]: Devices
+            - link "Discovery" [ref=e49] [cursor=pointer]:
+              - /url: /discovery
+              - generic [ref=e50]:
+                - img [ref=e51]
+                - generic [ref=e54]: Discovery
+            - link "Topology" [ref=e56] [cursor=pointer]:
+              - /url: /topology
+              - generic [ref=e57]:
+                - img [ref=e58]
+                - generic [ref=e63]: Topology
+          - generic [ref=e64]:
+            - paragraph [ref=e65]: Health
+            - link "Incidents 3" [ref=e155] [cursor=pointer]:
+              - /url: /incidents
+              - generic [ref=e68]:
+                - img [ref=e69]
+                - generic [ref=e71]: Incidents
+              - generic [ref=e156]: "3"
+            - link "Activity" [ref=e73] [cursor=pointer]:
+              - /url: /activity
+              - generic [ref=e74]:
+                - img [ref=e75]
+                - generic [ref=e77]: Activity
+          - generic [ref=e78]:
+            - paragraph [ref=e79]: Control
+            - link "Approvals" [ref=e81] [cursor=pointer]:
+              - /url: /approvals
+              - generic [ref=e82]:
+                - img [ref=e83]
+                - generic [ref=e86]: Approvals
+            - link "Policies" [ref=e88] [cursor=pointer]:
+              - /url: /policies
+              - generic [ref=e89]:
+                - img [ref=e90]
+                - generic [ref=e93]: Policies
+          - generic [ref=e94]:
+            - paragraph [ref=e95]: Assistant
+            - link "Chat" [ref=e97] [cursor=pointer]:
+              - /url: /chat
+              - generic [ref=e98]:
+                - img [ref=e99]
+                - generic [ref=e101]: Chat
+          - generic [ref=e102]:
+            - paragraph [ref=e103]: System
+            - link "Adapters" [ref=e105] [cursor=pointer]:
+              - /url: /adapters
+              - generic [ref=e106]:
+                - img [ref=e107]
+                - generic [ref=e109]: Adapters
+            - link "Access" [ref=e111] [cursor=pointer]:
+              - /url: /access
+              - generic [ref=e112]:
+                - img [ref=e113]
+                - generic [ref=e125]: Access
+            - link "Settings" [ref=e127] [cursor=pointer]:
+              - /url: /settings
+              - generic [ref=e128]:
+                - img [ref=e129]
+                - generic [ref=e132]: Settings
+        - generic [ref=e157]:
+          - img [ref=e158]
+          - generic [ref=e160]: "Vault: Unlocked"
+    - main [ref=e134]:
+      - main [ref=e137]:
+        - generic [ref=e161]:
+          - generic [ref=e163]:
+            - generic [ref=e164]:
+              - heading "solarassistant-pi" [level=1] [ref=e306]
+              - generic [ref=e168]:
+                - generic [ref=e169]: online
+                - generic [ref=e170]: iot
+                - generic [ref=e171]:
+                  - img [ref=e172]
+                  - text: Tier 1
+                - generic [ref=e174]: Adopted
+              - paragraph [ref=e175]: SolarAssistant monitors inverter and battery telemetry on this Raspberry Pi and exposes a login-protected local dashboard. Steward should treat it as a solar monitoring appliance with MQTT on the LAN.
+            - generic [ref=e177]:
+              - paragraph [ref=e178]: "First seen: 3/4/2026, 8:46:04 PM"
+              - paragraph [ref=e179]: "Last seen: 6m ago"
+          - generic [ref=e180]:
+            - tablist [ref=e181]:
+              - tab "Overview" [selected] [ref=e182]
+              - tab "Chat" [ref=e183]
+              - tab "Incidents" [ref=e184]
+              - tab "Services" [ref=e185]
+              - tab "Contracts" [ref=e186]
+              - tab "Credentials" [ref=e187]
+              - tab "History" [ref=e188]
+              - tab "Settings" [ref=e189]
+            - tabpanel "Overview" [ref=e190]:
+              - generic [ref=e191]:
+                - generic [ref=e192]:
+                  - generic [ref=e193]:
+                    - generic [ref=e194]:
+                      - img [ref=e195]
+                      - heading "Device Snapshot" [level=3] [ref=e198]
+                      - generic [ref=e199]: online
+                    - paragraph [ref=e200]: SolarAssistant monitors inverter and battery telemetry on this Raspberry Pi and exposes a login-protected local dashboard. Steward should treat it as a solar monitoring appliance with MQTT on the LAN.
+                  - generic [ref=e201]:
+                    - generic [ref=e202]:
+                      - generic [ref=e203]:
+                        - paragraph [ref=e204]: 100%
+                        - paragraph [ref=e205]: Discovery
+                      - generic [ref=e206]:
+                        - paragraph [ref=e207]: "13"
+                        - paragraph [ref=e208]: Observations
+                      - generic [ref=e209]:
+                        - paragraph [ref=e210]: 100%
+                        - paragraph [ref=e211]: Classifier
+                      - generic [ref=e212]:
+                        - paragraph [ref=e213]: "2"
+                        - paragraph [ref=e214]: Services
+                    - generic [ref=e215]:
+                      - generic [ref=e216]:
+                        - paragraph [ref=e217]: IP Address
+                        - paragraph [ref=e218]: 192.168.68.70
+                      - generic [ref=e219]:
+                        - paragraph [ref=e220]: MAC Address
+                        - paragraph [ref=e221]: b8:27:eb:56:61:e4
+                      - generic [ref=e222]:
+                        - paragraph [ref=e223]: Vendor
+                        - paragraph [ref=e224]: Raspberry Pi Foundation,Mitchell Wood House Caldecote Cambridgeshire US CB23 7NU
+                      - generic [ref=e307]:
+                        - paragraph [ref=e308]: Role
+                        - paragraph [ref=e309]: solar telemetry gateway
+                    - generic [ref=e225]:
+                      - generic [ref=e226]:
+                        - paragraph [ref=e227]: Discovery Evidence
+                        - generic [ref=e228]:
+                          - generic [ref=e229]: arp resolved
+                          - generic [ref=e230]: browser observation
+                          - generic [ref=e231]: favicon hash
+                          - generic [ref=e232]: http banner
+                          - generic [ref=e233]: icmp reply
+                          - generic [ref=e234]: mqtt connack
+                        - generic [ref=e235]:
+                          - generic [ref=e236]:
+                            - generic [ref=e237]: fingerprint
+                            - generic [ref=e238]: "9"
+                          - generic [ref=e239]:
+                            - generic [ref=e240]: active
+                            - generic [ref=e241]: "3"
+                          - generic [ref=e242]:
+                            - generic [ref=e243]: passive
+                            - generic [ref=e244]: "1"
+                      - generic [ref=e245]:
+                        - paragraph [ref=e246]: Fingerprint Context
+                        - generic [ref=e247]:
+                          - generic [ref=e248]:
+                            - paragraph [ref=e249]: Version
+                            - paragraph [ref=e250]: v3
+                          - generic [ref=e251]:
+                            - paragraph [ref=e252]: Last Probe
+                            - paragraph [ref=e253]: 13m ago
+                        - paragraph [ref=e254]: "OS: unknown"
+                        - paragraph [ref=e255]: "Product: unknown"
+                    - generic [ref=e256]:
+                      - paragraph [ref=e257]: Latest Probe Signals
+                      - generic [ref=e258]:
+                        - generic [ref=e259]:
+                          - paragraph [ref=e260]: DNS
+                          - paragraph [ref=e261]: n/a
+                        - generic [ref=e262]:
+                          - paragraph [ref=e263]: WinRM
+                          - paragraph [ref=e264]: n/a
+                        - generic [ref=e265]:
+                          - paragraph [ref=e266]: MQTT
+                          - paragraph [ref=e267]: port=1883 · returnCode=0
+                    - generic [ref=e268]:
+                      - paragraph [ref=e269]: Protocols
+                      - generic [ref=e270]:
+                        - generic [ref=e271]: http-api
+                        - generic [ref=e272]: mqtt
+                        - generic [ref=e273]: http
+                    - generic [ref=e274]:
+                      - paragraph [ref=e275]: Top Classification Signals
+                      - generic [ref=e276]:
+                        - generic [ref=e277]:
+                          - generic [ref=e278]:
+                            - generic [ref=e279]: fingerprint
+                            - generic [ref=e280]: "78"
+                          - paragraph [ref=e281]: MQTT broker handshake (CONNACK) succeeded
+                        - generic [ref=e282]:
+                          - generic [ref=e283]:
+                            - generic [ref=e284]: service
+                            - generic [ref=e285]: "62"
+                          - paragraph [ref=e286]: MQTT service on port 1883
+                        - generic [ref=e287]:
+                          - generic [ref=e288]:
+                            - generic [ref=e289]: port
+                            - generic [ref=e290]: "45"
+                          - paragraph [ref=e291]: MQTT port open
+                - generic [ref=e293]:
+                  - generic [ref=e294]:
+                    - generic [ref=e295]:
+                      - img [ref=e296]
+                      - heading "Recommendations" [level=3] [ref=e298]
+                    - paragraph [ref=e299]: Highest-impact next actions for this device
+                  - generic [ref=e301]:
+                    - img [ref=e302]
+                    - paragraph [ref=e304]: No recommendations for this device
+  - button "Open Next.js Dev Tools" [ref=e151] [cursor=pointer]:
+    - img [ref=e152]
+  - alert [ref=e305]

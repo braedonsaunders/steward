@@ -9,6 +9,11 @@
 - All configuration must be persisted in SQLite and managed through Steward state/settings flows.
 - If a new tunable is needed, add it to the DB-backed configuration model and expose it through the app/API.
 
+## Implementation Backlog
+
+- The live implementation checklist is tracked in `tasks.md`.
+- The world-class systems backlog is tracked in `docs/world-class-system-program.md`.
+
 ---
 
 ## The Problem
@@ -933,4 +938,3 @@ Steward must monitor its own health with the same rigor it applies to managed in
 
 - Dedicated "Steward Health" view with active degradations and impact.
 - Plain-language explanation when autonomy is reduced automatically.
-

@@ -62,6 +62,7 @@ async function executeStep(
     recentFailures: failures,
     quarantineActive: run.status === "quarantined",
     idempotencySeed,
+    playbookRunId: run.id,
     params,
   });
 

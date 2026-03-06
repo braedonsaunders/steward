@@ -1,0 +1,195 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - img [ref=e7]
+          - generic [ref=e9]:
+            - heading "Steward" [level=1] [ref=e10]
+            - paragraph [ref=e11]: Network Operations
+          - button [ref=e12]:
+            - img [ref=e13]
+        - navigation [ref=e19]:
+          - generic [ref=e20]:
+            - paragraph [ref=e21]: Overview
+            - link "Dashboard" [ref=e23] [cursor=pointer]:
+              - /url: /
+              - generic [ref=e24]:
+                - img [ref=e25]
+                - generic [ref=e30]: Dashboard
+            - link "Digest" [ref=e32] [cursor=pointer]:
+              - /url: /digest
+              - generic [ref=e33]:
+                - img [ref=e34]
+                - generic [ref=e37]: Digest
+          - generic [ref=e38]:
+            - paragraph [ref=e39]: Network
+            - link "Devices" [ref=e41] [cursor=pointer]:
+              - /url: /devices
+              - generic [ref=e43]:
+                - img [ref=e44]
+                - generic [ref=e47]: Devices
+            - link "Discovery" [ref=e49] [cursor=pointer]:
+              - /url: /discovery
+              - generic [ref=e50]:
+                - img [ref=e51]
+                - generic [ref=e54]: Discovery
+            - link "Topology" [ref=e56] [cursor=pointer]:
+              - /url: /topology
+              - generic [ref=e57]:
+                - img [ref=e58]
+                - generic [ref=e63]: Topology
+          - generic [ref=e64]:
+            - paragraph [ref=e65]: Health
+            - link "Incidents 3" [ref=e155] [cursor=pointer]:
+              - /url: /incidents
+              - generic [ref=e68]:
+                - img [ref=e69]
+                - generic [ref=e71]: Incidents
+              - generic [ref=e156]: "3"
+            - link "Activity" [ref=e73] [cursor=pointer]:
+              - /url: /activity
+              - generic [ref=e74]:
+                - img [ref=e75]
+                - generic [ref=e77]: Activity
+          - generic [ref=e78]:
+            - paragraph [ref=e79]: Control
+            - link "Approvals" [ref=e81] [cursor=pointer]:
+              - /url: /approvals
+              - generic [ref=e82]:
+                - img [ref=e83]
+                - generic [ref=e86]: Approvals
+            - link "Policies" [ref=e88] [cursor=pointer]:
+              - /url: /policies
+              - generic [ref=e89]:
+                - img [ref=e90]
+                - generic [ref=e93]: Policies
+          - generic [ref=e94]:
+            - paragraph [ref=e95]: Assistant
+            - link "Chat" [ref=e97] [cursor=pointer]:
+              - /url: /chat
+              - generic [ref=e98]:
+                - img [ref=e99]
+                - generic [ref=e101]: Chat
+          - generic [ref=e102]:
+            - paragraph [ref=e103]: System
+            - link "Adapters" [ref=e105] [cursor=pointer]:
+              - /url: /adapters
+              - generic [ref=e106]:
+                - img [ref=e107]
+                - generic [ref=e109]: Adapters
+            - link "Access" [ref=e111] [cursor=pointer]:
+              - /url: /access
+              - generic [ref=e112]:
+                - img [ref=e113]
+                - generic [ref=e125]: Access
+            - link "Settings" [ref=e127] [cursor=pointer]:
+              - /url: /settings
+              - generic [ref=e128]:
+                - img [ref=e129]
+                - generic [ref=e132]: Settings
+        - generic [ref=e157]:
+          - img [ref=e158]
+          - generic [ref=e160]: "Vault: Unlocked"
+    - main [ref=e134]:
+      - main [ref=e137]:
+        - generic [ref=e161]:
+          - generic [ref=e163]:
+            - generic [ref=e164]:
+              - heading "xe75pro" [level=1] [ref=e167]
+              - generic [ref=e168]:
+                - generic [ref=e169]: online
+                - generic [ref=e170]: router
+                - generic [ref=e171]:
+                  - img [ref=e172]
+                  - text: Tier 1
+                - generic [ref=e174]: Discovered
+            - generic [ref=e176]:
+              - paragraph [ref=e177]: "First seen: 3/4/2026, 8:46:04 PM"
+              - paragraph [ref=e178]: "Last seen: 6m ago"
+          - generic [ref=e179]:
+            - tablist [ref=e180]:
+              - tab "Overview" [ref=e181]
+              - tab "Chat" [selected] [ref=e182]
+              - tab "Incidents" [ref=e183]
+              - tab "Services" [ref=e184]
+              - tab "Contracts" [ref=e185]
+              - tab "Credentials" [ref=e186]
+              - tab "History" [ref=e187]
+              - tab "Settings" [ref=e188]
+            - tabpanel "Chat" [ref=e322]:
+              - generic [ref=e324]:
+                - generic [ref=e325]:
+                  - generic [ref=e326]:
+                    - generic [ref=e327]:
+                      - button "New Chat" [ref=e328]:
+                        - img [ref=e329]
+                        - text: New Chat
+                      - button [ref=e331]:
+                        - img [ref=e332]
+                    - generic [ref=e335]:
+                      - generic [ref=e336]:
+                        - generic [ref=e337]: Device
+                        - combobox [ref=e338]:
+                          - generic: xe75pro
+                          - img
+                      - generic [ref=e339]:
+                        - generic [ref=e340]: Group
+                        - generic [ref=e341]:
+                          - button "Recent" [ref=e342]
+                          - button "Device" [ref=e343]
+                  - generic [ref=e347]:
+                    - generic [ref=e348]:
+                      - paragraph [ref=e349]: raspberry-pi-foundation-iot-192-168-68-70
+                      - generic [ref=e350]:
+                        - button "[Onboarding] raspberry-pi-foundation-iot-192-168-68-70 2m ago raspberry-pi-foundation-iot-192-168-68-70" [ref=e351]:
+                          - paragraph [ref=e352]: "[Onboarding] raspberry-pi-foundation-iot-192-168-68-70"
+                          - paragraph [ref=e353]: 2m ago
+                          - paragraph [ref=e354]:
+                            - img [ref=e355]
+                            - generic [ref=e358]: raspberry-pi-foundation-iot-192-168-68-70
+                        - button [ref=e359]:
+                          - img [ref=e360]
+                    - generic [ref=e364]:
+                      - paragraph [ref=e365]: server-192-168-68-83
+                      - generic [ref=e366]:
+                        - button "[Onboarding] server-192-168-68-83 42m ago server-192-168-68-83" [ref=e428]:
+                          - paragraph [ref=e368]: "[Onboarding] server-192-168-68-83"
+                          - paragraph [ref=e369]: 42m ago
+                          - paragraph [ref=e370]:
+                            - img [ref=e371]
+                            - generic [ref=e374]: server-192-168-68-83
+                        - button [ref=e375]:
+                          - img [ref=e376]
+                    - generic [ref=e380]:
+                      - paragraph [ref=e381]: xe75pro
+                      - textbox [active] [ref=e429]: Bug Repro Session
+                - generic [ref=e396]:
+                  - generic [ref=e397]:
+                    - generic [ref=e398]:
+                      - img [ref=e399]
+                      - heading "Bug Repro Session" [level=1] [ref=e402]
+                      - generic [ref=e403]:
+                        - img [ref=e404]
+                        - generic [ref=e407]: xe75pro
+                    - generic [ref=e408]:
+                      - combobox [ref=e409]:
+                        - generic: Anthropic
+                        - img
+                      - generic [ref=e410]: claude-opus-4-6
+                  - generic [ref=e411]:
+                    - generic [ref=e412]:
+                      - paragraph [ref=e413]: Attached device chat is gated
+                      - paragraph [ref=e414]: Adopt this device before using attached chat controls.
+                    - generic [ref=e416]:
+                      - img [ref=e417]
+                      - paragraph [ref=e420]: Send a message to get started
+                  - generic [ref=e421]:
+                    - generic [ref=e422]:
+                      - textbox "Ask Steward anything about your environment..." [disabled] [ref=e423]
+                      - button [disabled]:
+                        - img
+                    - paragraph [ref=e424]: Finish onboarding to enable attached chat actions
+  - button "Open Next.js Dev Tools" [ref=e151] [cursor=pointer]:
+    - img [ref=e152]
+  - alert [ref=e321]

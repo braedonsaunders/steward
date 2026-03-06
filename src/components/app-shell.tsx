@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from "framer-motion";
 import {
   LayoutDashboard,
@@ -252,8 +252,19 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
 function ShellInner({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
+  const router = useRouter();
   const reduceMotion = useReducedMotion();
+  const { authRequired } = useSteward();
   const isEdgeToEdgeRoute = pathname === "/chat";
+  const isCompactDetailRoute = /^\/devices\/[^/]+$/.test(pathname);
+
+  useEffect(() => {
+    if (!authRequired || pathname === "/access") {
+      return;
+    }
+    const next = pathname && pathname !== "/" ? `?next=${encodeURIComponent(pathname)}` : "";
+    router.replace(`/access${next}`);
+  }, [authRequired, pathname, router]);
 
   const pageMotionProps = reduceMotion
     ? {
@@ -267,6 +278,19 @@ function ShellInner({ children }: { children: React.ReactNode }) {
         animate: "animate" as const,
         exit: "exit" as const,
       };
+
+  if (authRequired && pathname !== "/access") {
+    return (
+      <main className="flex h-dvh items-center justify-center bg-background p-6">
+        <div className="max-w-sm rounded-xl border bg-card p-6 text-center">
+          <h1 className="steward-heading-font text-lg font-semibold">Authentication Required</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Redirecting to Access so you can sign in and restore the live Steward session.
+          </p>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden md:flex-row">
@@ -324,7 +348,11 @@ function ShellInner({ children }: { children: React.ReactNode }) {
         <div
           className={cn(
             "relative z-10 flex h-full min-h-0 w-full flex-col overflow-hidden",
-            isEdgeToEdgeRoute ? "px-0 py-0" : "px-4 py-4 md:px-6 md:py-6 lg:px-8",
+            isEdgeToEdgeRoute
+              ? "px-0 py-0"
+              : isCompactDetailRoute
+                ? "px-3 py-3 md:px-4 md:py-4 lg:px-5"
+                : "px-4 py-4 md:px-6 md:py-6 lg:px-8",
           )}
         >
           <AnimatePresence mode="popLayout" initial={false}>

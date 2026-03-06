@@ -12,6 +12,16 @@ if [ ! -d "node_modules" ]; then
   npm ci
 fi
 
+echo "Ensuring Playwright runtime..."
+node scripts/ensure-playwright.mjs
+
+echo "Ensuring required network tools (nmap, tshark)..."
+node scripts/ensure-network-tools.mjs
+
+if ! command -v pwsh >/dev/null 2>&1; then
+  echo "Warning: PowerShell 7 (pwsh) is not installed. Linux/macOS Steward can still run, but WinRM access to Windows endpoints will be unavailable until pwsh is installed."
+fi
+
 echo "Building production bundle..."
 npm run build
 

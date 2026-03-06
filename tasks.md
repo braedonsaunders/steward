@@ -232,3 +232,27 @@ Legend:
 - [ ] ADP-010: Add audit/telemetry hardening for onboarding and credential flows
 
 Reference: `docs/device-adoption-autonomy-task-register.md`
+
+## 21) World-Class Systems Program (2026-03-06)
+
+- [x] WCX-001: Land the detailed world-class backlog document and keep it current
+- [ ] WCX-002: Replace shell-template-first execution with protocol-native execution brokers
+- [ ] WCX-003: Add real credential governance (validated-use only, per-action access audit, scoped leases)
+- [ ] WCX-004: Add quantitative risk scoring to policy evaluation and approval UX
+- [ ] WCX-005: Expand deterministic findings and incident coverage across storage, backup, cert, network, workload, and security domains
+- [ ] WCX-006: Add a real anomaly engine and time-series baseline model
+- [ ] WCX-007: Make the knowledge graph operationally useful for correlation and diagnosis
+- [ ] WCX-008: Complete onboarding/adoption state machine and profile-driven checks
+- [ ] WCX-009: Add outbound notifications, escalations, and weekly reporting
+- [ ] WCX-010: Replace full-state streaming and table rewrites with scalable projections/deltas/workers
+- [ ] WCX-011: Add federation, site boundaries, and tenant-safe multi-site architecture
+- [ ] WCX-012: Add integration/certification/restore-drill coverage for Steward itself
+- [x] WCX-T1-001: Persist onboarding questions from adoption profiles and preserve answers across non-forced re-profiling
+- [x] WCX-T1-002: Require validated credentials for runtime protocol availability checks
+- [x] WCX-T1-003: Add credential access audit logging tied to device / operation / playbook run
+- [x] WCX-T1-004: Add quantitative `riskScore` and `riskFactors` to policy evaluations
+- [x] WCX-T1-005: Add deterministic TLS certificate expiry findings from discovered fingerprint data
+- [x] WCX-T2-001: Add broker-first SSH/HTTP execution path and migrate built-in operations that fit it cleanly
+- [x] WCX-T3-001: Add protocol-aware SSH/HTTP credential validation instead of reachability-only checks
+
+Reference: `docs/world-class-system-program.md`

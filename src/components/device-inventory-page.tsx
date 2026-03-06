@@ -639,7 +639,7 @@ export function DeviceInventoryPage({ scope }: { scope: DeviceInventoryScope }) 
               <p className="text-lg font-semibold tabular-nums">{fingerprintedCount}</p>
             </div>
             <div className="rounded-lg border bg-background/70 px-3 py-2">
-              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Rich Services</p>
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Rich Endpoints</p>
               <p className="text-lg font-semibold tabular-nums">{richServiceCount}</p>
             </div>
           </div>
@@ -766,7 +766,7 @@ export function DeviceInventoryPage({ scope }: { scope: DeviceInventoryScope }) 
                     {showDiscoveryManagementFilter && (
                       <SortableHeader field="management" className="hidden xl:table-cell">Management</SortableHeader>
                     )}
-                    <SortableHeader field="services">Services</SortableHeader>
+                    <SortableHeader field="services">Endpoints</SortableHeader>
                     <TableHead className="hidden xl:table-cell">Evidence</TableHead>
                     <TableHead className="hidden 2xl:table-cell">Fingerprint</TableHead>
                     <SortableHeader field="autonomyTier" className="hidden lg:table-cell">Tier</SortableHeader>
@@ -864,7 +864,7 @@ export function DeviceInventoryPage({ scope }: { scope: DeviceInventoryScope }) 
                             {fingerprint.artifactCount} artifacts
                           </p>
                           <p className="text-[10px] text-muted-foreground tabular-nums">
-                            {fingerprint.serviceRichCount} rich services
+                            {fingerprint.serviceRichCount} rich endpoints
                           </p>
                         </div>
                       </TableCell>
