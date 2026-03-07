@@ -1,0 +1,219 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - img [ref=e7]
+          - generic [ref=e9]:
+            - heading "Steward" [level=1] [ref=e10]
+            - paragraph [ref=e11]: Network Operations
+          - button [ref=e12]:
+            - img [ref=e13]
+        - navigation [ref=e19]:
+          - generic [ref=e20]:
+            - paragraph [ref=e21]: Overview
+            - link "Dashboard" [ref=e23] [cursor=pointer]:
+              - /url: /
+              - generic [ref=e24]:
+                - img [ref=e25]
+                - generic [ref=e30]: Dashboard
+            - link "Digest" [ref=e32] [cursor=pointer]:
+              - /url: /digest
+              - generic [ref=e33]:
+                - img [ref=e34]
+                - generic [ref=e37]: Digest
+          - generic [ref=e38]:
+            - paragraph [ref=e39]: Network
+            - link "Devices" [ref=e41] [cursor=pointer]:
+              - /url: /devices
+              - generic [ref=e43]:
+                - img [ref=e44]
+                - generic [ref=e47]: Devices
+            - link "Discovery" [ref=e49] [cursor=pointer]:
+              - /url: /discovery
+              - generic [ref=e50]:
+                - img [ref=e51]
+                - generic [ref=e54]: Discovery
+            - link "Topology" [ref=e56] [cursor=pointer]:
+              - /url: /topology
+              - generic [ref=e57]:
+                - img [ref=e58]
+                - generic [ref=e63]: Topology
+          - generic [ref=e64]:
+            - paragraph [ref=e65]: Health
+            - link "Incidents 12" [ref=e147] [cursor=pointer]:
+              - /url: /incidents
+              - generic [ref=e68]:
+                - img [ref=e69]
+                - generic [ref=e71]: Incidents
+              - generic [ref=e148]: "12"
+            - link "Activity" [ref=e73] [cursor=pointer]:
+              - /url: /activity
+              - generic [ref=e74]:
+                - img [ref=e75]
+                - generic [ref=e77]: Activity
+          - generic [ref=e78]:
+            - paragraph [ref=e79]: Control
+            - link "Approvals" [ref=e81] [cursor=pointer]:
+              - /url: /approvals
+              - generic [ref=e82]:
+                - img [ref=e83]
+                - generic [ref=e86]: Approvals
+            - link "Policies" [ref=e88] [cursor=pointer]:
+              - /url: /policies
+              - generic [ref=e89]:
+                - img [ref=e90]
+                - generic [ref=e93]: Policies
+          - generic [ref=e94]:
+            - paragraph [ref=e95]: Assistant
+            - link "Chat" [ref=e97] [cursor=pointer]:
+              - /url: /chat
+              - generic [ref=e98]:
+                - img [ref=e99]
+                - generic [ref=e101]: Chat
+          - generic [ref=e102]:
+            - paragraph [ref=e103]: System
+            - link "Adapters" [ref=e105] [cursor=pointer]:
+              - /url: /adapters
+              - generic [ref=e106]:
+                - img [ref=e107]
+                - generic [ref=e109]: Adapters
+            - link "Access" [ref=e111] [cursor=pointer]:
+              - /url: /access
+              - generic [ref=e112]:
+                - img [ref=e113]
+                - generic [ref=e125]: Access
+            - link "Settings" [ref=e127] [cursor=pointer]:
+              - /url: /settings
+              - generic [ref=e128]:
+                - img [ref=e129]
+                - generic [ref=e132]: Settings
+        - generic [ref=e149]:
+          - img [ref=e150]
+          - generic [ref=e152]: "Vault: Unlocked"
+    - main [ref=e134]:
+      - main [ref=e137]:
+        - generic [ref=e153]:
+          - generic [ref=e155]:
+            - generic [ref=e156]:
+              - heading "[tv]-samsung-7-series-(82)" [level=1] [ref=e159]
+              - generic [ref=e160]:
+                - generic [ref=e161]: online
+                - generic [ref=e162]: iot
+                - generic [ref=e163]:
+                  - img [ref=e164]
+                  - text: Tier 1
+                - generic [ref=e166]: Adopted
+              - paragraph [ref=e167]: Steward onboarded [tv]-samsung-7-series-(82) and prepared management intents.
+            - generic [ref=e169]:
+              - paragraph [ref=e170]: "First seen: 3/4/2026, 8:46:04 PM"
+              - paragraph [ref=e171]: "Last seen: 11h ago"
+          - generic [ref=e172]:
+            - tablist [ref=e173]:
+              - tab "Overview" [ref=e174]
+              - tab "Workloads" [ref=e175]
+              - tab "Access" [ref=e176]
+              - tab "Widgets" [active] [selected] [ref=e177]
+              - tab "Chat" [ref=e178]
+              - tab "Activity" [ref=e179]
+              - tab "Settings" [ref=e180]
+            - tabpanel "Widgets" [ref=e304]:
+              - generic [ref=e307]:
+                - generic [ref=e308]:
+                  - generic [ref=e309]:
+                    - generic [ref=e310]:
+                      - img [ref=e311]
+                      - heading "Saved Widgets" [level=3] [ref=e316]
+                      - generic [ref=e317]: "1"
+                    - paragraph [ref=e318]: Persistent, device-scoped UI surfaces generated in chat and stored with Steward.
+                    - generic [ref=e319]:
+                      - button "Refresh" [ref=e320]:
+                        - img [ref=e321]
+                        - text: Refresh
+                      - button "Delete" [ref=e326]:
+                        - img [ref=e327]
+                        - text: Delete
+                  - button "Samsung Smart TV Remote Physical-style remote control for Samsung 7 Series TV. UPnP SOAP on port 9197 for volume/mute/source/media controls. REST API on port 8001 for status. No SendMBRIRKey or WebSocket calls. active" [ref=e335]:
+                    - generic [ref=e336]:
+                      - generic [ref=e337]:
+                        - paragraph [ref=e338]: Samsung Smart TV Remote
+                        - paragraph [ref=e339]: Physical-style remote control for Samsung 7 Series TV. UPnP SOAP on port 9197 for volume/mute/source/media controls. REST API on port 8001 for status. No SendMBRIRKey or WebSocket calls.
+                      - generic [ref=e340]: active
+                - generic [ref=e341]:
+                  - generic [ref=e343]:
+                    - generic [ref=e344]:
+                      - heading "Samsung Smart TV Remote" [level=3] [ref=e345]
+                      - paragraph [ref=e346]: Physical-style remote control for Samsung 7 Series TV. UPnP SOAP on port 9197 for volume/mute/source/media controls. REST API on port 8001 for status. No SendMBRIRKey or WebSocket calls.
+                    - generic [ref=e347]: samsung-smart-tv-remote
+                  - generic [ref=e349]:
+                    - generic [ref=e350]:
+                      - generic [ref=e351]:
+                        - img [ref=e352]
+                        - text: Ready
+                      - generic [ref=e354]: rev 2
+                      - generic [ref=e355]: context
+                      - generic [ref=e356]: state
+                      - generic [ref=e357]: device control
+                    - generic [ref=e358]:
+                      - button "Enter widget fullscreen" [ref=e359]:
+                        - img [ref=e360]
+                      - iframe [ref=e365]:
+                        - generic [ref=f1e3]:
+                          - generic "Connection status" [ref=f1e4]:
+                            - generic [ref=f1e6]: Offline
+                          - button "Power control requires WebSocket which is not available on this TV model" [disabled] [ref=f1e8]:
+                            - img [ref=f1e9]
+                          - generic [ref=f1e11]:
+                            - generic [ref=f1e12]: INPUT SOURCE
+                            - generic [ref=f1e13]:
+                              - button "TV" [ref=f1e14] [cursor=pointer]
+                              - button "HDMI1" [ref=f1e15] [cursor=pointer]
+                              - button "HDMI2" [ref=f1e16] [cursor=pointer]
+                              - button "HDMI3" [ref=f1e17] [cursor=pointer]
+                              - button "USB" [ref=f1e18] [cursor=pointer]
+                          - generic [ref=f1e19]:
+                            - generic [ref=f1e20]:
+                              - button "VOL" [ref=f1e21] [cursor=pointer]:
+                                - img [ref=f1e22]
+                                - generic [ref=f1e24]: VOL
+                              - img [ref=f1e26]
+                              - button "VOL" [ref=f1e29] [cursor=pointer]:
+                                - img [ref=f1e30]
+                                - generic [ref=f1e31]: VOL
+                            - generic [ref=f1e32]:
+                              - button "Toggle Mute" [ref=f1e33] [cursor=pointer]:
+                                - img [ref=f1e34]
+                              - generic [ref=f1e38]: MUTE
+                            - generic [ref=f1e39]:
+                              - button "CH" [disabled] [ref=f1e40]:
+                                - img [ref=f1e41]
+                                - generic [ref=f1e43]: CH
+                              - img [ref=f1e45]
+                              - button "CH" [disabled] [ref=f1e47]:
+                                - img [ref=f1e48]
+                                - generic [ref=f1e49]: CH
+                          - generic [ref=f1e50]:
+                            - generic [ref=f1e51]: MEDIA
+                            - generic [ref=f1e52]:
+                              - button "Previous" [ref=f1e53] [cursor=pointer]:
+                                - img [ref=f1e54]
+                              - button "Play" [ref=f1e56] [cursor=pointer]:
+                                - img [ref=f1e57]
+                              - button "Pause" [ref=f1e59] [cursor=pointer]:
+                                - img [ref=f1e60]
+                              - button "Stop" [ref=f1e63] [cursor=pointer]:
+                                - img [ref=f1e64]
+                              - button "Next" [ref=f1e66] [cursor=pointer]:
+                                - img [ref=f1e67]
+                          - generic [ref=f1e69]:
+                            - generic [ref=f1e70]: UN82TU7050FXZC
+                            - generic [ref=f1e71]:
+                              - generic [ref=f1e72]: "Power: offline"
+                              - generic [ref=f1e73]: "|"
+                              - generic [ref=f1e74]: "Vol: 10"
+                              - generic [ref=f1e75]: "|"
+                              - generic [ref=f1e76]: "Mute: OFF"
+                            - generic [ref=f1e77]: "Updated: 7:46:46 PM"
+  - button "Open Next.js Dev Tools" [ref=e300] [cursor=pointer]:
+    - img [ref=e301]
+  - alert [ref=e146]

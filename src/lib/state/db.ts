@@ -336,6 +336,42 @@ function createSchema(database: Database.Database): void {
       updatedAt       TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS access_methods (
+      id               TEXT PRIMARY KEY,
+      deviceId         TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+      key              TEXT NOT NULL,
+      kind             TEXT NOT NULL,
+      title            TEXT NOT NULL,
+      protocol         TEXT NOT NULL,
+      port             INTEGER,
+      secure           INTEGER NOT NULL DEFAULT 0,
+      selected         INTEGER NOT NULL DEFAULT 0,
+      status           TEXT NOT NULL DEFAULT 'observed',
+      credentialProtocol TEXT,
+      summary          TEXT,
+      metadataJson     TEXT NOT NULL DEFAULT '{}',
+      createdAt        TEXT NOT NULL,
+      updatedAt        TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS device_profiles (
+      id                        TEXT PRIMARY KEY,
+      deviceId                  TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+      profileId                 TEXT NOT NULL,
+      adapterId                 TEXT,
+      name                      TEXT NOT NULL,
+      kind                      TEXT NOT NULL DEFAULT 'primary',
+      confidence                REAL NOT NULL DEFAULT 0,
+      status                    TEXT NOT NULL DEFAULT 'candidate',
+      summary                   TEXT NOT NULL DEFAULT '',
+      requiredAccessMethods     TEXT NOT NULL DEFAULT '[]',
+      requiredCredentialProtocols TEXT NOT NULL DEFAULT '[]',
+      evidenceJson              TEXT NOT NULL DEFAULT '{}',
+      draftJson                 TEXT NOT NULL DEFAULT '{}',
+      createdAt                 TEXT NOT NULL,
+      updatedAt                 TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS device_adapter_bindings (
       id         TEXT PRIMARY KEY,
       deviceId   TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
@@ -570,6 +606,16 @@ function createSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_device_credentials_device_protocol_adapter
       ON device_credentials(deviceId, protocol, adapterId);
     CREATE INDEX IF NOT EXISTS idx_device_credentials_status ON device_credentials(status);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_access_methods_device_key
+      ON access_methods(deviceId, key);
+    CREATE INDEX IF NOT EXISTS idx_access_methods_device_selected
+      ON access_methods(deviceId, selected);
+    CREATE INDEX IF NOT EXISTS idx_access_methods_device_kind
+      ON access_methods(deviceId, kind);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_device_profiles_device_profile
+      ON device_profiles(deviceId, profileId);
+    CREATE INDEX IF NOT EXISTS idx_device_profiles_device_status
+      ON device_profiles(deviceId, status, confidence DESC);
     CREATE INDEX IF NOT EXISTS idx_device_adapter_bindings_device_protocol
       ON device_adapter_bindings(deviceId, protocol);
     CREATE INDEX IF NOT EXISTS idx_device_adapter_bindings_selected
@@ -679,6 +725,127 @@ function parseStringArray(value: unknown): string[] {
   return value
     .map((item) => String(item).trim())
     .filter((item) => item.length > 0);
+}
+
+function migrateCompletedOnboardingDraftCleanup(database: Database.Database): void {
+  const markerKey = "migration.completed_onboarding_draft_cleanup.v1";
+  const existingMarker = database
+    .prepare("SELECT value FROM metadata WHERE key = ?")
+    .get(markerKey) as { value?: string } | undefined;
+  if (existingMarker?.value === "done") {
+    return;
+  }
+
+  const migrate = database.transaction(() => {
+    const completedRuns = database.prepare(`
+      SELECT id, deviceId, profileJson, summary, updatedAt
+      FROM adoption_runs
+      WHERE status = 'completed'
+    `).all() as Array<{ id: string; deviceId: string; profileJson: string; summary: string | null; updatedAt: string }>;
+
+    const updateRun = database.prepare(`
+      UPDATE adoption_runs
+      SET profileJson = @profileJson,
+          updatedAt = @updatedAt
+      WHERE id = @id
+    `);
+
+    const getDevice = database.prepare(`
+      SELECT id, metadata, lastChangedAt
+      FROM devices
+      WHERE id = ?
+    `);
+
+    const updateDevice = database.prepare(`
+      UPDATE devices
+      SET metadata = @metadata,
+          lastChangedAt = @lastChangedAt
+      WHERE id = @id
+    `);
+
+    const countWorkloads = database.prepare(`
+      SELECT COUNT(*) AS count
+      FROM workloads
+      WHERE deviceId = ?
+    `);
+
+    const countAssurances = database.prepare(`
+      SELECT COUNT(*) AS count
+      FROM assurances
+      WHERE deviceId = ?
+    `);
+
+    for (const run of completedRuns) {
+      const profileJson = parseJsonObject(run.profileJson);
+      const deletedAt = typeof profileJson.onboardingDraftDeletedAt === "string" && profileJson.onboardingDraftDeletedAt.trim().length > 0
+        ? profileJson.onboardingDraftDeletedAt
+        : typeof profileJson.committedAt === "string" && profileJson.committedAt.trim().length > 0
+          ? profileJson.committedAt
+          : run.updatedAt;
+
+      let runChanged = false;
+      if (Object.prototype.hasOwnProperty.call(profileJson, "onboardingDraft")) {
+        delete profileJson.onboardingDraft;
+        runChanged = true;
+      }
+      if (profileJson.onboardingDraftDeletedAt !== deletedAt) {
+        profileJson.onboardingDraftDeletedAt = deletedAt;
+        runChanged = true;
+      }
+      if (runChanged) {
+        updateRun.run({
+          id: run.id,
+          profileJson: JSON.stringify(profileJson),
+          updatedAt: run.updatedAt,
+        });
+      }
+
+      const deviceRow = getDevice.get(run.deviceId) as { id: string; metadata: string; lastChangedAt: string } | undefined;
+      if (!deviceRow) {
+        continue;
+      }
+
+      const metadata = parseJsonObject(deviceRow.metadata);
+      const adoption = parseJsonObject(metadata.adoption);
+      const workloadCount = Number((countWorkloads.get(run.deviceId) as { count?: number } | undefined)?.count ?? 0);
+      const assuranceCount = Number((countAssurances.get(run.deviceId) as { count?: number } | undefined)?.count ?? 0);
+      const nextAdoption = {
+        ...adoption,
+        status: "adopted",
+        runId: run.id,
+        runStatus: "completed",
+        runStage: "completed",
+        profileSummary: typeof run.summary === "string" && run.summary.trim().length > 0
+          ? run.summary
+          : adoption.profileSummary,
+        selectedProfileIds: parseStringArray(profileJson.selectedProfileIds ?? adoption.selectedProfileIds),
+        requiredCredentials: parseStringArray(adoption.requiredCredentials),
+        workloadCount,
+        assuranceCount,
+        serviceContractCount: assuranceCount,
+        unresolvedRequiredQuestions: 0,
+        draftSuppressedAt: deletedAt,
+        completedAt: typeof profileJson.committedAt === "string" && profileJson.committedAt.trim().length > 0
+          ? profileJson.committedAt
+          : adoption.completedAt,
+      };
+      if (JSON.stringify(nextAdoption) !== JSON.stringify(adoption)) {
+        metadata.adoption = nextAdoption;
+        updateDevice.run({
+          id: deviceRow.id,
+          metadata: JSON.stringify(metadata),
+          lastChangedAt: deviceRow.lastChangedAt,
+        });
+      }
+    }
+
+    database.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run(
+      markerKey,
+      "done",
+    );
+  });
+
+  migrate();
 }
 
 function migrateLegacyWorkloadArchitecture(database: Database.Database): void {
@@ -829,6 +996,7 @@ export function getDb(): Database.Database {
     stateDb.pragma("foreign_keys = ON");
     createSchema(stateDb);
     migrateLegacyWorkloadArchitecture(stateDb);
+    migrateCompletedOnboardingDraftCleanup(stateDb);
   } catch (error) {
     try {
       stateDb.close();

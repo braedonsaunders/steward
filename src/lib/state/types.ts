@@ -127,6 +127,7 @@ export type OperationKind =
   | "container.stop"
   | "http.request"
   | "websocket.message"
+  | "mqtt.message"
   | "cert.renew"
   | "file.copy"
   | "network.config";
@@ -135,7 +136,9 @@ export type RevertMechanism = "commit-confirmed" | "timed-rollback" | "manual";
 
 export type HttpRequestMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
-export type WebSocketSuccessStrategy = "auto" | "transport" | "response" | "expectation";
+export type MessageSuccessStrategy = "auto" | "transport" | "response" | "expectation";
+export type WebSocketSuccessStrategy = MessageSuccessStrategy;
+export type MqttMessageQos = 0 | 1 | 2;
 export type WinrmAuthentication =
   | "default"
   | "basic"
@@ -195,6 +198,33 @@ export interface WebSocketBrokerRequest {
   successStrategy?: WebSocketSuccessStrategy;
 }
 
+export interface MqttPublishMessage {
+  topic: string;
+  payload?: string;
+  qos?: MqttMessageQos;
+  retain?: boolean;
+}
+
+export interface MqttBrokerRequest {
+  protocol: "mqtt";
+  scheme?: "mqtt" | "mqtts";
+  port?: number;
+  clientId?: string;
+  username?: string;
+  clean?: boolean;
+  qos?: MqttMessageQos;
+  retain?: boolean;
+  subscribeTopics?: string[];
+  publishMessages?: MqttPublishMessage[];
+  connectTimeoutMs?: number;
+  responseTimeoutMs?: number;
+  collectMessages?: number;
+  keepaliveSec?: number;
+  expectRegex?: string;
+  successStrategy?: MessageSuccessStrategy;
+  insecureSkipVerify?: boolean;
+}
+
 export interface WinrmBrokerRequest {
   protocol: "winrm";
   command: string;
@@ -210,6 +240,7 @@ export type ProtocolBrokerRequest =
   | SshBrokerRequest
   | HttpBrokerRequest
   | WebSocketBrokerRequest
+  | MqttBrokerRequest
   | WinrmBrokerRequest;
 
 export interface OperationSafetyProfile {
@@ -291,7 +322,9 @@ export type GraphNodeType =
   | "service"
   | "workload"
   | "assurance"
+  | "access_method"
   | "access_surface"
+  | "device_profile"
   | "incident"
   | "credential"
   | "baseline"
@@ -417,11 +450,11 @@ export interface Device {
 export type AdoptionRunStatus = "running" | "awaiting_user" | "completed" | "failed";
 
 export type AdoptionRunStage =
-  | "profile"
-  | "questions"
+  | "draft"
+  | "access"
+  | "profiles"
   | "credentials"
-  | "adapter_binding"
-  | "activation"
+  | "contract"
   | "completed"
   | "failed";
 
@@ -471,6 +504,69 @@ export interface DeviceCredential {
   updatedAt: string;
 }
 
+export type AccessMethodKind =
+  | "ssh"
+  | "winrm"
+  | "snmp"
+  | "http-api"
+  | "docker"
+  | "kubernetes"
+  | "mqtt"
+  | "printing"
+  | "rdp"
+  | (string & {});
+
+export type AccessMethodStatus =
+  | "observed"
+  | "credentialed"
+  | "validated"
+  | "rejected";
+
+export interface AccessMethod {
+  id: string;
+  deviceId: string;
+  key: string;
+  kind: AccessMethodKind;
+  title: string;
+  protocol: string;
+  port?: number;
+  secure: boolean;
+  selected: boolean;
+  status: AccessMethodStatus;
+  credentialProtocol?: string;
+  summary?: string;
+  metadataJson: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type DeviceProfileStatus =
+  | "candidate"
+  | "selected"
+  | "verified"
+  | "active"
+  | "rejected";
+
+export type DeviceProfileKind = "primary" | "fallback" | "supporting";
+
+export interface DeviceProfileBinding {
+  id: string;
+  deviceId: string;
+  profileId: string;
+  adapterId?: string;
+  name: string;
+  kind: DeviceProfileKind;
+  confidence: number;
+  status: DeviceProfileStatus;
+  summary: string;
+  requiredAccessMethods: string[];
+  requiredCredentialProtocols: string[];
+  evidenceJson: Record<string, unknown>;
+  draftJson: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface CredentialAccessLog {
   id: string;
   credentialId?: string;
@@ -484,6 +580,50 @@ export interface CredentialAccessLog {
   result: "granted" | "missing_secret" | "no_stored_credential" | "credential_unusable";
   details: Record<string, unknown>;
   accessedAt: string;
+}
+
+export interface OnboardingCredentialRequest {
+  protocol: string;
+  reason: string;
+  priority: "high" | "medium" | "low";
+}
+
+export interface OnboardingDraftWorkload {
+  workloadKey: string;
+  displayName: string;
+  category?: WorkloadCategory;
+  criticality: "low" | "medium" | "high";
+  summary?: string;
+  evidenceJson?: Record<string, unknown>;
+}
+
+export interface OnboardingDraftAssurance {
+  assuranceKey: string;
+  workloadKey?: string;
+  displayName: string;
+  criticality: "low" | "medium" | "high";
+  desiredState?: "running" | "stopped";
+  checkIntervalSec: number;
+  monitorType?: string;
+  requiredProtocols?: string[];
+  rationale?: string;
+  configJson?: Record<string, unknown>;
+}
+
+export interface OnboardingDraft {
+  version: number;
+  summary: string;
+  selectedProfileIds: string[];
+  selectedAccessMethodKeys: string[];
+  credentialRequests: OnboardingCredentialRequest[];
+  workloads: OnboardingDraftWorkload[];
+  assurances: OnboardingDraftAssurance[];
+  nextActions: string[];
+  unresolvedQuestions: string[];
+  residualUnknowns: string[];
+  dismissedWorkloadKeys: string[];
+  dismissedAssuranceKeys: string[];
+  completionReady: boolean;
 }
 
 export interface AccessSurface {

@@ -1,0 +1,221 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - img [ref=e7]
+          - generic [ref=e9]:
+            - heading "Steward" [level=1] [ref=e10]
+            - paragraph [ref=e11]: Network Operations
+          - button [ref=e12]:
+            - img [ref=e13]
+        - navigation [ref=e19]:
+          - generic [ref=e20]:
+            - paragraph [ref=e21]: Overview
+            - link "Dashboard" [ref=e23] [cursor=pointer]:
+              - /url: /
+              - generic [ref=e24]:
+                - img [ref=e25]
+                - generic [ref=e30]: Dashboard
+            - link "Digest" [ref=e32] [cursor=pointer]:
+              - /url: /digest
+              - generic [ref=e33]:
+                - img [ref=e34]
+                - generic [ref=e37]: Digest
+          - generic [ref=e38]:
+            - paragraph [ref=e39]: Network
+            - link "Devices" [ref=e41] [cursor=pointer]:
+              - /url: /devices
+              - generic [ref=e43]:
+                - img [ref=e44]
+                - generic [ref=e47]: Devices
+            - link "Discovery" [ref=e49] [cursor=pointer]:
+              - /url: /discovery
+              - generic [ref=e50]:
+                - img [ref=e51]
+                - generic [ref=e54]: Discovery
+            - link "Topology" [ref=e56] [cursor=pointer]:
+              - /url: /topology
+              - generic [ref=e57]:
+                - img [ref=e58]
+                - generic [ref=e63]: Topology
+          - generic [ref=e64]:
+            - paragraph [ref=e65]: Health
+            - link "Incidents 12" [ref=e147] [cursor=pointer]:
+              - /url: /incidents
+              - generic [ref=e68]:
+                - img [ref=e69]
+                - generic [ref=e71]: Incidents
+              - generic [ref=e148]: "12"
+            - link "Activity" [ref=e73] [cursor=pointer]:
+              - /url: /activity
+              - generic [ref=e74]:
+                - img [ref=e75]
+                - generic [ref=e77]: Activity
+          - generic [ref=e78]:
+            - paragraph [ref=e79]: Control
+            - link "Approvals" [ref=e81] [cursor=pointer]:
+              - /url: /approvals
+              - generic [ref=e82]:
+                - img [ref=e83]
+                - generic [ref=e86]: Approvals
+            - link "Policies" [ref=e88] [cursor=pointer]:
+              - /url: /policies
+              - generic [ref=e89]:
+                - img [ref=e90]
+                - generic [ref=e93]: Policies
+          - generic [ref=e94]:
+            - paragraph [ref=e95]: Assistant
+            - link "Chat" [ref=e97] [cursor=pointer]:
+              - /url: /chat
+              - generic [ref=e98]:
+                - img [ref=e99]
+                - generic [ref=e101]: Chat
+          - generic [ref=e102]:
+            - paragraph [ref=e103]: System
+            - link "Adapters" [ref=e105] [cursor=pointer]:
+              - /url: /adapters
+              - generic [ref=e106]:
+                - img [ref=e107]
+                - generic [ref=e109]: Adapters
+            - link "Access" [ref=e111] [cursor=pointer]:
+              - /url: /access
+              - generic [ref=e112]:
+                - img [ref=e113]
+                - generic [ref=e125]: Access
+            - link "Settings" [ref=e127] [cursor=pointer]:
+              - /url: /settings
+              - generic [ref=e128]:
+                - img [ref=e129]
+                - generic [ref=e132]: Settings
+        - generic [ref=e149]:
+          - img [ref=e150]
+          - generic [ref=e152]: "Vault: Unlocked"
+    - main [ref=e134]:
+      - main [ref=e137]:
+        - generic [ref=e153]:
+          - generic [ref=e154]:
+            - generic [ref=e155]:
+              - generic [ref=e156]:
+                - heading "apple-nas-192-168-68-75" [level=1] [ref=e159]
+                - generic [ref=e160]:
+                  - generic [ref=e161]: online
+                  - generic [ref=e162]: nas
+                  - generic [ref=e163]:
+                    - img [ref=e164]
+                    - text: Tier 1
+                  - generic [ref=e166]: Adopted
+                - paragraph [ref=e167]: Steward onboarded apple-nas-192-168-68-75 and prepared management intents.
+              - generic [ref=e169]:
+                - paragraph [ref=e170]: "First seen: 3/4/2026, 8:46:04 PM"
+                - paragraph [ref=e171]: "Last seen: 20m ago"
+            - generic [ref=e285]:
+              - generic [ref=e286]:
+                - paragraph [ref=e287]: Onboarding pending
+                - paragraph [ref=e288]: This device is adopted. Start onboarding from Chat so it can commit workloads, assurances, management profile, and access.
+              - button "Start Onboarding" [ref=e289]
+          - generic [ref=e172]:
+            - tablist [ref=e173]:
+              - tab "Overview" [selected] [ref=e174]
+              - tab "Workloads" [ref=e175]
+              - tab "Access" [ref=e176]
+              - tab "Widgets" [ref=e177]
+              - tab "Chat" [ref=e178]
+              - tab "Activity" [ref=e179]
+              - tab "Settings" [ref=e180]
+            - tabpanel "Overview" [ref=e181]:
+              - generic [ref=e183]:
+                - generic [ref=e184]:
+                  - generic [ref=e185]:
+                    - generic [ref=e186]:
+                      - img [ref=e187]
+                      - heading "Device Snapshot" [level=3] [ref=e190]
+                      - generic [ref=e191]: online
+                    - paragraph [ref=e192]: Steward onboarded apple-nas-192-168-68-75 and prepared management intents.
+                  - generic [ref=e193]:
+                    - generic [ref=e194]:
+                      - generic [ref=e195]:
+                        - paragraph [ref=e196]: 99%
+                        - paragraph [ref=e197]: Discovery
+                      - generic [ref=e198]:
+                        - paragraph [ref=e199]: "4"
+                        - paragraph [ref=e200]: Observations
+                      - generic [ref=e201]:
+                        - paragraph [ref=e202]: 30%
+                        - paragraph [ref=e203]: Classifier
+                      - generic [ref=e204]:
+                        - paragraph [ref=e205]: "1"
+                        - paragraph [ref=e206]: Endpoints
+                    - generic [ref=e207]:
+                      - generic [ref=e208]:
+                        - paragraph [ref=e209]: IP Address
+                        - paragraph [ref=e210]: 192.168.68.75
+                      - generic [ref=e211]:
+                        - paragraph [ref=e212]: MAC Address
+                        - paragraph [ref=e213]: 6c:4a:85:26:9d:cc
+                      - generic [ref=e214]:
+                        - paragraph [ref=e215]: Vendor
+                        - paragraph [ref=e216]: Apple, Inc.",1 Infinite Loop Cupertino CA US 95014
+                    - generic [ref=e217]:
+                      - generic [ref=e218]:
+                        - paragraph [ref=e219]: Discovery Evidence
+                        - generic [ref=e220]:
+                          - generic [ref=e221]: arp resolved
+                          - generic [ref=e222]: browser observation
+                          - generic [ref=e223]: icmp reply
+                          - generic [ref=e224]: tcp open
+                        - generic [ref=e225]:
+                          - generic [ref=e226]:
+                            - generic [ref=e227]: active
+                            - generic [ref=e228]: "2"
+                          - generic [ref=e229]:
+                            - generic [ref=e230]: fingerprint
+                            - generic [ref=e231]: "1"
+                          - generic [ref=e232]:
+                            - generic [ref=e233]: passive
+                            - generic [ref=e234]: "1"
+                      - generic [ref=e235]:
+                        - paragraph [ref=e236]: Fingerprint Context
+                        - generic [ref=e237]:
+                          - generic [ref=e238]:
+                            - paragraph [ref=e239]: Version
+                            - paragraph [ref=e240]: v3
+                          - generic [ref=e241]:
+                            - paragraph [ref=e242]: Last Probe
+                            - paragraph [ref=e243]: 27m ago
+                        - paragraph [ref=e244]: "OS: unknown"
+                        - paragraph [ref=e245]: "Product: unknown"
+                    - generic [ref=e246]:
+                      - paragraph [ref=e247]: Latest Probe Signals
+                      - generic [ref=e248]:
+                        - generic [ref=e249]:
+                          - paragraph [ref=e250]: DNS
+                          - paragraph [ref=e251]: n/a
+                        - generic [ref=e252]:
+                          - paragraph [ref=e253]: WinRM
+                          - paragraph [ref=e254]: n/a
+                        - generic [ref=e255]:
+                          - paragraph [ref=e256]: MQTT
+                          - paragraph [ref=e257]: n/a
+                    - generic [ref=e258]:
+                      - paragraph [ref=e259]: Protocols
+                      - generic [ref=e260]:
+                        - generic [ref=e261]: http
+                        - generic [ref=e262]: http-api
+                    - generic [ref=e263]:
+                      - paragraph [ref=e264]: Top Classification Signals
+                      - generic [ref=e266]:
+                        - generic [ref=e267]:
+                          - generic [ref=e268]: port
+                          - generic [ref=e269]: "45"
+                        - paragraph [ref=e270]: NAS web interface port
+                - generic [ref=e272]:
+                  - generic [ref=e273]:
+                    - generic [ref=e274]:
+                      - img [ref=e275]
+                      - heading "Recommendations" [level=3] [ref=e277]
+                    - paragraph [ref=e278]: Highest-impact next actions for this device
+                  - generic [ref=e280]:
+                    - img [ref=e281]
+                    - paragraph [ref=e283]: No recommendations for this device
+  - alert [ref=e146]

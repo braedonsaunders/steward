@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { isAuthorized } from "@/lib/auth/guard";
+import { getDeviceAdoptionSnapshot } from "@/lib/adoption/orchestrator";
 import { stateStore } from "@/lib/state/store";
 
 export const runtime = "nodejs";
@@ -18,9 +19,6 @@ export async function GET(
     return NextResponse.json({ error: "Device not found" }, { status: 404 });
   }
 
-  const accessSurfaces = stateStore.getAccessSurfaces(id);
-  return NextResponse.json({
-    accessSurfaces,
-    bindings: accessSurfaces,
-  });
+  const snapshot = await getDeviceAdoptionSnapshot(id);
+  return NextResponse.json(snapshot);
 }

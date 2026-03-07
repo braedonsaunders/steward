@@ -1,0 +1,183 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - img [ref=e7]
+          - generic [ref=e9]:
+            - heading "Steward" [level=1] [ref=e10]
+            - paragraph [ref=e11]: Network Operations
+          - button [ref=e12]:
+            - img [ref=e13]
+        - navigation [ref=e19]:
+          - generic [ref=e20]:
+            - paragraph [ref=e21]: Overview
+            - link "Dashboard" [ref=e23] [cursor=pointer]:
+              - /url: /
+              - generic [ref=e24]:
+                - img [ref=e25]
+                - generic [ref=e30]: Dashboard
+            - link "Digest" [ref=e32] [cursor=pointer]:
+              - /url: /digest
+              - generic [ref=e33]:
+                - img [ref=e34]
+                - generic [ref=e37]: Digest
+          - generic [ref=e38]:
+            - paragraph [ref=e39]: Network
+            - link "Devices" [ref=e41] [cursor=pointer]:
+              - /url: /devices
+              - generic [ref=e43]:
+                - img [ref=e44]
+                - generic [ref=e47]: Devices
+            - link "Discovery" [ref=e49] [cursor=pointer]:
+              - /url: /discovery
+              - generic [ref=e50]:
+                - img [ref=e51]
+                - generic [ref=e54]: Discovery
+            - link "Topology" [ref=e56] [cursor=pointer]:
+              - /url: /topology
+              - generic [ref=e57]:
+                - img [ref=e58]
+                - generic [ref=e63]: Topology
+          - generic [ref=e64]:
+            - paragraph [ref=e65]: Health
+            - link "Incidents 12" [ref=e147] [cursor=pointer]:
+              - /url: /incidents
+              - generic [ref=e68]:
+                - img [ref=e69]
+                - generic [ref=e71]: Incidents
+              - generic [ref=e148]: "12"
+            - link "Activity" [ref=e73] [cursor=pointer]:
+              - /url: /activity
+              - generic [ref=e74]:
+                - img [ref=e75]
+                - generic [ref=e77]: Activity
+          - generic [ref=e78]:
+            - paragraph [ref=e79]: Control
+            - link "Approvals" [ref=e81] [cursor=pointer]:
+              - /url: /approvals
+              - generic [ref=e82]:
+                - img [ref=e83]
+                - generic [ref=e86]: Approvals
+            - link "Policies" [ref=e88] [cursor=pointer]:
+              - /url: /policies
+              - generic [ref=e89]:
+                - img [ref=e90]
+                - generic [ref=e93]: Policies
+          - generic [ref=e94]:
+            - paragraph [ref=e95]: Assistant
+            - link "Chat" [ref=e97] [cursor=pointer]:
+              - /url: /chat
+              - generic [ref=e98]:
+                - img [ref=e99]
+                - generic [ref=e101]: Chat
+          - generic [ref=e102]:
+            - paragraph [ref=e103]: System
+            - link "Adapters" [ref=e105] [cursor=pointer]:
+              - /url: /adapters
+              - generic [ref=e106]:
+                - img [ref=e107]
+                - generic [ref=e109]: Adapters
+            - link "Access" [ref=e111] [cursor=pointer]:
+              - /url: /access
+              - generic [ref=e112]:
+                - img [ref=e113]
+                - generic [ref=e125]: Access
+            - link "Settings" [ref=e127] [cursor=pointer]:
+              - /url: /settings
+              - generic [ref=e128]:
+                - img [ref=e129]
+                - generic [ref=e132]: Settings
+        - generic [ref=e149]:
+          - img [ref=e150]
+          - generic [ref=e152]: "Vault: Unlocked"
+    - main [ref=e134]:
+      - main [ref=e137]:
+        - generic [ref=e153]:
+          - generic [ref=e155]:
+            - generic [ref=e156]:
+              - heading "apple-nas-192-168-68-75" [level=1] [ref=e159]
+              - generic [ref=e160]:
+                - generic [ref=e161]: online
+                - generic [ref=e162]: nas
+                - generic [ref=e163]:
+                  - img [ref=e164]
+                  - text: Tier 1
+                - generic [ref=e166]: Adopted
+              - paragraph [ref=e167]: Steward onboarded apple-nas-192-168-68-75 and prepared management intents.
+            - generic [ref=e169]:
+              - paragraph [ref=e170]: "First seen: 3/4/2026, 8:46:04 PM"
+              - paragraph [ref=e171]: "Last seen: 20m ago"
+          - generic [ref=e172]:
+            - tablist [ref=e173]:
+              - tab "Overview" [ref=e174]
+              - tab "Workloads" [ref=e175]
+              - tab "Access" [ref=e176]
+              - tab "Widgets" [ref=e177]
+              - tab "Chat" [selected] [ref=e178]
+              - tab "Activity" [ref=e179]
+              - tab "Settings" [ref=e180]
+            - tabpanel "Chat" [ref=e290]:
+              - generic [ref=e293]:
+                - generic [ref=e294]:
+                  - generic [ref=e296]:
+                    - button "New Chat" [ref=e297]:
+                      - img [ref=e298]
+                      - text: New Chat
+                    - button [ref=e300]:
+                      - img [ref=e301]
+                  - generic [ref=e309]:
+                    - button "[Onboarding] apple-nas-192-168-68-75 just now apple-nas-192-168-68-75" [ref=e310]:
+                      - paragraph [ref=e311]: "[Onboarding] apple-nas-192-168-68-75"
+                      - paragraph [ref=e312]: just now
+                      - paragraph [ref=e313]:
+                        - img [ref=e314]
+                        - generic [ref=e317]: apple-nas-192-168-68-75
+                    - generic [ref=e318]:
+                      - button "Rename" [ref=e319]
+                      - button "Delete" [ref=e320]
+                - generic [ref=e321]:
+                  - generic [ref=e322]:
+                    - generic [ref=e323]:
+                      - img [ref=e324]
+                      - heading "[Onboarding] apple-nas-192-168-68-75" [level=1] [ref=e327]
+                      - generic [ref=e328]:
+                        - img [ref=e329]
+                        - generic [ref=e332]: apple-nas-192-168-68-75
+                    - generic [ref=e333]:
+                      - button "Rename" [ref=e334]:
+                        - img [ref=e335]
+                        - text: Rename
+                      - button "Delete" [ref=e337]:
+                        - img [ref=e338]
+                        - text: Delete
+                      - combobox [ref=e341]:
+                        - generic: Anthropic
+                        - img
+                      - generic [ref=e342]: claude-opus-4-6
+                  - generic [ref=e346]:
+                    - img [ref=e348]
+                    - generic [ref=e351]:
+                      - paragraph [ref=e352]: anthropic
+                      - generic [ref=e353]:
+                        - paragraph [ref=e354]: I'll start by gathering identity evidence and probing the device to understand what's actually running on port 5000 before asking you anything unnecessary.
+                        - paragraph [ref=e355]:
+                          - text: <tool_call>
+                          - text: "{\"name\": \"steward_device_identity\", \"arguments\": {\"deviceId\": \"e75262f4-81fe-443f-9270-cbc21e1d64c1\"}}"
+                          - text: </tool_call>
+                        - paragraph [ref=e356]:
+                          - text: <tool_call>
+                          - text: "{\"name\": \"steward_deep_probe\", \"arguments\": {\"deviceId\": \"e75262f4-81fe-443f-9270-cbc21e1d64c1\"}}"
+                          - text: </tool_call>
+                        - paragraph [ref=e357]:
+                          - text: <tool_call>
+                          - text: "{\"name\": \"steward_router_lease_snapshot\", \"arguments\": {\"routerDeviceId\": \"4437c847-b7ca-4285-9cfe-afbdc3d6a22f\", \"searchFilter\": \"192.168.68.75\"}}"
+                          - text: </tool_call>
+                      - paragraph [ref=e358]: 11:25 PM
+                  - generic [ref=e359]:
+                    - generic [ref=e360]:
+                      - textbox "Ask Steward anything about your environment..." [ref=e361]
+                      - button "Send message" [disabled]:
+                        - img
+                    - paragraph [ref=e362]: Press Enter to send, Shift+Enter for new line
+  - alert [ref=e146]

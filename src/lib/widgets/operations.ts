@@ -67,6 +67,31 @@ const WebSocketBrokerSchema = z.object({
   successStrategy: z.enum(["auto", "transport", "response", "expectation"]).optional(),
 });
 
+const MqttBrokerSchema = z.object({
+  protocol: z.literal("mqtt"),
+  scheme: z.enum(["mqtt", "mqtts"]).optional(),
+  port: z.number().int().min(1).max(65535).optional(),
+  clientId: z.string().min(1).optional(),
+  username: z.string().min(1).optional(),
+  clean: z.boolean().optional(),
+  qos: z.union([z.literal(0), z.literal(1), z.literal(2)]).optional(),
+  retain: z.boolean().optional(),
+  subscribeTopics: z.array(z.string().min(1)).optional(),
+  publishMessages: z.array(z.object({
+    topic: z.string().min(1),
+    payload: z.string().optional(),
+    qos: z.union([z.literal(0), z.literal(1), z.literal(2)]).optional(),
+    retain: z.boolean().optional(),
+  })).optional(),
+  connectTimeoutMs: z.number().int().min(250).max(120_000).optional(),
+  responseTimeoutMs: z.number().int().min(250).max(120_000).optional(),
+  collectMessages: z.number().int().min(0).max(50).optional(),
+  keepaliveSec: z.number().int().min(5).max(1_200).optional(),
+  expectRegex: z.string().optional(),
+  successStrategy: z.enum(["auto", "transport", "response", "expectation"]).optional(),
+  insecureSkipVerify: z.boolean().optional(),
+});
+
 export const WidgetOperationSchema = z.object({
   mode: z.enum(["read", "mutate"]).default("read"),
   kind: z.enum([
@@ -77,6 +102,7 @@ export const WidgetOperationSchema = z.object({
     "container.stop",
     "http.request",
     "websocket.message",
+    "mqtt.message",
     "cert.renew",
     "file.copy",
     "network.config",
@@ -88,6 +114,7 @@ export const WidgetOperationSchema = z.object({
     HttpBrokerSchema,
     SshBrokerSchema,
     WebSocketBrokerSchema,
+    MqttBrokerSchema,
     WinrmBrokerSchema,
   ]).optional(),
   args: z.record(z.string(), ValueSchema).optional(),
@@ -97,6 +124,113 @@ export const WidgetOperationSchema = z.object({
 });
 
 export type WidgetOperationInput = z.infer<typeof WidgetOperationSchema>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringifyParamValue(value: string | number | boolean | undefined): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return undefined;
+}
+
+function extractSerialFromSubject(subject: string | undefined): string | undefined {
+  if (!subject) {
+    return undefined;
+  }
+  const cnMatch = subject.match(/(?:^|[,/])\s*(?:CN|commonName)\s*=\s*([^,/]+)/i);
+  const candidate = (cnMatch?.[1] ?? subject).trim();
+  if (/^[A-Za-z0-9._-]{5,}$/.test(candidate)) {
+    return candidate;
+  }
+  return undefined;
+}
+
+function inferDeviceSerial(device: Device): string | undefined {
+  const metadataSources = [
+    device.metadata,
+    isRecord(device.metadata.notes) ? device.metadata.notes : null,
+    isRecord(device.metadata.notes) && isRecord(device.metadata.notes.structuredContext)
+      ? device.metadata.notes.structuredContext
+      : null,
+    isRecord(device.metadata.fingerprint) ? device.metadata.fingerprint : null,
+  ].filter((value): value is Record<string, unknown> => isRecord(value));
+
+  for (const source of metadataSources) {
+    for (const key of ["serial", "serialNumber", "serial_number", "deviceSerial", "device_serial"]) {
+      const candidate = stringifyParamValue(
+        typeof source[key] === "string" || typeof source[key] === "number" || typeof source[key] === "boolean"
+          ? source[key] as string | number | boolean
+          : undefined,
+      );
+      if (candidate) {
+        return candidate;
+      }
+    }
+  }
+
+  for (const service of device.services) {
+    const candidate = extractSerialFromSubject(service.tlsCert?.subject);
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  return undefined;
+}
+
+function buildWidgetExecutionParams(device: Device, input: WidgetOperationInput): Record<string, string> {
+  const params: Record<string, string> = {
+    host: device.ip,
+    ip: device.ip,
+    device_id: device.id,
+    deviceId: device.id,
+    name: device.name,
+    type: device.type,
+    status: device.status,
+  };
+
+  const serial = inferDeviceSerial(device);
+  if (serial) {
+    params.serial = serial;
+  }
+
+  const optionalFields: Array<[string, string | undefined]> = [
+    ["hostname", device.hostname],
+    ["mac", device.mac],
+    ["vendor", device.vendor],
+    ["os", device.os],
+    ["role", device.role],
+    [
+      "product",
+      isRecord(device.metadata.fingerprint) && typeof device.metadata.fingerprint.inferredProduct === "string"
+        ? device.metadata.fingerprint.inferredProduct
+        : undefined,
+    ],
+  ];
+
+  for (const [key, rawValue] of optionalFields) {
+    const value = stringifyParamValue(rawValue);
+    if (value) {
+      params[key] = value;
+    }
+  }
+
+  for (const [key, rawValue] of Object.entries(input.args ?? {})) {
+    const value = stringifyParamValue(rawValue);
+    if (value) {
+      params[key] = value;
+    }
+  }
+
+  return params;
+}
 
 function inferAdapterId(input: WidgetOperationInput): string {
   if (input.adapterId) {
@@ -108,8 +242,14 @@ function inferAdapterId(input: WidgetOperationInput): string {
   if (input.brokerRequest?.protocol === "winrm") {
     return "winrm";
   }
+  if (input.brokerRequest?.protocol === "mqtt") {
+    return "mqtt";
+  }
   if (input.brokerRequest?.protocol === "http" || input.brokerRequest?.protocol === "websocket") {
     return "http-api";
+  }
+  if (input.kind === "mqtt.message") {
+    return "mqtt";
   }
   return input.kind === "http.request" || input.kind === "websocket.message" ? "http-api" : "ssh";
 }
@@ -131,7 +271,15 @@ function actionClassForOperation(kind: OperationKind, mode: OperationMode): Acti
   if (mode === "read") {
     return "A";
   }
-  if (kind === "service.restart" || kind === "service.stop" || kind === "container.restart" || kind === "container.stop" || kind === "http.request" || kind === "websocket.message") {
+  if (
+    kind === "service.restart"
+    || kind === "service.stop"
+    || kind === "container.restart"
+    || kind === "container.stop"
+    || kind === "http.request"
+    || kind === "websocket.message"
+    || kind === "mqtt.message"
+  ) {
     return "B";
   }
   if (kind === "network.config") {
@@ -299,7 +447,7 @@ export async function executeWidgetOperation(args: {
     quarantineActive: false,
     allowProvidedCredentials: true,
     idempotencySeed: `${args.widget.id}:${args.device.id}:${Date.now()}`,
-    params: {},
+    params: buildWidgetExecutionParams(args.device, args.input),
   });
 
   const result: WidgetOperationResult = {

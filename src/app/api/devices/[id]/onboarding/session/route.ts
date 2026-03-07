@@ -9,15 +9,30 @@ import { stateStore } from "@/lib/state/store";
 
 export const runtime = "nodejs";
 
+function isBrokenSeedMessage(content: string): boolean {
+  return /<tool_call>/i.test(content);
+}
+
 async function buildPayload(deviceId: string, createIfMissing: boolean) {
   const device = stateStore.getDeviceById(deviceId);
   if (!device) {
     return { error: NextResponse.json({ error: "Device not found" }, { status: 404 }) };
   }
 
-  const session = createIfMissing
+  let session = createIfMissing
     ? ensureOnboardingSession(device)
     : getOnboardingSession(device.id);
+
+  const existingMessages = session ? stateStore.getChatMessages(session.id) : [];
+  const hasBrokenSeedSession = existingMessages.length === 1
+    && existingMessages[0]?.role === "assistant"
+    && isBrokenSeedMessage(existingMessages[0].content);
+  if (session && hasBrokenSeedSession) {
+    stateStore.deleteChatSession(session.id);
+    session = createIfMissing
+      ? ensureOnboardingSession(device)
+      : getOnboardingSession(device.id);
+  }
 
   const messages = session ? stateStore.getChatMessages(session.id) : [];
   const snapshot = await getDeviceAdoptionSnapshot(deviceId);
@@ -30,6 +45,9 @@ async function buildPayload(deviceId: string, createIfMissing: boolean) {
         run: snapshot.run,
         unresolvedRequiredQuestions: snapshot.unresolvedRequiredQuestions,
         credentials: snapshot.credentials,
+        accessMethods: snapshot.accessMethods,
+        profiles: snapshot.profiles,
+        draft: snapshot.draft,
         accessSurfaces: snapshot.accessSurfaces,
         workloads: snapshot.workloads,
         assurances: snapshot.assurances,

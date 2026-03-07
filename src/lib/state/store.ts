@@ -16,6 +16,7 @@ import {
   ensureDefaults,
 } from "@/lib/state/defaults";
 import type {
+  AccessMethod,
   AccessSurface,
   ActionLog,
   AdoptionQuestion,
@@ -33,6 +34,7 @@ import type {
   DeviceBaseline,
   DeviceCredential,
   DeviceFinding,
+  DeviceProfileBinding,
   DeviceWidget,
   DeviceWidgetOperationRun,
   DeviceWidgetRuntimeState,
@@ -362,6 +364,46 @@ function deviceCredentialFromRow(row: Record<string, unknown>): DeviceCredential
     scopeJson: JSON.parse(String(row.scopeJson ?? "{}")) as Record<string, unknown>,
     status: row.status as DeviceCredential["status"],
     lastValidatedAt: row.lastValidatedAt ? String(row.lastValidatedAt) : undefined,
+    createdAt: String(row.createdAt),
+    updatedAt: String(row.updatedAt),
+  };
+}
+
+function accessMethodFromRow(row: Record<string, unknown>): AccessMethod {
+  return {
+    id: String(row.id),
+    deviceId: String(row.deviceId),
+    key: String(row.key),
+    kind: row.kind as AccessMethod["kind"],
+    title: String(row.title),
+    protocol: String(row.protocol),
+    port: row.port === null || row.port === undefined ? undefined : Number(row.port),
+    secure: Number(row.secure ?? 0) > 0,
+    selected: Number(row.selected ?? 0) > 0,
+    status: row.status as AccessMethod["status"],
+    credentialProtocol: row.credentialProtocol ? String(row.credentialProtocol) : undefined,
+    summary: row.summary ? String(row.summary) : undefined,
+    metadataJson: JSON.parse(String(row.metadataJson ?? "{}")) as Record<string, unknown>,
+    createdAt: String(row.createdAt),
+    updatedAt: String(row.updatedAt),
+  };
+}
+
+function deviceProfileBindingFromRow(row: Record<string, unknown>): DeviceProfileBinding {
+  return {
+    id: String(row.id),
+    deviceId: String(row.deviceId),
+    profileId: String(row.profileId),
+    adapterId: row.adapterId ? String(row.adapterId) : undefined,
+    name: String(row.name),
+    kind: row.kind as DeviceProfileBinding["kind"],
+    confidence: Number(row.confidence ?? 0),
+    status: row.status as DeviceProfileBinding["status"],
+    summary: String(row.summary ?? ""),
+    requiredAccessMethods: JSON.parse(String(row.requiredAccessMethods ?? "[]")) as string[],
+    requiredCredentialProtocols: JSON.parse(String(row.requiredCredentialProtocols ?? "[]")) as string[],
+    evidenceJson: JSON.parse(String(row.evidenceJson ?? "{}")) as Record<string, unknown>,
+    draftJson: JSON.parse(String(row.draftJson ?? "{}")) as Record<string, unknown>,
     createdAt: String(row.createdAt),
     updatedAt: String(row.updatedAt),
   };
@@ -2686,6 +2728,175 @@ class StateStore {
     });
   }
 
+  /* ---------- Access Methods ---------- */
+
+  getAccessMethods(deviceId: string): AccessMethod[] {
+    return this.withDbRecovery("StateStore.getAccessMethods", (db) => {
+      const rows = db.prepare(`
+        SELECT * FROM access_methods
+        WHERE deviceId = ?
+        ORDER BY selected DESC, status DESC, kind ASC, COALESCE(port, 0) ASC, updatedAt DESC
+      `).all(deviceId) as Record<string, unknown>[];
+      return rows.map(accessMethodFromRow);
+    });
+  }
+
+  upsertAccessMethod(method: AccessMethod): AccessMethod {
+    return this.withDbRecovery("StateStore.upsertAccessMethod", (db) => {
+      db.prepare(`
+        INSERT OR REPLACE INTO access_methods (
+          id, deviceId, key, kind, title, protocol, port, secure, selected, status,
+          credentialProtocol, summary, metadataJson, createdAt, updatedAt
+        )
+        VALUES (
+          @id, @deviceId, @key, @kind, @title, @protocol, @port, @secure, @selected, @status,
+          @credentialProtocol, @summary, @metadataJson, @createdAt, @updatedAt
+        )
+      `).run({
+        id: method.id,
+        deviceId: method.deviceId,
+        key: method.key,
+        kind: method.kind,
+        title: method.title,
+        protocol: method.protocol,
+        port: method.port ?? null,
+        secure: method.secure ? 1 : 0,
+        selected: method.selected ? 1 : 0,
+        status: method.status,
+        credentialProtocol: method.credentialProtocol ?? null,
+        summary: method.summary ?? null,
+        metadataJson: JSON.stringify(method.metadataJson ?? {}),
+        createdAt: method.createdAt,
+        updatedAt: method.updatedAt,
+      });
+      return method;
+    });
+  }
+
+  clearAccessMethods(deviceId: string): void {
+    this.withDbRecovery("StateStore.clearAccessMethods", (db) => {
+      db.prepare("DELETE FROM access_methods WHERE deviceId = ?").run(deviceId);
+    });
+  }
+
+  selectAccessMethods(deviceId: string, keys: string[]): AccessMethod[] {
+    return this.withDbRecovery("StateStore.selectAccessMethods", (db) => {
+      const normalized = Array.from(new Set(keys.map((value) => String(value).trim()).filter(Boolean)));
+      const now = new Date().toISOString();
+      const tx = db.transaction(() => {
+        db.prepare(`
+          UPDATE access_methods
+          SET selected = 0, updatedAt = ?
+          WHERE deviceId = ?
+        `).run(now, deviceId);
+
+        if (normalized.length > 0) {
+          const placeholders = normalized.map(() => "?").join(", ");
+          db.prepare(`
+            UPDATE access_methods
+            SET selected = 1, updatedAt = ?
+            WHERE deviceId = ? AND key IN (${placeholders})
+          `).run(now, deviceId, ...normalized);
+        }
+      });
+      tx();
+      return this.getAccessMethods(deviceId);
+    });
+  }
+
+  /* ---------- Device Profiles ---------- */
+
+  getDeviceProfiles(deviceId: string): DeviceProfileBinding[] {
+    return this.withDbRecovery("StateStore.getDeviceProfiles", (db) => {
+      const rows = db.prepare(`
+        SELECT * FROM device_profiles
+        WHERE deviceId = ?
+        ORDER BY
+          CASE status
+            WHEN 'active' THEN 0
+            WHEN 'verified' THEN 1
+            WHEN 'selected' THEN 2
+            WHEN 'candidate' THEN 3
+            ELSE 4
+          END,
+          confidence DESC,
+          updatedAt DESC
+      `).all(deviceId) as Record<string, unknown>[];
+      return rows.map(deviceProfileBindingFromRow);
+    });
+  }
+
+  upsertDeviceProfile(binding: DeviceProfileBinding): DeviceProfileBinding {
+    return this.withDbRecovery("StateStore.upsertDeviceProfile", (db) => {
+      db.prepare(`
+        INSERT OR REPLACE INTO device_profiles (
+          id, deviceId, profileId, adapterId, name, kind, confidence, status, summary,
+          requiredAccessMethods, requiredCredentialProtocols, evidenceJson, draftJson, createdAt, updatedAt
+        )
+        VALUES (
+          @id, @deviceId, @profileId, @adapterId, @name, @kind, @confidence, @status, @summary,
+          @requiredAccessMethods, @requiredCredentialProtocols, @evidenceJson, @draftJson, @createdAt, @updatedAt
+        )
+      `).run({
+        id: binding.id,
+        deviceId: binding.deviceId,
+        profileId: binding.profileId,
+        adapterId: binding.adapterId ?? null,
+        name: binding.name,
+        kind: binding.kind,
+        confidence: binding.confidence,
+        status: binding.status,
+        summary: binding.summary,
+        requiredAccessMethods: JSON.stringify(binding.requiredAccessMethods ?? []),
+        requiredCredentialProtocols: JSON.stringify(binding.requiredCredentialProtocols ?? []),
+        evidenceJson: JSON.stringify(binding.evidenceJson ?? {}),
+        draftJson: JSON.stringify(binding.draftJson ?? {}),
+        createdAt: binding.createdAt,
+        updatedAt: binding.updatedAt,
+      });
+      return binding;
+    });
+  }
+
+  clearDeviceProfiles(deviceId: string): void {
+    this.withDbRecovery("StateStore.clearDeviceProfiles", (db) => {
+      db.prepare("DELETE FROM device_profiles WHERE deviceId = ?").run(deviceId);
+    });
+  }
+
+  selectDeviceProfiles(deviceId: string, profileIds: string[]): DeviceProfileBinding[] {
+    return this.withDbRecovery("StateStore.selectDeviceProfiles", (db) => {
+      const normalized = Array.from(new Set(profileIds.map((value) => String(value).trim()).filter(Boolean)));
+      const now = new Date().toISOString();
+      const tx = db.transaction(() => {
+        db.prepare(`
+          UPDATE device_profiles
+          SET status = CASE
+            WHEN status IN ('active', 'verified') THEN status
+            ELSE 'candidate'
+          END,
+          updatedAt = ?
+          WHERE deviceId = ?
+        `).run(now, deviceId);
+
+        if (normalized.length > 0) {
+          const placeholders = normalized.map(() => "?").join(", ");
+          db.prepare(`
+            UPDATE device_profiles
+            SET status = CASE
+              WHEN status IN ('active', 'verified') THEN status
+              ELSE 'selected'
+            END,
+            updatedAt = ?
+            WHERE deviceId = ? AND profileId IN (${placeholders})
+          `).run(now, deviceId, ...normalized);
+        }
+      });
+      tx();
+      return this.getDeviceProfiles(deviceId);
+    });
+  }
+
   /* ---------- Access Surfaces ---------- */
 
   getAccessSurfaces(deviceId: string): AccessSurface[] {
@@ -2819,7 +3030,11 @@ class StateStore {
 
   deleteWorkload(workloadId: string): void {
     this.withDbRecovery("StateStore.deleteWorkload", (db) => {
-      db.prepare("DELETE FROM workloads WHERE id = ?").run(workloadId);
+      const tx = db.transaction((id: string) => {
+        db.prepare("DELETE FROM assurances WHERE workloadId = ?").run(id);
+        db.prepare("DELETE FROM workloads WHERE id = ?").run(id);
+      });
+      tx(workloadId);
     });
   }
 
@@ -2844,6 +3059,13 @@ class StateStore {
         ORDER BY criticality DESC, updatedAt DESC
       `).all(workloadId) as Record<string, unknown>[];
       return rows.map(assuranceFromRow);
+    });
+  }
+
+  getAssuranceById(id: string): Assurance | null {
+    return this.withDbRecovery("StateStore.getAssuranceById", (db) => {
+      const row = db.prepare("SELECT * FROM assurances WHERE id = ? LIMIT 1").get(id) as Record<string, unknown> | undefined;
+      return row ? assuranceFromRow(row) : null;
     });
   }
 
@@ -2942,6 +3164,12 @@ class StateStore {
   clearAssurances(deviceId: string): void {
     this.withDbRecovery("StateStore.clearAssurances", (db) => {
       db.prepare("DELETE FROM assurances WHERE deviceId = ?").run(deviceId);
+    });
+  }
+
+  deleteAssurance(id: string): void {
+    this.withDbRecovery("StateStore.deleteAssurance", (db) => {
+      db.prepare("DELETE FROM assurances WHERE id = ?").run(id);
     });
   }
 

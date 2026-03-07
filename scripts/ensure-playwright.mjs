@@ -60,10 +60,36 @@ async function main() {
     return;
   }
 
-  console.log("Installing Playwright Chromium runtime...");
-  const install = run(process.execPath, [cliPath, "install", "chromium"]);
-  if ((install.status ?? 1) !== 0) {
+  const installAttempts = process.platform === "linux"
+    ? [
+        {
+          label: "Installing Playwright Chromium runtime and Linux browser dependencies...",
+          args: [cliPath, "install", "--with-deps", "chromium"],
+        },
+        {
+          label: "Retrying Playwright Chromium runtime install without Linux dependency bootstrap...",
+          args: [cliPath, "install", "chromium"],
+        },
+      ]
+    : [
+        {
+          label: "Installing Playwright Chromium runtime...",
+          args: [cliPath, "install", "chromium"],
+        },
+      ];
+
+  let installedRuntime = false;
+  for (const attempt of installAttempts) {
+    console.log(attempt.label);
+    const install = run(process.execPath, attempt.args);
+    if ((install.status ?? 1) === 0) {
+      installedRuntime = true;
+      break;
+    }
     reportSpawnFailure(install);
+  }
+
+  if (!installedRuntime) {
     const message = "Failed to install Playwright Chromium runtime.";
     if (BEST_EFFORT) {
       console.warn(message);

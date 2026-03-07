@@ -7,20 +7,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "$REPO_ROOT"
 
-if [ ! -d "node_modules" ]; then
-  echo "Installing dependencies..."
-  npm ci
-fi
-
-echo "Ensuring Playwright runtime..."
-node scripts/ensure-playwright.mjs
-
-echo "Ensuring required network tools (nmap, tshark, snmpget, snmpwalk)..."
-node scripts/ensure-network-tools.mjs
-
-if ! command -v pwsh >/dev/null 2>&1; then
-  echo "Warning: PowerShell 7 (pwsh) is not installed. Linux/macOS Steward can still run, but WinRM access to Windows endpoints will be unavailable until pwsh is installed."
-fi
+echo "Installing production prerequisites..."
+bash "${SCRIPT_DIR}/install-prod.sh"
 
 echo "Building production bundle..."
 npm run build

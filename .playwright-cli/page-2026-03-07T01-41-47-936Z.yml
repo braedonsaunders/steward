@@ -1,0 +1,165 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - img [ref=e7]
+          - generic [ref=e9]:
+            - heading "Steward" [level=1] [ref=e10]
+            - paragraph [ref=e11]: Network Operations
+          - button [ref=e12]:
+            - img [ref=e13]
+        - navigation [ref=e19]:
+          - generic [ref=e20]:
+            - paragraph [ref=e21]: Overview
+            - link "Dashboard" [ref=e23] [cursor=pointer]:
+              - /url: /
+              - generic [ref=e24]:
+                - img [ref=e25]
+                - generic [ref=e30]: Dashboard
+            - link "Digest" [ref=e32] [cursor=pointer]:
+              - /url: /digest
+              - generic [ref=e33]:
+                - img [ref=e34]
+                - generic [ref=e37]: Digest
+          - generic [ref=e38]:
+            - paragraph [ref=e39]: Network
+            - link "Devices" [ref=e41] [cursor=pointer]:
+              - /url: /devices
+              - generic [ref=e42]:
+                - img [ref=e43]
+                - generic [ref=e46]: Devices
+            - link "Discovery" [ref=e48] [cursor=pointer]:
+              - /url: /discovery
+              - generic [ref=e49]:
+                - img [ref=e50]
+                - generic [ref=e53]: Discovery
+            - link "Topology" [ref=e55] [cursor=pointer]:
+              - /url: /topology
+              - generic [ref=e56]:
+                - img [ref=e57]
+                - generic [ref=e62]: Topology
+          - generic [ref=e63]:
+            - paragraph [ref=e64]: Health
+            - link "Incidents 12" [ref=e144] [cursor=pointer]:
+              - /url: /incidents
+              - generic [ref=e67]:
+                - img [ref=e68]
+                - generic [ref=e70]: Incidents
+              - generic [ref=e145]: "12"
+            - link "Activity" [ref=e72] [cursor=pointer]:
+              - /url: /activity
+              - generic [ref=e73]:
+                - img [ref=e74]
+                - generic [ref=e76]: Activity
+          - generic [ref=e77]:
+            - paragraph [ref=e78]: Control
+            - link "Approvals" [ref=e80] [cursor=pointer]:
+              - /url: /approvals
+              - generic [ref=e81]:
+                - img [ref=e82]
+                - generic [ref=e85]: Approvals
+            - link "Policies" [ref=e87] [cursor=pointer]:
+              - /url: /policies
+              - generic [ref=e88]:
+                - img [ref=e89]
+                - generic [ref=e92]: Policies
+          - generic [ref=e93]:
+            - paragraph [ref=e94]: Assistant
+            - link "Chat" [ref=e96] [cursor=pointer]:
+              - /url: /chat
+              - generic [ref=e97]:
+                - img [ref=e98]
+                - generic [ref=e100]: Chat
+          - generic [ref=e101]:
+            - paragraph [ref=e102]: System
+            - link "Adapters" [ref=e104] [cursor=pointer]:
+              - /url: /adapters
+              - generic [ref=e105]:
+                - img [ref=e106]
+                - generic [ref=e108]: Adapters
+            - link "Access" [ref=e110] [cursor=pointer]:
+              - /url: /access
+              - generic [ref=e111]:
+                - img [ref=e112]
+                - generic [ref=e124]: Access
+            - link "Settings" [ref=e126] [cursor=pointer]:
+              - /url: /settings
+              - generic [ref=e128]:
+                - img [ref=e129]
+                - generic [ref=e132]: Settings
+        - generic [ref=e146]:
+          - img [ref=e147]
+          - generic [ref=e149]: "Vault: Unlocked"
+    - main [ref=e134]:
+      - generic [ref=e137]:
+        - generic [ref=e138]:
+          - heading "Settings" [level=1] [ref=e150]
+          - paragraph [ref=e151]: Configure providers, vault, and agent behavior.
+        - generic [ref=e152]:
+          - tablist [ref=e153]:
+            - tab "Providers" [selected] [ref=e154]
+            - tab "Vault" [ref=e155]
+            - tab "Agent" [ref=e156]
+            - tab "Discovery" [ref=e157]
+            - tab "Fingerprinting" [ref=e158]
+            - tab "Observation" [ref=e159]
+            - tab "Web Research" [ref=e160]
+            - tab "Alerts" [ref=e161]
+            - tab "System" [ref=e162]
+          - generic [ref=e165]:
+            - generic [ref=e166]:
+              - heading "Configure Provider" [level=3] [ref=e167]
+              - paragraph [ref=e168]: Select a provider to configure. Supports cloud APIs, local inference, and aggregators via the Vercel AI SDK.
+            - generic [ref=e169]:
+              - generic [ref=e170]:
+                - generic [ref=e171]: Provider
+                - combobox [ref=e172]:
+                  - generic:
+                    - generic: Anthropic
+                  - img
+              - generic [ref=e173]:
+                - img [ref=e174]
+                - generic [ref=e176]:
+                  - paragraph [ref=e177]: Anthropic
+                  - paragraph [ref=e178]: Claude Opus, Sonnet, Haiku
+                - generic [ref=e179]: Cloud
+              - generic [ref=e180]:
+                - generic [ref=e181]:
+                  - generic [ref=e182]: Model
+                  - button "Refresh models" [ref=e184]:
+                    - img [ref=e185]
+                - combobox "Model" [ref=e190]:
+                  - generic: claude-opus-4-6
+                  - img
+                - paragraph [ref=e191]: Models are retrieved directly from the selected provider API.
+              - generic [ref=e192]:
+                - paragraph [ref=e193]: Authentication
+                - generic [ref=e194]:
+                  - generic [ref=e195]:
+                    - generic [ref=e196]: API Key
+                    - link "Get API Key" [ref=e197] [cursor=pointer]:
+                      - /url: https://platform.claude.com/settings/keys
+                      - text: Get API Key
+                      - img [ref=e198]
+                  - textbox "API Key" [ref=e202]:
+                    - /placeholder: sk-ant-...
+                  - paragraph [ref=e203]: Stored securely in the encrypted vault.
+                - generic [ref=e205]: or
+                - generic [ref=e207]:
+                  - generic [ref=e208]:
+                    - paragraph [ref=e209]: OAuth (Claude Account)
+                    - paragraph [ref=e210]: Create an API key via your Anthropic account
+                  - generic [ref=e211]:
+                    - generic [ref=e212]:
+                      - img [ref=e213]
+                      - text: Key Created
+                    - button "Disconnect" [ref=e216]:
+                      - img [ref=e217]
+                      - text: Disconnect
+              - button "Save" [ref=e222]:
+                - img [ref=e223]
+                - text: Save
+  - button "Open Next.js Dev Tools" [ref=e230] [cursor=pointer]:
+    - img [ref=e231]
+  - alert [ref=e143]

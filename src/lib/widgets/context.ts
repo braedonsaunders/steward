@@ -4,6 +4,7 @@ import type {
   AssuranceRun,
   Device,
   DeviceBaseline,
+  DeviceCredentialStatus,
   DeviceFinding,
   DeviceWidget,
   Incident,
@@ -15,6 +16,18 @@ import type {
 export interface DeviceWidgetContext {
   generatedAt: string;
   device: Device;
+  credentials: Array<{
+    protocol: string;
+    adapterId?: string;
+    status: DeviceCredentialStatus;
+    accountLabel?: string;
+    lastValidatedAt?: string;
+    updatedAt: string;
+    scope: {
+      level?: string;
+      operations: string[];
+    };
+  }>;
   baseline: DeviceBaseline | null;
   workloads: Workload[];
   assurances: Assurance[];
@@ -38,6 +51,7 @@ export async function buildDeviceWidgetContext(deviceId: string): Promise<Device
     assurances,
     latestAssuranceRuns,
     findings,
+    credentials,
     widgets,
   ] = await Promise.all([
     stateStore.getState(),
@@ -45,12 +59,28 @@ export async function buildDeviceWidgetContext(deviceId: string): Promise<Device
     Promise.resolve(stateStore.getAssurances(deviceId)),
     Promise.resolve(stateStore.getLatestAssuranceRuns(deviceId)),
     Promise.resolve(stateStore.getDeviceFindings(deviceId)),
+    Promise.resolve(stateStore.getDeviceCredentials(deviceId)),
     Promise.resolve(stateStore.getDeviceWidgets(deviceId)),
   ]);
 
   return {
     generatedAt: new Date().toISOString(),
     device,
+    credentials: credentials.map((credential) => ({
+      protocol: credential.protocol,
+      adapterId: credential.adapterId,
+      status: credential.status,
+      accountLabel: credential.accountLabel,
+      lastValidatedAt: credential.lastValidatedAt,
+      updatedAt: credential.updatedAt,
+      scope: {
+        level: typeof credential.scopeJson.level === "string" ? credential.scopeJson.level : undefined,
+        operations: Array.isArray(credential.scopeJson.operations)
+          ? credential.scopeJson.operations
+            .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+          : [],
+      },
+    })),
     baseline: state.baselines.find((item) => item.deviceId === deviceId) ?? null,
     workloads,
     assurances,

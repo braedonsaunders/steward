@@ -55,6 +55,92 @@ export const WidgetRoutePlanSchema = z.discriminatedUnion("route", [
 
 export type WidgetRoutePlan = z.infer<typeof WidgetRoutePlanSchema>;
 
+const DIRECT_WIDGET_KEYWORD_PATTERN = /\b(widget|dashboard|control panel|control surface|remote control)\b/i;
+const REMOTE_PANEL_HINT_PATTERN = /\b(remote|panel|ui|interface|screen)\b/i;
+const REMOTE_PANEL_ACTION_PATTERN = /\b(build|create|make|generate|design|open|show|fix|repair|update|edit|change|revise|modify|restyle|redesign|delete|remove|inspect|list|use)\b/i;
+const FOLLOW_UP_CONFIRM_PATTERN = /\b(yes|yeah|yep|go ahead|do it|please do|proceed|sounds good|that works|make it|build it|create it)\b/i;
+const FOLLOW_UP_STRONG_WIDGET_ACTION_PATTERN = /\b(fix|repair|debug|restyle|redesign|rename|resize|rebuild|regenerate|refresh|delete|remove)\b/i;
+const FOLLOW_UP_GENERIC_WIDGET_EDIT_PATTERN = /\b(change|update|edit|modify|add|move|make|keep|reuse)\b/i;
+const FOLLOW_UP_INSPECT_PATTERN = /\b(show|open|inspect|review|look at|load|list)\b/i;
+const FOLLOW_UP_REFERENCE_PATTERN = /\b(it|that|this|existing|current|same|one)\b/i;
+const FOLLOW_UP_WIDGET_ISSUE_PATTERN = /\b(broken|blank|empty|loading|stuck|render|layout|button|buttons|scroll|style|styling)\b/i;
+
+function normalizeWidgetIntentText(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function messageMentionsWidgetConcept(rawText: string): boolean {
+  const text = normalizeWidgetIntentText(rawText);
+  if (!text) {
+    return false;
+  }
+  if (DIRECT_WIDGET_KEYWORD_PATTERN.test(text)) {
+    return true;
+  }
+  return REMOTE_PANEL_HINT_PATTERN.test(text) && REMOTE_PANEL_ACTION_PATTERN.test(text);
+}
+
+function recentHistoryHasWidgetContext(history: ChatMessage[]): boolean {
+  const recentMessages = history
+    .filter((message) => !message.error && message.content.trim().length > 0)
+    .slice(-6);
+
+  if (recentMessages.some((message) => messageMentionsWidgetConcept(message.content))) {
+    return true;
+  }
+
+  return history
+    .slice(-10)
+    .some((message) =>
+      (message.metadata?.toolEvents ?? []).some((event) => event.toolName === "steward_manage_widget"),
+    );
+}
+
+export function shouldPlanWidgetRouteTurn(args: {
+  history: ChatMessage[];
+  userInput: string;
+}): boolean {
+  const text = normalizeWidgetIntentText(args.userInput);
+  if (!text) {
+    return false;
+  }
+
+  if (messageMentionsWidgetConcept(text)) {
+    return true;
+  }
+
+  if (!recentHistoryHasWidgetContext(args.history)) {
+    return false;
+  }
+
+  if (FOLLOW_UP_CONFIRM_PATTERN.test(text)) {
+    return true;
+  }
+
+  if (
+    FOLLOW_UP_STRONG_WIDGET_ACTION_PATTERN.test(text)
+    && (FOLLOW_UP_REFERENCE_PATTERN.test(text) || FOLLOW_UP_WIDGET_ISSUE_PATTERN.test(text))
+  ) {
+    return true;
+  }
+
+  if (
+    FOLLOW_UP_GENERIC_WIDGET_EDIT_PATTERN.test(text)
+    && (FOLLOW_UP_REFERENCE_PATTERN.test(text) || FOLLOW_UP_WIDGET_ISSUE_PATTERN.test(text))
+  ) {
+    return true;
+  }
+
+  if (
+    FOLLOW_UP_INSPECT_PATTERN.test(text)
+    && (FOLLOW_UP_REFERENCE_PATTERN.test(text) || FOLLOW_UP_WIDGET_ISSUE_PATTERN.test(text))
+  ) {
+    return true;
+  }
+
+  return FOLLOW_UP_REFERENCE_PATTERN.test(text) && FOLLOW_UP_WIDGET_ISSUE_PATTERN.test(text);
+}
+
 function summarizeRecentMessages(history: ChatMessage[]): string {
   const relevant = history
     .filter((message) => !message.error && message.content.trim().length > 0)
@@ -106,6 +192,13 @@ export async function planWidgetRoute(args: {
   history: ChatMessage[];
   userInput: string;
 }): Promise<WidgetRoutePlan> {
+  if (!shouldPlanWidgetRouteTurn({ history: args.history, userInput: args.userInput })) {
+    return {
+      route: "none",
+      reason: "No explicit widget request in the current turn.",
+    };
+  }
+
   const model = await buildLanguageModel(args.provider, args.model);
   const widgets = summarizeWidgets(args.attachedDevice.id);
   const recentWidgetToolEvents = summarizeRecentWidgetToolEvents(args.history);
@@ -120,8 +213,10 @@ export async function planWidgetRoute(args: {
     system: [
       "You route Steward device-attached chat turns into explicit widget management plans.",
       "Return only a JSON object that matches the schema exactly.",
-      "A widget request includes creating, revising, fixing, restyling, or inspecting a persistent device widget, remote, dashboard, panel, or control surface for the attached device.",
+      "Only route to widget management when the user explicitly asks for widget work, or when a short follow-up clearly continues a recent widget conversation.",
+      "Widget work includes creating, revising, fixing, restyling, inspecting, listing, or deleting a persistent device widget, remote, dashboard, panel, or control surface for the attached device.",
       "Follow-up pronouns like 'it' or 'that' can still refer to the existing widget when recent conversation/tool activity is about a widget.",
+      "If a widget would simply be helpful for the device, return route='none'. The assistant can suggest it in prose without creating or revising anything.",
       "If the turn is not widget work, return route='none'.",
       "If the turn is widget work:",
       "- Prefer toolArgs.action='generate' for create or revise requests.",
@@ -130,6 +225,7 @@ export async function planWidgetRoute(args: {
       "- generate already persists the widget. Never plan a separate save step.",
       "- Never invent widget ids or slugs. Only use values present in the supplied widget inventory.",
       "- If revising an existing widget, prefer the most recently updated relevant widget from inventory.",
+      "- If widget inventory already contains a relevant widget, revise or inspect it instead of creating a duplicate unless the user explicitly asks for a new, separate, or additional widget.",
       "- If the user clearly wants a new separate widget, omit widget_id and widget_slug.",
       "- toolArgs.prompt must be a concrete instruction Steward can hand to steward_manage_widget.",
       "- Keep toolArgs.prompt concise: <= 500 characters, plain text, no code fences, and no escaped newlines.",

@@ -23,6 +23,7 @@
   --input: oklch(0.85 0.022 172);
   --ring: oklch(0.66 0.13 214);
   --radius: 0.75rem;
+  --steward-sidebar-width: 220px;
   --sidebar: oklch(0.97 0.01 140);
   --sidebar-foreground: oklch(0.25 0.03 180);
   --sidebar-border: oklch(0.88 0.018 172);

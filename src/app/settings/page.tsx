@@ -49,7 +49,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 // Switch removed — dropdown selection = active provider, no separate toggle
 import {
   Tabs,
-  TabsContent,
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs";
@@ -1133,9 +1132,85 @@ function VaultSection() {
 // General Section
 // ---------------------------------------------------------------------------
 
-type GeneralTabValue = "agent" | "discovery" | "alerts" | "system";
+type GeneralTabValue =
+  | "agent"
+  | "discovery"
+  | "fingerprinting"
+  | "observation"
+  | "web-research"
+  | "alerts"
+  | "system";
 
-function GeneralSection({ forcedTab }: { forcedTab?: GeneralTabValue }) {
+const GENERAL_TAB_VALUES: GeneralTabValue[] = [
+  "agent",
+  "discovery",
+  "fingerprinting",
+  "observation",
+  "web-research",
+  "alerts",
+  "system",
+];
+
+type SettingsTabValue = "providers" | "vault" | GeneralTabValue;
+
+function isGeneralTabValue(value: SettingsTabValue): value is GeneralTabValue {
+  return GENERAL_TAB_VALUES.includes(value as GeneralTabValue);
+}
+
+function SettingsNumberField({
+  label,
+  value,
+  onChange,
+  className,
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+  className?: string;
+}) {
+  return (
+    <div className={cn("space-y-1.5", className)}>
+      <Label className="text-xs text-muted-foreground">{label}</Label>
+      <Input type="number" value={value} onChange={(e) => onChange(Number(e.target.value))} />
+    </div>
+  );
+}
+
+function SettingsToggleRow({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="flex items-center justify-between gap-3 text-sm">
+      <span className="text-muted-foreground">{label}</span>
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+    </label>
+  );
+}
+
+function RuntimeSaveButton({
+  saving,
+  label,
+  onClick,
+}: {
+  saving: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <Button onClick={onClick} disabled={saving}>
+      {saving ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Settings2 className="mr-1.5 h-4 w-4" />}
+      {saving ? "Saving..." : label}
+    </Button>
+  );
+}
+
+function GeneralSection({ tab }: { tab: GeneralTabValue }) {
   const {
     agentRuns,
     runAgentCycle,
@@ -1154,7 +1229,6 @@ function GeneralSection({ forcedTab }: { forcedTab?: GeneralTabValue }) {
   const [runtimeDraft, setRuntimeDraft] = useState(runtimeSettings);
   const [systemDraft, setSystemDraft] = useState(systemSettings);
   const [apiTokenDraft, setApiTokenDraft] = useState("");
-  const [activeTab, setActiveTab] = useState<GeneralTabValue>(forcedTab ?? "agent");
   const [webResearchKeyStatus, setWebResearchKeyStatus] = useState<Record<WebResearchProvider, boolean>>({
     brave_scrape: false,
     duckduckgo_scrape: false,
@@ -1179,12 +1253,6 @@ function GeneralSection({ forcedTab }: { forcedTab?: GeneralTabValue }) {
   useEffect(() => {
     setSystemDraft(systemSettings);
   }, [systemSettings]);
-
-  useEffect(() => {
-    if (forcedTab) {
-      setActiveTab(forcedTab);
-    }
-  }, [forcedTab]);
 
   const loadWebResearchCredentials = useCallback(async () => {
     setLoadingWebResearchKeys(true);
@@ -1214,8 +1282,10 @@ function GeneralSection({ forcedTab }: { forcedTab?: GeneralTabValue }) {
   }, []);
 
   useEffect(() => {
-    void loadWebResearchCredentials();
-  }, [loadWebResearchCredentials]);
+    if (tab === "web-research") {
+      void loadWebResearchCredentials();
+    }
+  }, [loadWebResearchCredentials, tab]);
 
   const lastRun = useMemo(() => {
     if (agentRuns.length === 0) return null;
@@ -1377,38 +1447,15 @@ function GeneralSection({ forcedTab }: { forcedTab?: GeneralTabValue }) {
     }
   }, [apiTokenDraft, setApiToken]);
 
-  return (
-    <div className="space-y-4">
-      {feedback && (
-        <Alert variant={feedback.type === "error" ? "destructive" : "default"}>
-          <AlertDescription className="text-xs">{feedback.message}</AlertDescription>
-        </Alert>
-      )}
-
-      <Tabs
-        value={forcedTab ?? activeTab}
-        onValueChange={(value) => {
-          if (!forcedTab) {
-            setActiveTab(value as GeneralTabValue);
-          }
-        }}
-        className="space-y-4"
-      >
-        {!forcedTab && (
-          <TabsList className="h-auto w-full flex-wrap justify-start">
-            <TabsTrigger value="agent" className="flex-none">Agent</TabsTrigger>
-            <TabsTrigger value="discovery" className="flex-none">Discovery</TabsTrigger>
-            <TabsTrigger value="alerts" className="flex-none">Alerts</TabsTrigger>
-            <TabsTrigger value="system" className="flex-none">System</TabsTrigger>
-          </TabsList>
-        )}
-
-        <TabsContent value="agent" className="space-y-4">
+  const content = (() => {
+    switch (tab) {
+      case "agent":
+        return (
           <Card className="bg-card/60">
             <CardHeader>
               <CardTitle className="text-base">Agent Status</CardTitle>
               <CardDescription>
-                Monitor and trigger the autonomous agent loop.
+                Monitor and trigger the autonomous agent loop, then tune how often it re-evaluates the network.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -1456,135 +1503,248 @@ function GeneralSection({ forcedTab }: { forcedTab?: GeneralTabValue }) {
                 )}
               </Button>
 
+              <div className="grid gap-3 md:grid-cols-2">
+                <SettingsNumberField
+                  label="Agent interval (ms)"
+                  value={runtimeDraft.agentIntervalMs}
+                  onChange={(value) => setDraftField("agentIntervalMs", value)}
+                />
+              </div>
+
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <RefreshCw className="h-3.5 w-3.5" />
                 <span>
-                  Configured loop interval: <strong className="text-foreground">{Math.round(runtimeSettings.agentIntervalMs / 1000)}s</strong>
+                  Current cadence: <strong className="text-foreground">{Math.round(runtimeDraft.agentIntervalMs / 1000)}s</strong>
                 </span>
               </div>
+
+              <RuntimeSaveButton
+                saving={savingRuntime}
+                label="Save Agent Settings"
+                onClick={() => void handleSaveRuntime()}
+              />
             </CardContent>
           </Card>
-        </TabsContent>
-
-        <TabsContent value="discovery" className="space-y-4">
+        );
+      case "discovery":
+        return (
           <Card className="bg-card/60">
             <CardHeader>
-              <CardTitle className="text-base">Discovery Runtime Tuning</CardTitle>
+              <CardTitle className="text-base">Discovery Scope</CardTitle>
               <CardDescription>
-                Persisted in SQLite and applied by the discovery loop.
+                Tune scan cadence, target budgets, and the core discovery protocols Steward uses on the network.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border/60 bg-muted/30 px-3 py-2">
-                <p className="text-xs text-muted-foreground">
-                  RBAC users/sessions, OIDC SSO, and LDAP login settings are managed in Access Controls.
-                </p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    window.location.assign("/access");
-                  }}
-                >
-                  Open Access Controls
-                </Button>
+              <div className="grid gap-3 md:grid-cols-2">
+                <SettingsNumberField
+                  label="Deep scan interval (ms)"
+                  value={runtimeDraft.deepScanIntervalMs}
+                  onChange={(value) => setDraftField("deepScanIntervalMs", value)}
+                />
+                <SettingsNumberField
+                  label="Incremental active targets"
+                  value={runtimeDraft.incrementalActiveTargets}
+                  onChange={(value) => setDraftField("incrementalActiveTargets", value)}
+                />
+                <SettingsNumberField
+                  label="Deep active targets"
+                  value={runtimeDraft.deepActiveTargets}
+                  onChange={(value) => setDraftField("deepActiveTargets", value)}
+                />
+                <SettingsNumberField
+                  label="Incremental port-scan hosts"
+                  value={runtimeDraft.incrementalPortScanHosts}
+                  onChange={(value) => setDraftField("incrementalPortScanHosts", value)}
+                />
+                <SettingsNumberField
+                  label="Deep port-scan hosts"
+                  value={runtimeDraft.deepPortScanHosts}
+                  onChange={(value) => setDraftField("deepPortScanHosts", value)}
+                />
+                <SettingsNumberField
+                  label="LLM discovery advice batch size"
+                  value={runtimeDraft.llmDiscoveryLimit}
+                  onChange={(value) => setDraftField("llmDiscoveryLimit", value)}
+                />
               </div>
 
-              <div className="grid gap-3 md:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Agent interval (ms)</Label>
-                  <Input type="number" value={runtimeDraft.agentIntervalMs} onChange={(e) => setDraftField("agentIntervalMs", Number(e.target.value))} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Deep scan interval (ms)</Label>
-                  <Input type="number" value={runtimeDraft.deepScanIntervalMs} onChange={(e) => setDraftField("deepScanIntervalMs", Number(e.target.value))} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Incremental active targets</Label>
-                  <Input type="number" value={runtimeDraft.incrementalActiveTargets} onChange={(e) => setDraftField("incrementalActiveTargets", Number(e.target.value))} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Deep active targets</Label>
-                  <Input type="number" value={runtimeDraft.deepActiveTargets} onChange={(e) => setDraftField("deepActiveTargets", Number(e.target.value))} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Incremental port-scan hosts</Label>
-                  <Input type="number" value={runtimeDraft.incrementalPortScanHosts} onChange={(e) => setDraftField("incrementalPortScanHosts", Number(e.target.value))} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Deep port-scan hosts</Label>
-                  <Input type="number" value={runtimeDraft.deepPortScanHosts} onChange={(e) => setDraftField("deepPortScanHosts", Number(e.target.value))} />
-                </div>
-                <div className="space-y-1.5 md:col-span-2">
-                  <Label className="text-xs text-muted-foreground">LLM discovery advice batch size</Label>
-                  <Input type="number" value={runtimeDraft.llmDiscoveryLimit} onChange={(e) => setDraftField("llmDiscoveryLimit", Number(e.target.value))} />
-                </div>
+              <div className="space-y-3 rounded-md border border-border/60 bg-muted/30 p-3">
+                <SettingsToggleRow
+                  label="Enable mDNS discovery"
+                  checked={runtimeDraft.enableMdnsDiscovery}
+                  onChange={(checked) => setRuntimeToggleField("enableMdnsDiscovery", checked)}
+                />
+                <SettingsToggleRow
+                  label="Enable SSDP discovery"
+                  checked={runtimeDraft.enableSsdpDiscovery}
+                  onChange={(checked) => setRuntimeToggleField("enableSsdpDiscovery", checked)}
+                />
+                <SettingsToggleRow
+                  label="Enable SNMP probe"
+                  checked={runtimeDraft.enableSnmpProbe}
+                  onChange={(checked) => setRuntimeToggleField("enableSnmpProbe", checked)}
+                />
               </div>
 
+              <RuntimeSaveButton
+                saving={savingRuntime}
+                label="Save Discovery Settings"
+                onClick={() => void handleSaveRuntime()}
+              />
+            </CardContent>
+          </Card>
+        );
+      case "fingerprinting":
+        return (
+          <Card className="bg-card/60">
+            <CardHeader>
+              <CardTitle className="text-base">Fingerprinting &amp; Enrichment</CardTitle>
+              <CardDescription>
+                Control how aggressively Steward fingerprints hosts and refreshes vendor-level metadata.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
               <div className="grid gap-3 md:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Incremental fingerprint targets</Label>
-                  <Input type="number" value={runtimeDraft.incrementalFingerprintTargets} onChange={(e) => setDraftField("incrementalFingerprintTargets", Number(e.target.value))} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Deep fingerprint targets</Label>
-                  <Input type="number" value={runtimeDraft.deepFingerprintTargets} onChange={(e) => setDraftField("deepFingerprintTargets", Number(e.target.value))} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Incremental nmap targets</Label>
-                  <Input type="number" value={runtimeDraft.incrementalNmapTargets} onChange={(e) => setDraftField("incrementalNmapTargets", Number(e.target.value))} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Deep nmap targets</Label>
-                  <Input type="number" value={runtimeDraft.deepNmapTargets} onChange={(e) => setDraftField("deepNmapTargets", Number(e.target.value))} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Nmap timeout (ms)</Label>
-                  <Input type="number" value={runtimeDraft.nmapFingerprintTimeoutMs} onChange={(e) => setDraftField("nmapFingerprintTimeoutMs", Number(e.target.value))} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">OUI update interval (ms)</Label>
-                  <Input type="number" value={runtimeDraft.ouiUpdateIntervalMs} onChange={(e) => setDraftField("ouiUpdateIntervalMs", Number(e.target.value))} />
-                </div>
+                <SettingsNumberField
+                  label="Incremental fingerprint targets"
+                  value={runtimeDraft.incrementalFingerprintTargets}
+                  onChange={(value) => setDraftField("incrementalFingerprintTargets", value)}
+                />
+                <SettingsNumberField
+                  label="Deep fingerprint targets"
+                  value={runtimeDraft.deepFingerprintTargets}
+                  onChange={(value) => setDraftField("deepFingerprintTargets", value)}
+                />
+                <SettingsNumberField
+                  label="Incremental nmap targets"
+                  value={runtimeDraft.incrementalNmapTargets}
+                  onChange={(value) => setDraftField("incrementalNmapTargets", value)}
+                />
+                <SettingsNumberField
+                  label="Deep nmap targets"
+                  value={runtimeDraft.deepNmapTargets}
+                  onChange={(value) => setDraftField("deepNmapTargets", value)}
+                />
+                <SettingsNumberField
+                  label="Nmap timeout (ms)"
+                  value={runtimeDraft.nmapFingerprintTimeoutMs}
+                  onChange={(value) => setDraftField("nmapFingerprintTimeoutMs", value)}
+                />
+                <SettingsNumberField
+                  label="OUI update interval (ms)"
+                  value={runtimeDraft.ouiUpdateIntervalMs}
+                  onChange={(value) => setDraftField("ouiUpdateIntervalMs", value)}
+                />
               </div>
 
+              <div className="space-y-3 rounded-md border border-border/60 bg-muted/30 p-3">
+                <SettingsToggleRow
+                  label="Enable advanced nmap fingerprinting"
+                  checked={runtimeDraft.enableAdvancedNmapFingerprint}
+                  onChange={(checked) => setRuntimeToggleField("enableAdvancedNmapFingerprint", checked)}
+                />
+              </div>
+
+              <RuntimeSaveButton
+                saving={savingRuntime}
+                label="Save Fingerprinting Settings"
+                onClick={() => void handleSaveRuntime()}
+              />
+            </CardContent>
+          </Card>
+        );
+      case "observation":
+        return (
+          <Card className="bg-card/60">
+            <CardHeader>
+              <CardTitle className="text-base">Observation &amp; Host Intel</CardTitle>
+              <CardDescription>
+                Configure packet capture, browser inspection, and local host metadata collection.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
               <div className="grid gap-3 md:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Packet intel duration (sec)</Label>
-                  <Input type="number" value={runtimeDraft.packetIntelDurationSec} onChange={(e) => setDraftField("packetIntelDurationSec", Number(e.target.value))} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Packet intel max packets</Label>
-                  <Input type="number" value={runtimeDraft.packetIntelMaxPackets} onChange={(e) => setDraftField("packetIntelMaxPackets", Number(e.target.value))} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Packet intel top talkers</Label>
-                  <Input type="number" value={runtimeDraft.packetIntelTopTalkers} onChange={(e) => setDraftField("packetIntelTopTalkers", Number(e.target.value))} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Browser observation timeout (ms)</Label>
-                  <Input type="number" value={runtimeDraft.browserObservationTimeoutMs} onChange={(e) => setDraftField("browserObservationTimeoutMs", Number(e.target.value))} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Incremental browser targets</Label>
-                  <Input type="number" value={runtimeDraft.incrementalBrowserObservationTargets} onChange={(e) => setDraftField("incrementalBrowserObservationTargets", Number(e.target.value))} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Deep browser targets</Label>
-                  <Input type="number" value={runtimeDraft.deepBrowserObservationTargets} onChange={(e) => setDraftField("deepBrowserObservationTargets", Number(e.target.value))} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Web research timeout (ms)</Label>
-                  <Input type="number" value={runtimeDraft.webResearchTimeoutMs} onChange={(e) => setDraftField("webResearchTimeoutMs", Number(e.target.value))} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Web research max results</Label>
-                  <Input type="number" value={runtimeDraft.webResearchMaxResults} onChange={(e) => setDraftField("webResearchMaxResults", Number(e.target.value))} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Web research deep-read pages</Label>
-                  <Input type="number" value={runtimeDraft.webResearchDeepReadPages} onChange={(e) => setDraftField("webResearchDeepReadPages", Number(e.target.value))} />
-                </div>
+                <SettingsNumberField
+                  label="Packet intel duration (sec)"
+                  value={runtimeDraft.packetIntelDurationSec}
+                  onChange={(value) => setDraftField("packetIntelDurationSec", value)}
+                />
+                <SettingsNumberField
+                  label="Packet intel max packets"
+                  value={runtimeDraft.packetIntelMaxPackets}
+                  onChange={(value) => setDraftField("packetIntelMaxPackets", value)}
+                />
+                <SettingsNumberField
+                  label="Packet intel top talkers"
+                  value={runtimeDraft.packetIntelTopTalkers}
+                  onChange={(value) => setDraftField("packetIntelTopTalkers", value)}
+                />
+                <SettingsNumberField
+                  label="Browser observation timeout (ms)"
+                  value={runtimeDraft.browserObservationTimeoutMs}
+                  onChange={(value) => setDraftField("browserObservationTimeoutMs", value)}
+                />
+                <SettingsNumberField
+                  label="Incremental browser targets"
+                  value={runtimeDraft.incrementalBrowserObservationTargets}
+                  onChange={(value) => setDraftField("incrementalBrowserObservationTargets", value)}
+                />
+                <SettingsNumberField
+                  label="Deep browser targets"
+                  value={runtimeDraft.deepBrowserObservationTargets}
+                  onChange={(value) => setDraftField("deepBrowserObservationTargets", value)}
+                />
+                <SettingsNumberField
+                  label="DHCP lease command timeout (ms)"
+                  value={runtimeDraft.dhcpLeaseCommandTimeoutMs}
+                  onChange={(value) => setDraftField("dhcpLeaseCommandTimeoutMs", value)}
+                  className="md:col-span-2"
+                />
+              </div>
+
+              <div className="space-y-3 rounded-md border border-border/60 bg-muted/30 p-3">
+                <SettingsToggleRow
+                  label="Enable packet intelligence (tshark)"
+                  checked={runtimeDraft.enablePacketIntel}
+                  onChange={(checked) => setRuntimeToggleField("enablePacketIntel", checked)}
+                />
+                <SettingsToggleRow
+                  label="Enable browser observation (Playwright)"
+                  checked={runtimeDraft.enableBrowserObservation}
+                  onChange={(checked) => setRuntimeToggleField("enableBrowserObservation", checked)}
+                />
+                <SettingsToggleRow
+                  label="Capture browser screenshots"
+                  checked={runtimeDraft.browserObservationCaptureScreenshots}
+                  onChange={(checked) => setRuntimeToggleField("browserObservationCaptureScreenshots", checked)}
+                />
+                <SettingsToggleRow
+                  label="Enable DHCP lease intelligence"
+                  checked={runtimeDraft.enableDhcpLeaseIntel}
+                  onChange={(checked) => setRuntimeToggleField("enableDhcpLeaseIntel", checked)}
+                />
+              </div>
+
+              <RuntimeSaveButton
+                saving={savingRuntime}
+                label="Save Observation Settings"
+                onClick={() => void handleSaveRuntime()}
+              />
+            </CardContent>
+          </Card>
+        );
+      case "web-research":
+        return (
+          <Card className="bg-card/60">
+            <CardHeader>
+              <CardTitle className="text-base">Discovery Web Research</CardTitle>
+              <CardDescription>
+                Manage public-web enrichment provider settings and the vault-backed API keys they need.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-2">
                 <div className="space-y-1.5">
                   <Label className="text-xs text-muted-foreground">Web research provider</Label>
                   <Select
@@ -1603,6 +1763,7 @@ function GeneralSection({ forcedTab }: { forcedTab?: GeneralTabValue }) {
                     </SelectContent>
                   </Select>
                 </div>
+
                 <div className="space-y-1.5">
                   <Label className="text-xs text-muted-foreground">Web research fallback strategy</Label>
                   <Select
@@ -1622,16 +1783,37 @@ function GeneralSection({ forcedTab }: { forcedTab?: GeneralTabValue }) {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="space-y-1.5 md:col-span-2">
-                  <Label className="text-xs text-muted-foreground">DHCP lease command timeout (ms)</Label>
-                  <Input type="number" value={runtimeDraft.dhcpLeaseCommandTimeoutMs} onChange={(e) => setDraftField("dhcpLeaseCommandTimeoutMs", Number(e.target.value))} />
-                </div>
+
+                <SettingsNumberField
+                  label="Web research timeout (ms)"
+                  value={runtimeDraft.webResearchTimeoutMs}
+                  onChange={(value) => setDraftField("webResearchTimeoutMs", value)}
+                />
+                <SettingsNumberField
+                  label="Web research max results"
+                  value={runtimeDraft.webResearchMaxResults}
+                  onChange={(value) => setDraftField("webResearchMaxResults", value)}
+                />
+                <SettingsNumberField
+                  label="Web research deep-read pages"
+                  value={runtimeDraft.webResearchDeepReadPages}
+                  onChange={(value) => setDraftField("webResearchDeepReadPages", value)}
+                  className="md:col-span-2"
+                />
               </div>
 
               <div className="space-y-3 rounded-md border border-border/60 bg-muted/30 p-3">
+                <SettingsToggleRow
+                  label="Enable public web research"
+                  checked={runtimeDraft.enableWebResearch}
+                  onChange={(checked) => setRuntimeToggleField("enableWebResearch", checked)}
+                />
                 <p className="text-xs text-muted-foreground">
-                  Web research provider API keys are stored in the vault and never in runtime settings.
+                  Provider API keys are stored in the vault and never in runtime settings.
                 </p>
+              </div>
+
+              <div className="space-y-3 rounded-md border border-border/60 bg-muted/30 p-3">
                 {WEB_RESEARCH_PROVIDER_ORDER.filter((provider) => requiresWebResearchApiKey(provider)).map((provider) => (
                   <div key={provider} className="rounded-md border border-border/50 bg-background/60 p-3">
                     <div className="mb-2 flex items-center justify-between gap-2">
@@ -1658,67 +1840,28 @@ function GeneralSection({ forcedTab }: { forcedTab?: GeneralTabValue }) {
                         disabled={loadingWebResearchKeys || savingWebResearchKeyFor === provider}
                         onClick={() => void saveWebResearchApiKey(provider)}
                       >
-                        {savingWebResearchKeyFor === provider
-                          ? (
-                            <>
-                              <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                              Saving...
-                            </>
-                          )
-                          : "Save key"}
+                        {savingWebResearchKeyFor === provider ? (
+                          <>
+                            <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                            Saving...
+                          </>
+                        ) : "Save key"}
                       </Button>
                     </div>
                   </div>
                 ))}
               </div>
 
-              <div className="space-y-3 rounded-md border border-border/60 bg-muted/30 p-3">
-                <label className="flex items-center justify-between gap-3 text-sm">
-                  <span className="text-muted-foreground">Enable mDNS discovery</span>
-                  <input type="checkbox" checked={runtimeDraft.enableMdnsDiscovery} onChange={(e) => setRuntimeToggleField("enableMdnsDiscovery", e.target.checked)} />
-                </label>
-                <label className="flex items-center justify-between gap-3 text-sm">
-                  <span className="text-muted-foreground">Enable SSDP discovery</span>
-                  <input type="checkbox" checked={runtimeDraft.enableSsdpDiscovery} onChange={(e) => setRuntimeToggleField("enableSsdpDiscovery", e.target.checked)} />
-                </label>
-                <label className="flex items-center justify-between gap-3 text-sm">
-                  <span className="text-muted-foreground">Enable SNMP probe</span>
-                  <input type="checkbox" checked={runtimeDraft.enableSnmpProbe} onChange={(e) => setRuntimeToggleField("enableSnmpProbe", e.target.checked)} />
-                </label>
-                <label className="flex items-center justify-between gap-3 text-sm">
-                  <span className="text-muted-foreground">Enable advanced nmap fingerprinting</span>
-                  <input type="checkbox" checked={runtimeDraft.enableAdvancedNmapFingerprint} onChange={(e) => setRuntimeToggleField("enableAdvancedNmapFingerprint", e.target.checked)} />
-                </label>
-                <label className="flex items-center justify-between gap-3 text-sm">
-                  <span className="text-muted-foreground">Enable packet intelligence (tshark)</span>
-                  <input type="checkbox" checked={runtimeDraft.enablePacketIntel} onChange={(e) => setRuntimeToggleField("enablePacketIntel", e.target.checked)} />
-                </label>
-                <label className="flex items-center justify-between gap-3 text-sm">
-                  <span className="text-muted-foreground">Enable browser observation (Playwright)</span>
-                  <input type="checkbox" checked={runtimeDraft.enableBrowserObservation} onChange={(e) => setRuntimeToggleField("enableBrowserObservation", e.target.checked)} />
-                </label>
-                <label className="flex items-center justify-between gap-3 text-sm">
-                  <span className="text-muted-foreground">Capture browser screenshots</span>
-                  <input type="checkbox" checked={runtimeDraft.browserObservationCaptureScreenshots} onChange={(e) => setRuntimeToggleField("browserObservationCaptureScreenshots", e.target.checked)} />
-                </label>
-                <label className="flex items-center justify-between gap-3 text-sm">
-                  <span className="text-muted-foreground">Enable public web research</span>
-                  <input type="checkbox" checked={runtimeDraft.enableWebResearch} onChange={(e) => setRuntimeToggleField("enableWebResearch", e.target.checked)} />
-                </label>
-                <label className="flex items-center justify-between gap-3 text-sm">
-                  <span className="text-muted-foreground">Enable DHCP lease intelligence</span>
-                  <input type="checkbox" checked={runtimeDraft.enableDhcpLeaseIntel} onChange={(e) => setRuntimeToggleField("enableDhcpLeaseIntel", e.target.checked)} />
-                </label>
-              </div>
-              <Button onClick={() => void handleSaveRuntime()} disabled={savingRuntime}>
-                {savingRuntime ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Settings2 className="mr-1.5 h-4 w-4" />}
-                {savingRuntime ? "Saving..." : "Save Discovery Settings"}
-              </Button>
+              <RuntimeSaveButton
+                saving={savingRuntime}
+                label="Save Research Settings"
+                onClick={() => void handleSaveRuntime()}
+              />
             </CardContent>
           </Card>
-        </TabsContent>
-
-        <TabsContent value="alerts" className="space-y-4">
+        );
+      case "alerts":
+        return (
           <Card className="bg-card/60">
             <CardHeader>
               <CardTitle className="text-base">Incident Alert Scanners</CardTitle>
@@ -1728,30 +1871,21 @@ function GeneralSection({ forcedTab }: { forcedTab?: GeneralTabValue }) {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-3 rounded-md border border-border/60 bg-muted/30 p-3">
-                <label className="flex items-center justify-between gap-3 text-sm">
-                  <span className="text-muted-foreground">Availability scanner alerts (offline devices)</span>
-                  <input
-                    type="checkbox"
-                    checked={runtimeDraft.availabilityScannerAlertsEnabled}
-                    onChange={(e) => setRuntimeToggleField("availabilityScannerAlertsEnabled", e.target.checked)}
-                  />
-                </label>
-                <label className="flex items-center justify-between gap-3 text-sm">
-                  <span className="text-muted-foreground">Security scanner alerts (Telnet exposure)</span>
-                  <input
-                    type="checkbox"
-                    checked={runtimeDraft.securityScannerAlertsEnabled}
-                    onChange={(e) => setRuntimeToggleField("securityScannerAlertsEnabled", e.target.checked)}
-                  />
-                </label>
-                <label className="flex items-center justify-between gap-3 text-sm">
-                  <span className="text-muted-foreground">Assurance scanner alerts (workload drift and monitor failures)</span>
-                  <input
-                    type="checkbox"
-                    checked={runtimeDraft.serviceContractScannerAlertsEnabled}
-                    onChange={(e) => setRuntimeToggleField("serviceContractScannerAlertsEnabled", e.target.checked)}
-                  />
-                </label>
+                <SettingsToggleRow
+                  label="Availability scanner alerts (offline devices)"
+                  checked={runtimeDraft.availabilityScannerAlertsEnabled}
+                  onChange={(checked) => setRuntimeToggleField("availabilityScannerAlertsEnabled", checked)}
+                />
+                <SettingsToggleRow
+                  label="Security scanner alerts (Telnet exposure)"
+                  checked={runtimeDraft.securityScannerAlertsEnabled}
+                  onChange={(checked) => setRuntimeToggleField("securityScannerAlertsEnabled", checked)}
+                />
+                <SettingsToggleRow
+                  label="Assurance scanner alerts (workload drift and monitor failures)"
+                  checked={runtimeDraft.serviceContractScannerAlertsEnabled}
+                  onChange={(checked) => setRuntimeToggleField("serviceContractScannerAlertsEnabled", checked)}
+                />
               </div>
 
               <div className="space-y-2">
@@ -1782,23 +1916,39 @@ function GeneralSection({ forcedTab }: { forcedTab?: GeneralTabValue }) {
                 )}
               </div>
 
-              <Button onClick={() => void handleSaveRuntime()} disabled={savingRuntime}>
-                {savingRuntime ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Settings2 className="mr-1.5 h-4 w-4" />}
-                {savingRuntime ? "Saving..." : "Save Alert Settings"}
-              </Button>
+              <RuntimeSaveButton
+                saving={savingRuntime}
+                label="Save Alert Settings"
+                onClick={() => void handleSaveRuntime()}
+              />
             </CardContent>
           </Card>
-        </TabsContent>
-
-        <TabsContent value="system" className="space-y-4">
+        );
+      case "system":
+        return (
           <Card className="bg-card/60">
             <CardHeader>
               <CardTitle className="text-base">System and Security</CardTitle>
               <CardDescription>
-                DB-backed system defaults, scheduled digest window, and API token guard.
+                DB-backed system defaults, scheduled digest window, API token guard, and access control shortcuts.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border/60 bg-muted/30 px-3 py-2">
+                <p className="text-xs text-muted-foreground">
+                  RBAC users/sessions, OIDC SSO, and LDAP login settings are managed in Access Controls.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    window.location.assign("/access");
+                  }}
+                >
+                  Open Access Controls
+                </Button>
+              </div>
+
               <div className="grid gap-3 md:grid-cols-2">
                 <div className="space-y-1.5">
                   <Label className="text-xs text-muted-foreground">Node identity</Label>
@@ -1907,8 +2057,21 @@ function GeneralSection({ forcedTab }: { forcedTab?: GeneralTabValue }) {
               </div>
             </CardContent>
           </Card>
-        </TabsContent>
-      </Tabs>
+        );
+      default:
+        return null;
+    }
+  })();
+
+  return (
+    <div className="space-y-4">
+      {feedback && (
+        <Alert variant={feedback.type === "error" ? "destructive" : "default"}>
+          <AlertDescription className="text-xs">{feedback.message}</AlertDescription>
+        </Alert>
+      )}
+
+      {content}
     </div>
   );
 }
@@ -1919,6 +2082,7 @@ function GeneralSection({ forcedTab }: { forcedTab?: GeneralTabValue }) {
 
 export default function SettingsPage() {
   const { loading } = useSteward();
+  const [activeTab, setActiveTab] = useState<SettingsTabValue>("providers");
 
   if (loading) {
     return (
@@ -1942,39 +2106,28 @@ export default function SettingsPage() {
         </p>
       </div>
 
-      <Tabs defaultValue="providers" className="flex min-h-0 flex-1 flex-col">
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => setActiveTab(value as SettingsTabValue)}
+        className="flex min-h-0 flex-1 flex-col"
+      >
         <TabsList className="h-auto flex-wrap justify-start">
           <TabsTrigger value="providers">Providers</TabsTrigger>
           <TabsTrigger value="vault">Vault</TabsTrigger>
           <TabsTrigger value="agent">Agent</TabsTrigger>
           <TabsTrigger value="discovery">Discovery</TabsTrigger>
+          <TabsTrigger value="fingerprinting">Fingerprinting</TabsTrigger>
+          <TabsTrigger value="observation">Observation</TabsTrigger>
+          <TabsTrigger value="web-research">Web Research</TabsTrigger>
           <TabsTrigger value="alerts">Alerts</TabsTrigger>
           <TabsTrigger value="system">System</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="providers" className="mt-4 min-h-0 flex-1 overflow-auto">
-          <ProvidersSection />
-        </TabsContent>
-
-        <TabsContent value="vault" className="mt-4 min-h-0 flex-1 overflow-auto">
-          <VaultSection />
-        </TabsContent>
-
-        <TabsContent value="agent" className="mt-4 min-h-0 flex-1 overflow-auto">
-          <GeneralSection forcedTab="agent" />
-        </TabsContent>
-
-        <TabsContent value="discovery" className="mt-4 min-h-0 flex-1 overflow-auto">
-          <GeneralSection forcedTab="discovery" />
-        </TabsContent>
-
-        <TabsContent value="alerts" className="mt-4 min-h-0 flex-1 overflow-auto">
-          <GeneralSection forcedTab="alerts" />
-        </TabsContent>
-
-        <TabsContent value="system" className="mt-4 min-h-0 flex-1 overflow-auto">
-          <GeneralSection forcedTab="system" />
-        </TabsContent>
+        <div className="mt-4 min-h-0 flex-1 overflow-auto">
+          {activeTab === "providers" && <ProvidersSection />}
+          {activeTab === "vault" && <VaultSection />}
+          {isGeneralTabValue(activeTab) && <GeneralSection tab={activeTab} />}
+        </div>
       </Tabs>
     </div>
   );

@@ -9,6 +9,23 @@ import { normalizeToolSkills } from "@/lib/adapters/skills";
 // Manifest validation
 // ---------------------------------------------------------------------------
 
+const AdapterCapabilitySchema = z.enum([
+  "discovery",
+  "playbooks",
+  "enrichment",
+  "protocol",
+  "profile",
+]);
+
+function formatManifestError(error: z.ZodError): string {
+  return error.issues
+    .map((issue) => {
+      const pathLabel = issue.path.length > 0 ? issue.path.join(".") : "root";
+      return `${pathLabel}: ${issue.message}`;
+    })
+    .join("; ");
+}
+
 const ManifestSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -16,9 +33,7 @@ const ManifestSchema = z.object({
   version: z.string().default("0.0.0"),
   author: z.string().default(""),
   entry: z.string().default("index.js"),
-  provides: z.array(
-    z.enum(["discovery", "playbooks", "enrichment", "protocol"]),
-  ),
+  provides: z.array(AdapterCapabilitySchema),
   configSchema: z.array(
     z.object({
       key: z.string().min(1),
@@ -63,6 +78,8 @@ const ManifestSchema = z.object({
           "container.restart",
           "container.stop",
           "http.request",
+          "websocket.message",
+          "mqtt.message",
           "cert.renew",
           "file.copy",
           "network.config",
@@ -83,6 +100,8 @@ const ManifestSchema = z.object({
           "container.restart",
           "container.stop",
           "http.request",
+          "websocket.message",
+          "mqtt.message",
           "cert.renew",
           "file.copy",
           "network.config",
@@ -101,9 +120,7 @@ const ManifestSchema = z.object({
 export function parseManifest(input: unknown): AdapterManifest {
   const result = ManifestSchema.safeParse(input);
   if (!result.success) {
-    throw new Error(
-      `Invalid adapter manifest: ${result.error.flatten().fieldErrors}`,
-    );
+    throw new Error(`Invalid adapter manifest: ${formatManifestError(result.error)}`);
   }
 
   return {

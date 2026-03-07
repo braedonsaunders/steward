@@ -1,0 +1,12 @@
+[  393638ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3010/api/devices/e75262f4-81fe-443f-9270-cbc21e1d64c1/onboarding/session:0
+[  394634ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3010/api/devices/e75262f4-81fe-443f-9270-cbc21e1d64c1/onboarding/session:0
+[  395638ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3010/api/devices/e75262f4-81fe-443f-9270-cbc21e1d64c1/onboarding/session:0
+[  396636ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3010/api/devices/e75262f4-81fe-443f-9270-cbc21e1d64c1/onboarding/session:0
+[  397637ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3010/api/devices/e75262f4-81fe-443f-9270-cbc21e1d64c1/onboarding/session:0
+[  398643ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3010/api/devices/e75262f4-81fe-443f-9270-cbc21e1d64c1/onboarding/session:0
+[  399641ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3010/api/devices/e75262f4-81fe-443f-9270-cbc21e1d64c1/onboarding/session:0
+[  400640ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3010/api/devices/e75262f4-81fe-443f-9270-cbc21e1d64c1/onboarding/session:0
+[  401644ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3010/api/devices/e75262f4-81fe-443f-9270-cbc21e1d64c1/onboarding/session:0
+[  402643ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3010/api/devices/e75262f4-81fe-443f-9270-cbc21e1d64c1/onboarding/session:0
+[  403650ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3010/api/devices/e75262f4-81fe-443f-9270-cbc21e1d64c1/onboarding/session:0
+[  404648ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3010/api/devices/e75262f4-81fe-443f-9270-cbc21e1d64c1/onboarding/session:0

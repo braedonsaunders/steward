@@ -217,6 +217,8 @@ function adapterIdForBroker(protocol: ProtocolBrokerRequest["protocol"]): string
     case "http":
     case "websocket":
       return "http-api";
+    case "mqtt":
+      return "mqtt";
     default:
       return "ssh";
   }
@@ -237,7 +239,7 @@ export function buildCustomMonitorContractFromPrompt(
   const cleanedPrompt = prompt.trim();
   const monitorType = inferMonitorType(cleanedPrompt);
   const explicitProtocols = toStringArray(
-    (cleanedPrompt.match(/\b(?:using|via)\s+(ssh|winrm|docker|http-api|snmp|rdp|vnc)\b/ig) ?? [])
+    (cleanedPrompt.match(/\b(?:using|via)\s+(ssh|winrm|docker|http-api|snmp|mqtt|rdp|vnc)\b/ig) ?? [])
       .map((token) => token.replace(/\b(using|via)\s+/i, "")),
   );
   const requiredProtocols = inferRequiredProtocols(monitorType, device, explicitProtocols);

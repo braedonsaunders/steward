@@ -73,6 +73,19 @@ export const buildManagementSurface = (device: Device): DeviceManagementSurface 
     });
   }
 
+  if (hasPort(device, 1883) || hasPort(device, 8883)) {
+    capabilities.push({
+      id: "mqtt-core",
+      title: "MQTT Device Bus",
+      protocol: "mqtt",
+      actions: [
+        "Subscribe to live device telemetry",
+        "Publish native device commands",
+        "Verify protocol-level acknowledgements",
+      ],
+    });
+  }
+
   if (hasPort(device, 2375) || hasPort(device, 2376)) {
     capabilities.push({
       id: "docker-core",

@@ -26,6 +26,7 @@ import {
   User,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useChatRuntime, type ChatMessageRecord, type ChatSessionRecord } from "@/lib/hooks/use-chat-runtime";
 import { useSteward } from "@/lib/hooks/use-steward";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -47,15 +48,12 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { buildOnboardingKickoffPrompt } from "@/lib/adoption/kickoff";
 import { PROVIDER_REGISTRY } from "@/lib/llm/registry";
 import type {
-  ChatMessage as PersistedChatMessage,
-  ChatMessageMetadata,
   ChatToolEvent,
   ChatToolEventKind,
   Device,
   LLMProvider,
 } from "@/lib/state/types";
-import { withClientApiToken } from "@/lib/auth/client-token";
-import { getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
+import { getDeviceAttachedChatBlockReason } from "@/lib/state/device-adoption";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
@@ -70,44 +68,8 @@ export interface ChatWorkspaceProps {
   sessionScope?: "all" | "device";
 }
 
-interface ChatSession {
-  id: string;
-  title: string;
-  deviceId?: string;
-  provider?: string;
-  model?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-type ChatMessage = PersistedChatMessage & {
-  reasoning?: string;
-  streaming?: boolean;
-};
-
-type ChatStreamEvent =
-  | { type: "start"; provider?: string }
-  | { type: "text-delta"; text: string }
-  | { type: "reasoning-delta"; text: string }
-  | { type: "tool-event"; event: ChatToolEvent }
-  | { type: "finish"; provider?: string; text?: string; reasoning?: string; metadata?: ChatMessageMetadata }
-  | { type: "error"; error: string; provider?: string };
-
-type StreamChatResult = {
-  sawTerminalEvent: boolean;
-};
-
-function isAbortError(error: unknown): boolean {
-  if (error instanceof DOMException) {
-    return error.name === "AbortError";
-  }
-
-  if (error instanceof Error) {
-    return error.name === "AbortError" || /aborted|aborterror/i.test(error.message);
-  }
-
-  return false;
-}
+type ChatMessage = ChatMessageRecord;
+type ChatSession = ChatSessionRecord;
 
 function formatTime(dateStr: string): string {
   return new Date(dateStr).toLocaleTimeString([], {
@@ -128,42 +90,119 @@ function relativeDate(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString();
 }
 
-function mergeToolEvent(events: ChatToolEvent[] | undefined, incoming: ChatToolEvent): ChatToolEvent[] {
-  const next = [...(events ?? [])];
-  const existingIndex = next.findIndex((event) => event.id === incoming.id);
-  if (existingIndex === -1) {
-    next.push(incoming);
-    return next;
-  }
-
-  next[existingIndex] = {
-    ...next[existingIndex],
-    ...incoming,
-    anchorOffset: incoming.anchorOffset ?? next[existingIndex].anchorOffset,
-  };
-  return next;
-}
-
-function previewToolOutput(value?: string): string | undefined {
+function normalizeToolOutput(value?: string): string | undefined {
   if (!value) {
     return undefined;
   }
 
-  const trimmed = value.trim();
+  const trimmed = value.replace(/^\n+/, "").trimEnd();
   if (!trimmed) {
     return undefined;
   }
 
-  const lines = trimmed.split(/\r?\n/);
-  const limitedLines = lines.slice(0, 10);
-  const joined = limitedLines.join("\n");
-  if (joined.length <= 900 && lines.length <= 10) {
-    return joined;
+  return trimmed;
+}
+
+function buildCollapsedToolOutputPreview(
+  value: string,
+  maxLines = 2,
+  maxChars = 220,
+): { text: string; truncated: boolean } {
+  const normalized = normalizeToolOutput(value);
+  if (!normalized) {
+    return { text: "", truncated: false };
   }
 
-  const suffix = lines.length > 10 ? `\n… ${lines.length - 10} more line${lines.length - 10 === 1 ? "" : "s"}` : "…";
-  return `${joined.slice(0, 900).trimEnd()}${suffix}`;
+  const lines = normalized.split(/\r?\n/);
+  const limitedLines = lines.slice(0, maxLines);
+  let preview = limitedLines.join("\n");
+  let truncated = lines.length > maxLines;
+
+  if (preview.length > maxChars) {
+    preview = preview.slice(0, maxChars).trimEnd();
+    truncated = true;
+  }
+
+  if (truncated) {
+    preview = `${preview}…`;
+  }
+
+  return { text: preview, truncated };
 }
+
+type ExpandableToolOutputPanelProps = {
+  title: string;
+  value: string;
+  terminal?: boolean;
+};
+
+const ExpandableToolOutputPanel = memo(function ExpandableToolOutputPanel({
+  title,
+  value,
+  terminal = false,
+}: ExpandableToolOutputPanelProps) {
+  const [expanded, setExpanded] = useState(false);
+  const preview = useMemo(() => buildCollapsedToolOutputPreview(value), [value]);
+  const displayValue = expanded || !preview.truncated ? value : preview.text;
+
+  if (terminal) {
+    return (
+      <div className="relative mt-3 overflow-hidden rounded-2xl border border-slate-800/90 bg-slate-950 text-slate-100 shadow-inner">
+        <div className="flex items-center justify-between gap-2 border-b border-white/10 bg-slate-900/95 px-3 py-2">
+          <div className="flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-rose-400" />
+            <span className="h-2 w-2 rounded-full bg-amber-300" />
+            <span className="h-2 w-2 rounded-full bg-emerald-400" />
+            <span className="ml-2 inline-flex items-center gap-1 text-[10px] uppercase tracking-[0.22em] text-slate-400">
+              <SquareTerminal className="h-3 w-3" />
+              {title}
+            </span>
+          </div>
+          {preview.truncated ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-[10px] uppercase tracking-[0.14em] text-slate-300 hover:bg-white/10 hover:text-slate-100"
+              onClick={() => setExpanded((current) => !current)}
+            >
+              <ArrowDown className={cn("mr-1 h-3 w-3 transition-transform", expanded && "rotate-180")} />
+              {expanded ? "Collapse" : "Expand"}
+            </Button>
+          ) : null}
+        </div>
+        <pre className="overflow-auto whitespace-pre-wrap break-words px-3 py-3 font-mono text-[11px] leading-5 text-slate-100/95">
+          {displayValue}
+        </pre>
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative mt-3 rounded-2xl border border-border/60 bg-background/70 px-3 py-2.5">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+          {title}
+        </p>
+        {preview.truncated ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-[10px] uppercase tracking-[0.14em]"
+            onClick={() => setExpanded((current) => !current)}
+          >
+            <ArrowDown className={cn("mr-1 h-3 w-3 transition-transform", expanded && "rotate-180")} />
+            {expanded ? "Collapse" : "Expand"}
+          </Button>
+        ) : null}
+      </div>
+      <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-foreground/90">
+        {displayValue}
+      </pre>
+    </div>
+  );
+});
 
 function toolKindLabel(kind: ChatToolEventKind): string {
   switch (kind) {
@@ -638,7 +677,7 @@ const ChatToolEventCard = memo(function ChatToolEventCard({
   live: boolean;
 }) {
   const running = event.status === "running";
-  const terminalPreview = previewToolOutput(event.outputPreview);
+  const normalizedOutput = normalizeToolOutput(event.outputPreview);
   const browserPreview = parseBrowserToolPreview(event);
   const deviceSettingsPreview = parseDeviceSettingsToolPreview(event);
   const browserScreenshotStep = browserPreview?.stepResults.find((step) => step.screenshotBase64 || step.path);
@@ -804,32 +843,12 @@ const ChatToolEventCard = memo(function ChatToolEventCard({
         </div>
       )}
 
-      {terminalPreview && event.kind === "terminal" && (
-        <div className="relative mt-3 overflow-hidden rounded-2xl border border-slate-800/90 bg-slate-950 text-slate-100 shadow-inner">
-          <div className="flex items-center gap-2 border-b border-white/10 bg-slate-900/95 px-3 py-2">
-            <span className="h-2 w-2 rounded-full bg-rose-400" />
-            <span className="h-2 w-2 rounded-full bg-amber-300" />
-            <span className="h-2 w-2 rounded-full bg-emerald-400" />
-            <span className="ml-2 inline-flex items-center gap-1 text-[10px] uppercase tracking-[0.22em] text-slate-400">
-              <SquareTerminal className="h-3 w-3" />
-              Inline Terminal
-            </span>
-          </div>
-          <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words px-3 py-3 font-mono text-[11px] leading-5 text-slate-100/95">
-            {terminalPreview}
-          </pre>
-        </div>
+      {normalizedOutput && event.kind === "terminal" && (
+        <ExpandableToolOutputPanel title="Inline Terminal" value={normalizedOutput} terminal />
       )}
 
-      {terminalPreview && event.kind !== "terminal" && (
-        <div className="relative mt-3 rounded-2xl border border-border/60 bg-background/70 px-3 py-2.5">
-          <p className="mb-1 text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
-            Tool Output
-          </p>
-          <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-foreground/90">
-            {terminalPreview}
-          </pre>
-        </div>
+      {normalizedOutput && event.kind !== "terminal" && (
+        <ExpandableToolOutputPanel title="Tool Output" value={normalizedOutput} />
       )}
     </motion.div>
   );
@@ -942,12 +961,7 @@ const ChatMessageBubble = memo(function ChatMessageBubble({ msg }: { msg: ChatMe
 function getDeviceChatBlockReason(
   device: Device,
 ): string | null {
-  const adoptionStatus = getDeviceAdoptionStatus(device);
-  if (adoptionStatus !== "adopted") {
-    return "Adopt this device before using attached chat controls.";
-  }
-
-  return null;
+  return getDeviceAttachedChatBlockReason(device);
 }
 
 function isOnboardingChatSession(session: ChatSession | undefined): boolean {
@@ -964,23 +978,30 @@ export function ChatWorkspace({
   sessionScope = "all",
 }: ChatWorkspaceProps = {}) {
   const { devices, providerConfigs, loading: contextLoading } = useSteward();
+  const {
+    sessions,
+    sessionsLoading,
+    sending,
+    sendStartedAt,
+    streamingSessionId,
+    refreshSessions,
+    isSessionLoaded,
+    isSessionLoading,
+    getSessionMessages,
+    loadSessionMessages,
+    createSession,
+    deleteSession,
+    renameSession,
+    sendMessage: sendRuntimeMessage,
+    stopStreaming,
+  } = useChatRuntime();
   const searchParams = useSearchParams();
 
-  // Sessions
-  const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [sessionsLoading, setSessionsLoading] = useState(true);
-
-  // Messages for active session
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [messagesLoading, setMessagesLoading] = useState(false);
-  const [messagesLoadedSessionId, setMessagesLoadedSessionId] = useState<string | null>(null);
 
   // Chat input
   const [input, setInput] = useState("");
-  const [sending, setSending] = useState(false);
-  const [sendStartedAt, setSendStartedAt] = useState<number | null>(null);
-  const [sendElapsedSec, setSendElapsedSec] = useState(0);
+  const [sendElapsedMs, setSendElapsedMs] = useState(0);
   const [stickToBottom, setStickToBottom] = useState(true);
   const [selectedProvider, setSelectedProvider] = useState<LLMProvider>("openai");
 
@@ -992,10 +1013,8 @@ export function ChatWorkspace({
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const deepLinkAppliedRef = useRef(false);
-  const activeSessionIdRef = useRef<string | null>(null);
-  const activeStreamAbortRef = useRef<AbortController | null>(null);
-  const activeStreamSessionIdRef = useRef<string | null>(null);
   const onboardingKickoffAttemptedRef = useRef<Set<string>>(new Set());
+  const pendingPreferredSessionIdRef = useRef<string | null>(null);
   const enabledProviders = providerConfigs.filter((config) => config.enabled);
   const deviceById = useMemo(
     () => new Map(devices.map((device) => [device.id, device])),
@@ -1008,11 +1027,12 @@ export function ChatWorkspace({
   const autostartParam = respectUrlParams ? searchParams.get("autostart") : null;
   const urlAutostart = autostartParam === null ? false : autostartParam !== "0";
   const shouldAutostart = autostart ?? urlAutostart;
+  const composerDeviceId = deviceScoped ? (scopedDeviceId ?? "__none__") : newChatDeviceId;
   const pendingSessionDeviceId = deviceScoped
     ? scopedDeviceId
-    : newChatDeviceId === "__none__"
+    : composerDeviceId === "__none__"
       ? undefined
-      : newChatDeviceId;
+      : composerDeviceId;
   const visibleSessions = useMemo(
     () => (
       scopedDeviceId
@@ -1022,14 +1042,25 @@ export function ChatWorkspace({
     [scopedDeviceId, sessions],
   );
 
-  const activeConfig = providerConfigs.find((c) => c.provider === selectedProvider);
+  const effectiveSelectedProvider = enabledProviders.some((config) => config.provider === selectedProvider)
+    ? selectedProvider
+    : enabledProviders[0]?.provider ?? selectedProvider;
+  const activeConfig = providerConfigs.find((c) => c.provider === effectiveSelectedProvider);
   const activeModel = activeConfig?.model ?? "default";
   const activeSession = visibleSessions.find((session) => session.id === activeSessionId);
+  const messages = useMemo(
+    () => getSessionMessages(activeSessionId),
+    [activeSessionId, getSessionMessages],
+  );
+  const messagesLoading = activeSessionId ? isSessionLoading(activeSessionId) : false;
+  const activeSessionLoaded = activeSessionId ? isSessionLoaded(activeSessionId) : false;
+  const activeSessionIsStreaming = activeSessionId !== null && streamingSessionId === activeSessionId;
+  const sendElapsedSec = Math.max(0, Math.floor(sendElapsedMs / 1000));
   const activeSessionDevice = activeSession?.deviceId
     ? deviceById.get(activeSession.deviceId)
     : undefined;
-  const selectedDevice = newChatDeviceId !== "__none__"
-    ? deviceById.get(newChatDeviceId)
+  const selectedDevice = composerDeviceId !== "__none__"
+    ? deviceById.get(composerDeviceId)
     : undefined;
   const activeSessionBlockReason = activeSessionDevice
     ? getDeviceChatBlockReason(activeSessionDevice)
@@ -1083,10 +1114,17 @@ export function ChatWorkspace({
     return grouped;
   }, [deviceById, deviceScoped, groupBy, scopedDeviceId, visibleSessions]);
 
-  useEffect(() => {
-    if (!scopedDeviceId) return;
-    setNewChatDeviceId(scopedDeviceId);
-  }, [scopedDeviceId]);
+  const selectSession = useCallback((sessionId: string | null) => {
+    setActiveSessionId(sessionId);
+    setStickToBottom(true);
+  }, []);
+
+  const applyRequestedDeviceSelection = useCallback((deviceId: string) => {
+    setNewChatDeviceId(deviceId);
+    if (!deviceScoped) {
+      setGroupBy("device");
+    }
+  }, [deviceScoped]);
 
   useEffect(() => {
     const query = window.matchMedia("(max-width: 767px)");
@@ -1096,103 +1134,59 @@ export function ChatWorkspace({
     return () => query.removeEventListener("change", syncSidebarMode);
   }, []);
 
-  // Sync selected provider with enabled providers
-  useEffect(() => {
-    if (enabledProviders.length === 0) return;
-    const selectedStillEnabled = enabledProviders.some(
-      (config) => config.provider === selectedProvider,
-    );
-    if (!selectedStillEnabled) {
-      setSelectedProvider(enabledProviders[0].provider);
-    }
-  }, [enabledProviders, selectedProvider]);
-
-  const refreshSessions = useCallback(() => {
-    setSessionsLoading(true);
-    fetch("/api/chat/sessions", withClientApiToken())
-      .then((res) => res.json())
-      .then((data: ChatSession[]) => {
-        setSessions(data);
-        setSessionsLoading(false);
-      })
-      .catch(() => setSessionsLoading(false));
-  }, []);
-
-  // Load sessions on mount
-  useEffect(() => {
-    refreshSessions();
-  }, [refreshSessions]);
-
   useEffect(() => {
     if (sessionRefreshToken === undefined) return;
-    refreshSessions();
+    void refreshSessions();
   }, [sessionRefreshToken, refreshSessions]);
 
   useEffect(() => {
-    if (!preferredSessionId) return;
-    setActiveSessionId(preferredSessionId);
-  }, [preferredSessionId]);
+    const pendingPreferredSessionId = preferredSessionId ?? null;
+    pendingPreferredSessionIdRef.current = pendingPreferredSessionId;
+    if (!pendingPreferredSessionId) return;
+
+    const preferredTimer = window.setTimeout(() => {
+      selectSession(pendingPreferredSessionId);
+      void loadSessionMessages(pendingPreferredSessionId);
+      void refreshSessions();
+    }, 0);
+    return () => window.clearTimeout(preferredTimer);
+  }, [loadSessionMessages, preferredSessionId, refreshSessions, selectSession]);
+
+  useEffect(() => {
+    const pendingPreferredSessionId = pendingPreferredSessionIdRef.current;
+    if (!pendingPreferredSessionId) return;
+    if (!visibleSessions.some((session) => session.id === pendingPreferredSessionId)) return;
+    pendingPreferredSessionIdRef.current = null;
+  }, [visibleSessions]);
+
+  useEffect(() => {
+    if (activeSessionId) return;
+    if (!streamingSessionId) return;
+    if (!visibleSessions.some((session) => session.id === streamingSessionId)) return;
+
+    const streamingTimer = window.setTimeout(() => {
+      selectSession(streamingSessionId);
+    }, 0);
+    return () => window.clearTimeout(streamingTimer);
+  }, [activeSessionId, selectSession, streamingSessionId, visibleSessions]);
 
   useEffect(() => {
     if (!activeSessionId) return;
     if (visibleSessions.some((session) => session.id === activeSessionId)) return;
     if (sessionsLoading) return;
     if (preferredSessionId && activeSessionId === preferredSessionId) return;
-    setActiveSessionId(visibleSessions[0]?.id ?? null);
-  }, [activeSessionId, preferredSessionId, sessionsLoading, visibleSessions]);
+    const fallbackTimer = window.setTimeout(() => {
+      selectSession(visibleSessions[0]?.id ?? null);
+    }, 0);
+    return () => window.clearTimeout(fallbackTimer);
+  }, [activeSessionId, preferredSessionId, selectSession, sessionsLoading, visibleSessions]);
 
   useEffect(() => {
-    activeSessionIdRef.current = activeSessionId;
-  }, [activeSessionId]);
-
-  useEffect(() => {
-    return () => {
-      activeStreamAbortRef.current?.abort();
-      activeStreamAbortRef.current = null;
-      activeStreamSessionIdRef.current = null;
-    };
-  }, []);
-
-  // Load messages when active session changes
-  const loadSessionMessages = useCallback(
-    async (sessionId: string, options?: { silent?: boolean }): Promise<ChatMessage[]> => {
-      if (!options?.silent) {
-        setMessagesLoading(true);
-      }
-
-      try {
-        const res = await fetch(`/api/chat/sessions/${sessionId}`, withClientApiToken());
-        const data = (await res.json()) as ChatSession & { messages: ChatMessage[] };
-        const nextMessages = data.messages ?? [];
-        if (activeSessionIdRef.current === sessionId) {
-          setMessages(nextMessages);
-        }
-        return nextMessages;
-      } catch {
-        if (activeSessionIdRef.current === sessionId) {
-          setMessages([]);
-        }
-        return [];
-      } finally {
-        if (!options?.silent && activeSessionIdRef.current === sessionId) {
-          setMessagesLoadedSessionId(sessionId);
-          setMessagesLoading(false);
-        }
-      }
-    },
-    [],
-  );
-
-  useEffect(() => {
-    if (!activeSessionId) {
-      setMessages([]);
-      setMessagesLoadedSessionId(null);
-      return;
-    }
-
-    setMessagesLoadedSessionId(null);
+    if (!activeSessionId) return;
+    if (activeSessionLoaded) return;
+    if (messagesLoading) return;
     void loadSessionMessages(activeSessionId);
-  }, [activeSessionId, loadSessionMessages]);
+  }, [activeSessionId, activeSessionLoaded, loadSessionMessages, messagesLoading]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -1200,49 +1194,37 @@ export function ChatWorkspace({
     if (el && stickToBottom) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [messages, sending, stickToBottom]);
-
-  useEffect(() => {
-    setStickToBottom(true);
-  }, [activeSessionId]);
-
-  useEffect(() => {
-    if (!sending) return;
-    if (!activeStreamSessionIdRef.current) return;
-    if (activeSessionId === activeStreamSessionIdRef.current) return;
-    activeStreamAbortRef.current?.abort();
-  }, [activeSessionId, sending]);
+  }, [messages, activeSessionIsStreaming, stickToBottom]);
 
   useEffect(() => {
     if (!sending || !sendStartedAt) {
-      setSendElapsedSec(0);
-      return;
+      const resetTimer = window.setTimeout(() => {
+        setSendElapsedMs(0);
+      }, 0);
+      return () => window.clearTimeout(resetTimer);
     }
 
-    setSendElapsedSec(Math.max(0, Math.floor((Date.now() - sendStartedAt) / 1000)));
+    const syncElapsed = () => {
+      setSendElapsedMs(Math.max(0, Date.now() - sendStartedAt));
+    };
+    const initialTimer = window.setTimeout(syncElapsed, 0);
     const timer = setInterval(() => {
-      setSendElapsedSec(Math.max(0, Math.floor((Date.now() - sendStartedAt) / 1000)));
+      syncElapsed();
     }, 1000);
-    return () => clearInterval(timer);
+    return () => {
+      window.clearTimeout(initialTimer);
+      clearInterval(timer);
+    };
   }, [sendStartedAt, sending]);
 
-  const createSession = useCallback(async (deviceId?: string) => {
-    try {
-      const res = await fetch("/api/chat/sessions", withClientApiToken({
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ title: "New Chat", deviceId }),
-      }));
-      const session = (await res.json()) as ChatSession;
-      setSessions((prev) => [session, ...prev]);
-      setActiveSessionId(session.id);
-      setMessages([]);
+  const handleCreateSession = useCallback(async (deviceId?: string) => {
+    const session = await createSession(deviceId);
+    if (session) {
+      selectSession(session.id);
       setTimeout(() => textareaRef.current?.focus(), 100);
-      return session;
-    } catch {
-      return null;
     }
-  }, []);
+    return session;
+  }, [createSession, selectSession]);
 
   useEffect(() => {
     deepLinkAppliedRef.current = false;
@@ -1256,59 +1238,46 @@ export function ChatWorkspace({
     deepLinkAppliedRef.current = true;
     if (!deviceById.has(requestedDeviceId)) return;
 
-    setNewChatDeviceId(requestedDeviceId);
-    if (!deviceScoped) {
-      setGroupBy("device");
-    }
+    const contextTimer = window.setTimeout(() => {
+      applyRequestedDeviceSelection(requestedDeviceId);
+    }, 0);
 
     const matchingSession = visibleSessions.find(
       (session) => session.deviceId === requestedDeviceId && isOnboardingChatSession(session),
     ) ?? visibleSessions.find((session) => session.deviceId === requestedDeviceId);
     if (matchingSession) {
-      setActiveSessionId(matchingSession.id);
-      return;
+      const sessionTimer = window.setTimeout(() => {
+        selectSession(matchingSession.id);
+      }, 0);
+      return () => {
+        window.clearTimeout(contextTimer);
+        window.clearTimeout(sessionTimer);
+      };
     }
 
     if (shouldAutostart) {
-      void createSession(requestedDeviceId);
+      const createTimer = window.setTimeout(() => {
+        void handleCreateSession(requestedDeviceId);
+      }, 0);
+      return () => {
+        window.clearTimeout(contextTimer);
+        window.clearTimeout(createTimer);
+      };
     }
+
+    return () => window.clearTimeout(contextTimer);
   }, [
+    applyRequestedDeviceSelection,
     contextLoading,
-    createSession,
     deviceScoped,
     deviceById,
+    handleCreateSession,
     requestedDeviceId,
+    selectSession,
     visibleSessions,
     sessionsLoading,
     shouldAutostart,
   ]);
-
-  const deleteSession = useCallback(
-    async (id: string) => {
-      await fetch(`/api/chat/sessions/${id}`, withClientApiToken({ method: "DELETE" }));
-      setSessions((prev) => prev.filter((s) => s.id !== id));
-      if (activeSessionId === id) {
-        setActiveSessionId(null);
-        setMessages([]);
-      }
-    },
-    [activeSessionId],
-  );
-
-  const renameSession = useCallback(
-    async (id: string, title: string) => {
-      if (!title.trim()) return;
-      await fetch(`/api/chat/sessions/${id}`, withClientApiToken({
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ title: title.trim() }),
-      }));
-      setSessions((prev) =>
-        prev.map((s) => (s.id === id ? { ...s, title: title.trim() } : s)),
-      );
-    },
-    [],
-  );
 
   const promptRenameSession = useCallback((session: ChatSession) => {
     const nextTitle = window.prompt("Rename chat", session.title);
@@ -1322,75 +1291,6 @@ export function ChatWorkspace({
     void deleteSession(session.id);
   }, [deleteSession]);
 
-  const streamChat = useCallback(
-    async (
-      payload: {
-        input: string;
-        provider: LLMProvider;
-        sessionId: string;
-        suppressUserMessage?: boolean;
-      },
-      onEvent: (event: ChatStreamEvent) => void,
-      options?: { signal?: AbortSignal },
-    ): Promise<StreamChatResult> => {
-      const res = await fetch("/api/chat", withClientApiToken({
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ...payload, stream: true }),
-        signal: options?.signal,
-      }));
-
-      if (!res.ok || !res.body) {
-        const message = await res.text();
-        throw new Error(message || `Request failed with ${res.status}`);
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let sawTerminalEvent = false;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        for (const rawLine of lines) {
-          const line = rawLine.trim();
-          if (!line) continue;
-          try {
-            const event = JSON.parse(line) as ChatStreamEvent;
-            if (event.type === "finish" || event.type === "error") {
-              sawTerminalEvent = true;
-            }
-            onEvent(event);
-          } catch {
-            // Ignore malformed event chunks.
-          }
-        }
-      }
-
-      const finalLine = buffer.trim();
-      if (finalLine) {
-        try {
-          const event = JSON.parse(finalLine) as ChatStreamEvent;
-          if (event.type === "finish" || event.type === "error") {
-            sawTerminalEvent = true;
-          }
-          onEvent(event);
-        } catch {
-          // Ignore malformed final chunk.
-        }
-      }
-
-      return { sawTerminalEvent };
-    },
-    [],
-  );
-
   const jumpToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     const el = scrollRef.current;
     if (!el) return;
@@ -1401,7 +1301,7 @@ export function ChatWorkspace({
   useEffect(() => {
     if (!activeSessionId) return;
     if (messagesLoading) return;
-    if (messagesLoadedSessionId !== activeSessionId) return;
+    if (!activeSessionLoaded) return;
 
     const frame = window.requestAnimationFrame(() => {
       jumpToBottom("auto");
@@ -1410,320 +1310,89 @@ export function ChatWorkspace({
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [activeSessionId, jumpToBottom, messagesLoadedSessionId, messagesLoading]);
-
-  const stopStreaming = useCallback(() => {
-    activeStreamAbortRef.current?.abort();
-  }, []);
-
-  const reconcileSessionMessages = useCallback(
-    async (sessionId: string, attempts: number): Promise<ChatMessage[]> => {
-      let syncedMessages: ChatMessage[] = [];
-      for (let attempt = 0; attempt < attempts; attempt += 1) {
-        syncedMessages = await loadSessionMessages(sessionId, { silent: true });
-        if (syncedMessages.at(-1)?.role === "assistant") {
-          return syncedMessages;
-        }
-        if (attempt < attempts - 1) {
-          await new Promise((resolve) => window.setTimeout(resolve, 300 * (attempt + 1)));
-        }
-      }
-      return syncedMessages;
-    },
-    [loadSessionMessages],
-  );
+  }, [activeSessionId, activeSessionLoaded, jumpToBottom, messagesLoading]);
 
   const sendMessage = useCallback(async (options: {
     text: string;
     suppressUserMessage?: boolean;
     autoTitle?: boolean;
-    clearComposer?: boolean;
   }): Promise<boolean> => {
     const trimmed = options.text.trim();
     if (!trimmed || sending || enabledProviders.length === 0 || chatBlockReason) return false;
 
     let sessionId = activeSessionId;
-
     if (!sessionId) {
-      const session = await createSession(pendingSessionDeviceId);
+      const session = await handleCreateSession(pendingSessionDeviceId);
       if (!session) return false;
       sessionId = session.id;
     }
 
-    const now = new Date().toISOString();
-    if (!options.suppressUserMessage) {
-      const userMessage: ChatMessage = {
-        id: crypto.randomUUID(),
-        sessionId,
-        role: "user",
-        content: trimmed,
-        error: false,
-        createdAt: now,
-      };
-      setMessages((prev) => [...prev, userMessage]);
-    }
-
-    if (options.clearComposer) {
-      setInput("");
-    }
-
     setStickToBottom(true);
-    setSending(true);
-    setSendStartedAt(Date.now());
-    activeStreamSessionIdRef.current = sessionId;
-
-    setTimeout(() => textareaRef.current?.focus(), 0);
-
-    const assistantId = crypto.randomUUID();
-    const abortController = new AbortController();
-    activeStreamAbortRef.current = abortController;
-    const assistantDraft: ChatMessage = {
-      id: assistantId,
+    const result = await sendRuntimeMessage({
+      text: trimmed,
+      provider: effectiveSelectedProvider,
       sessionId,
-      role: "assistant",
-      content: "",
-      reasoning: "",
-      streaming: true,
-      provider: selectedProvider,
-      error: false,
-      createdAt: new Date().toISOString(),
-    };
-    setMessages((prev) => [...prev, assistantDraft]);
+      suppressUserMessage: options.suppressUserMessage,
+      autoTitle: options.autoTitle,
+    });
 
-    try {
-      const streamResult = await streamChat(
-        {
-          input: trimmed,
-          provider: selectedProvider,
-          sessionId,
-          suppressUserMessage: options.suppressUserMessage,
-        },
-        (event) => {
-          if (event.type === "start") {
-            setMessages((prev) =>
-              prev.map((msg) =>
-                msg.id === assistantId
-                  ? {
-                      ...msg,
-                      provider: event.provider ?? msg.provider,
-                    }
-                  : msg,
-              ),
-            );
-            return;
-          }
-
-          if (event.type === "tool-event") {
-            setMessages((prev) =>
-              prev.map((msg) =>
-                msg.id === assistantId
-                  ? {
-                      ...msg,
-                      metadata: {
-                        ...msg.metadata,
-                        toolEvents: mergeToolEvent(msg.metadata?.toolEvents, event.event),
-                      },
-                    }
-                  : msg,
-              ),
-            );
-            return;
-          }
-
-          if (event.type === "text-delta") {
-            setMessages((prev) =>
-              prev.map((msg) =>
-                msg.id === assistantId
-                  ? { ...msg, content: msg.content + event.text }
-                  : msg,
-              ),
-            );
-            return;
-          }
-
-          if (event.type === "reasoning-delta") {
-            setMessages((prev) =>
-              prev.map((msg) =>
-                msg.id === assistantId
-                  ? {
-                      ...msg,
-                      reasoning: (msg.reasoning ?? "") + event.text,
-                    }
-                  : msg,
-              ),
-            );
-            return;
-          }
-
-          if (event.type === "finish") {
-            setMessages((prev) =>
-              prev.map((msg) =>
-                msg.id === assistantId
-                  ? {
-                      ...msg,
-                      content: event.text ?? msg.content,
-                      reasoning: event.reasoning ?? msg.reasoning,
-                      metadata: event.metadata ?? msg.metadata,
-                      provider: event.provider ?? msg.provider,
-                      streaming: false,
-                    }
-                  : msg,
-              ),
-            );
-            return;
-          }
-
-          if (event.type === "error") {
-            setMessages((prev) =>
-              prev.map((msg) =>
-                msg.id === assistantId
-                  ? {
-                      ...msg,
-                      content: event.error,
-                      provider: event.provider ?? msg.provider,
-                      error: true,
-                      streaming: false,
-                    }
-                  : msg,
-              ),
-            );
-          }
-        },
-        { signal: abortController.signal },
-      );
-
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === assistantId ? { ...msg, streaming: false } : msg,
-        ),
-      );
-
-      const syncedMessages = await reconcileSessionMessages(
-        sessionId,
-        streamResult.sawTerminalEvent ? 2 : 5,
-      );
-      if (!streamResult.sawTerminalEvent && syncedMessages.at(-1)?.role !== "assistant" && activeSessionIdRef.current === sessionId) {
-        setMessages([
-          ...syncedMessages,
-          {
-            id: assistantId,
-            sessionId,
-            role: "assistant",
-            content: "The live stream ended before Steward confirmed completion. The thread state has been reloaded; if the saved reply does not appear, retry the last message.",
-            provider: selectedProvider,
-            error: true,
-            createdAt: new Date().toISOString(),
-            metadata: { interrupted: true },
-          },
-        ]);
-      }
-
-      const session = sessions.find((s) => s.id === sessionId);
-      if (options.autoTitle && session && session.title === "New Chat") {
-        const autoTitle = trimmed.length > 40 ? `${trimmed.slice(0, 40)}...` : trimmed;
-        void renameSession(sessionId, autoTitle);
-      }
-
-      setSessions((prev) => {
-        const idx = prev.findIndex((s) => s.id === sessionId);
-        if (idx <= 0) return prev;
-        const updated = [...prev];
-        const [item] = updated.splice(idx, 1);
-        updated.unshift({ ...item, updatedAt: new Date().toISOString() });
-        return updated;
-      });
-      return true;
-    } catch (err) {
-      if (isAbortError(err)) {
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === assistantId
-              ? {
-                  ...msg,
-                  content: msg.content.trim().length > 0 ? msg.content : "Response interrupted.",
-                  metadata: {
-                    ...msg.metadata,
-                    interrupted: true,
-                  },
-                  streaming: false,
-                }
-              : msg,
-          ),
-        );
-        return false;
-      }
-
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === assistantId
-            ? {
-                ...msg,
-                content: err instanceof Error ? err.message : "An unexpected error occurred.",
-                error: true,
-                streaming: false,
-              }
-            : msg,
-        ),
-      );
-      return false;
-    } finally {
-      if (activeStreamAbortRef.current === abortController) {
-        activeStreamAbortRef.current = null;
-      }
-      if (activeStreamSessionIdRef.current === sessionId) {
-        activeStreamSessionIdRef.current = null;
-      }
-      setSending(false);
-      setSendStartedAt(null);
+    if (result.sessionId && result.sessionId !== sessionId) {
+      selectSession(result.sessionId);
     }
+
+    if (result.ok) {
+      setTimeout(() => textareaRef.current?.focus(), 0);
+    }
+
+    return result.ok;
   }, [
     activeSessionId,
-    createSession,
     chatBlockReason,
     enabledProviders.length,
+    handleCreateSession,
     pendingSessionDeviceId,
-    renameSession,
-    selectedProvider,
+    effectiveSelectedProvider,
+    sendRuntimeMessage,
+    selectSession,
     sending,
-    sessions,
-    reconcileSessionMessages,
-    streamChat,
   ]);
 
   const handleSend = useCallback(async () => {
     const trimmed = input.trim();
     if (!trimmed) return;
+    setInput("");
     await sendMessage({
       text: trimmed,
       suppressUserMessage: false,
       autoTitle: true,
-      clearComposer: true,
     });
   }, [input, sendMessage]);
 
   useEffect(() => {
     if (!activeSessionId || !activeSession || !isOnboardingChatSession(activeSession)) return;
     if (!activeSessionDevice) return;
-    if (messagesLoadedSessionId !== activeSessionId) return;
+    if (!activeSessionLoaded) return;
     if (messagesLoading || sending) return;
     if (messages.length > 0) return;
     if (enabledProviders.length === 0 || chatBlockReason) return;
     if (onboardingKickoffAttemptedRef.current.has(activeSessionId)) return;
 
     onboardingKickoffAttemptedRef.current.add(activeSessionId);
-    void sendMessage({
-      text: buildOnboardingKickoffPrompt(activeSessionDevice),
-      suppressUserMessage: true,
-      autoTitle: false,
-      clearComposer: false,
-    });
+    const kickoffTimer = window.setTimeout(() => {
+      void sendMessage({
+        text: buildOnboardingKickoffPrompt(activeSessionDevice),
+        suppressUserMessage: true,
+        autoTitle: false,
+      });
+    }, 0);
+    return () => window.clearTimeout(kickoffTimer);
   }, [
     activeSession,
     activeSessionDevice,
     activeSessionId,
+    activeSessionLoaded,
     chatBlockReason,
     enabledProviders.length,
-    messagesLoadedSessionId,
     messages,
     messagesLoading,
     sendMessage,
@@ -1762,7 +1431,7 @@ export function ChatWorkspace({
               size="sm"
               className={cn("h-8 flex-1 justify-start gap-2 text-xs", compact && "h-7 gap-1.5 px-2 text-[11px]")}
               onClick={() =>
-                void createSession(pendingSessionDeviceId)
+                void handleCreateSession(pendingSessionDeviceId)
               }
             >
               <MessageSquarePlus className={cn("h-3.5 w-3.5", compact && "h-3 w-3")} />
@@ -1784,7 +1453,7 @@ export function ChatWorkspace({
                 <span className={cn("w-11 shrink-0 text-[10px] font-medium uppercase tracking-wide text-muted-foreground", compact && "w-10 text-[9px]")}>
                   Device
                 </span>
-                <Select value={newChatDeviceId} onValueChange={setNewChatDeviceId}>
+                <Select value={composerDeviceId} onValueChange={setNewChatDeviceId}>
                   <SelectTrigger className={cn("h-7 min-w-0 flex-1 px-2 text-[11px]", !compact && "h-8 text-xs")}>
                     <SelectValue placeholder="Any device" />
                   </SelectTrigger>
@@ -2016,7 +1685,7 @@ export function ChatWorkspace({
               )
             )}
             <Select
-              value={selectedProvider}
+              value={effectiveSelectedProvider}
               onValueChange={(v) => setSelectedProvider(v as LLMProvider)}
               disabled={enabledProviders.length === 0}
             >
@@ -2082,7 +1751,7 @@ export function ChatWorkspace({
                   variant="outline"
                   className="mt-4"
                   onClick={() =>
-                    void createSession(pendingSessionDeviceId)
+                    void handleCreateSession(pendingSessionDeviceId)
                   }
                 >
                   <MessageSquarePlus className="mr-2 h-4 w-4" />
@@ -2162,7 +1831,7 @@ export function ChatWorkspace({
             <Button
               type="button"
               variant={sending ? "outline" : "default"}
-              onClick={sending ? stopStreaming : () => void handleSend()}
+              onClick={sending ? () => stopStreaming(activeSessionId) : () => void handleSend()}
               disabled={!sending && (!input.trim() || enabledProviders.length === 0 || Boolean(chatBlockReason))}
               size="icon"
               className={cn("h-[44px] w-[44px] shrink-0", compact && "h-[40px] w-[40px]")}

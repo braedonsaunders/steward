@@ -225,6 +225,9 @@ function fallbackProfile(device: Device): DeviceAdoptionProfile {
   if (device.protocols.includes("kubernetes")) {
     credentialIntents.push({ protocol: "kubernetes", reason: "Cluster workload and node management", priority: "medium" });
   }
+  if (device.protocols.includes("mqtt")) {
+    credentialIntents.push({ protocol: "mqtt", reason: "Native telemetry subscriptions and command exchange", priority: "medium" });
+  }
 
   const workloads = device.services
     .slice(0, 6)

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { isAuthorized } from "@/lib/auth/guard";
@@ -7,7 +6,10 @@ import {
   synthesizeOnboardingModel,
   type OnboardingSynthesis,
 } from "@/lib/adoption/conversation";
-import { getAdoptionRecord } from "@/lib/state/device-adoption";
+import {
+  completeDeviceOnboarding,
+  getDeviceAdoptionSnapshot,
+} from "@/lib/adoption/orchestrator";
 import { stateStore } from "@/lib/state/store";
 
 export const runtime = "nodejs";
@@ -108,110 +110,47 @@ export async function POST(
     return NextResponse.json({ error: "No matching proposals selected." }, { status: 400 });
   }
 
-  const existingByServiceKey = new Map(
-    stateStore.getAssurances(id).map((contract) => [contract.serviceKey.toLowerCase(), contract]),
-  );
-  const existingWorkloadsByKey = new Map(
-    stateStore.getWorkloads(id).map((workload) => [workload.workloadKey.toLowerCase(), workload]),
-  );
-
-  const now = new Date().toISOString();
-  const upserted = selected.map((proposal) => {
-    const assuranceKey = proposal.assuranceKey.trim();
-    const workloadKey = assuranceKey.toLowerCase();
-    const workload = existingWorkloadsByKey.get(workloadKey)
-      ?? stateStore.upsertWorkload({
-        id: randomUUID(),
-        deviceId: id,
-        workloadKey: assuranceKey,
-        displayName: proposal.displayName,
-        category: "unknown",
-        criticality: proposal.criticality,
-        source: "onboarding_conversation",
-        summary: proposal.rationale,
-        evidenceJson: {
-          source: "onboarding_conversation",
-          proposalId: proposal.id,
-        },
-        createdAt: now,
-        updatedAt: now,
-      });
-    existingWorkloadsByKey.set(workloadKey, workload);
-
-    const existing = existingByServiceKey.get(assuranceKey.toLowerCase());
-    const assurance = stateStore.upsertAssurance({
-      id: existing?.id ?? randomUUID(),
-      deviceId: id,
-      workloadId: workload.id,
-      assuranceKey,
-      serviceKey: assuranceKey,
-      displayName: proposal.displayName,
-      criticality: proposal.criticality,
-      desiredState: "running",
-      checkIntervalSec: proposal.checkIntervalSec,
-      monitorType: proposal.monitorType,
-      requiredProtocols: proposal.requiredProtocols,
-      rationale: proposal.rationale,
-      configJson: {
-        ...(existing?.configJson ?? existing?.policyJson ?? {}),
-        source: "onboarding_conversation",
-        monitorType: proposal.monitorType,
-        requiredProtocols: proposal.requiredProtocols,
-        rationale: proposal.rationale,
-      },
-      policyJson: {
-        ...(existing?.policyJson ?? {}),
-        source: "onboarding_conversation",
-        monitorType: proposal.monitorType,
-        requiredProtocols: proposal.requiredProtocols,
-        rationale: proposal.rationale,
-      },
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-    });
-    existingByServiceKey.set(assuranceKey.toLowerCase(), assurance);
-    return assurance;
-  });
-
-  const run = stateStore.getLatestAdoptionRun(id);
   const shouldComplete = payload.data.markOnboardingComplete !== false;
-  if (run && shouldComplete) {
-    stateStore.upsertAdoptionRun({
-      ...run,
-      status: "completed",
-      stage: "completed",
-      summary: stored.summary,
-      profileJson: {
-        ...run.profileJson,
-        onboardingSynthesis: stored,
-        appliedProposalIds: payload.data.proposalIds,
-      },
-      updatedAt: now,
-    });
+  const draftSnapshot = await getDeviceAdoptionSnapshot(id);
+  const workloadDrafts = selected.map((proposal) => ({
+    workloadKey: proposal.assuranceKey.trim(),
+    displayName: proposal.displayName,
+    category: "unknown" as const,
+    criticality: proposal.criticality,
+    summary: proposal.rationale,
+  }));
+  const assuranceDrafts = selected.map((proposal) => ({
+    assuranceKey: proposal.assuranceKey.trim(),
+    workloadKey: proposal.assuranceKey.trim(),
+    displayName: proposal.displayName,
+    criticality: proposal.criticality,
+    desiredState: "running" as const,
+    checkIntervalSec: proposal.checkIntervalSec,
+    monitorType: proposal.monitorType,
+    requiredProtocols: proposal.requiredProtocols,
+    rationale: proposal.rationale,
+    configJson: {
+      source: "onboarding_conversation",
+      proposalId: proposal.id,
+    },
+  }));
 
-    await stateStore.upsertDevice({
-      ...device,
-      metadata: {
-        ...device.metadata,
-        adoption: {
-          ...getAdoptionRecord(device),
-          runStatus: "completed",
-          runStage: "completed",
-          unresolvedRequiredQuestions: 0,
-          workloadCount: stateStore.getWorkloads(id).length,
-          assuranceCount: stateStore.getAssurances(id).length,
-          serviceContractCount: stateStore.getAssurances(id).length,
-          profileSummary: stored.summary,
-        },
-      },
-      lastChangedAt: now,
-    });
-  }
+  const finalSnapshot = shouldComplete
+    ? await completeDeviceOnboarding({
+      deviceId: id,
+      summary: stored.summary,
+      selectedProfileIds: draftSnapshot.draft?.selectedProfileIds,
+      selectedAccessMethodKeys: draftSnapshot.draft?.selectedAccessMethodKeys,
+      workloads: workloadDrafts,
+      assurances: assuranceDrafts,
+      actor: "user",
+    })
+    : draftSnapshot;
 
   await stateStore.addAction({
     actor: "user",
     kind: "config",
-    message: `Applied ${upserted.length} onboarding workload assurance recommendation(s) for ${device.name}`,
+    message: `Applied ${selected.length} onboarding workload assurance recommendation(s) for ${device.name}`,
     context: {
       deviceId: id,
       proposalIds: payload.data.proposalIds,
@@ -220,10 +159,10 @@ export async function POST(
   });
 
   return NextResponse.json({
-    applied: upserted,
-    workloads: stateStore.getWorkloads(id),
-    assurances: stateStore.getAssurances(id),
-    contracts: stateStore.getAssurances(id),
+    applied: assuranceDrafts,
+    workloads: finalSnapshot.workloads,
+    assurances: finalSnapshot.assurances,
+    contracts: finalSnapshot.assurances,
     onboardingCompleted: shouldComplete,
   });
 }

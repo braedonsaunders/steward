@@ -33,6 +33,7 @@ const OperationSchema = z.object({
     "container.stop",
     "http.request",
     "websocket.message",
+    "mqtt.message",
     "cert.renew",
     "file.copy",
     "network.config",
@@ -74,6 +75,30 @@ const OperationSchema = z.object({
       collectMessages: z.number().int().min(1).max(50).optional(),
       expectRegex: z.string().optional(),
       successStrategy: z.enum(["auto", "transport", "response", "expectation"]).optional(),
+    }),
+    z.object({
+      protocol: z.literal("mqtt"),
+      scheme: z.enum(["mqtt", "mqtts"]).optional(),
+      port: z.number().int().min(1).max(65535).optional(),
+      clientId: z.string().min(1).optional(),
+      username: z.string().min(1).optional(),
+      clean: z.boolean().optional(),
+      qos: z.union([z.literal(0), z.literal(1), z.literal(2)]).optional(),
+      retain: z.boolean().optional(),
+      subscribeTopics: z.array(z.string().min(1)).optional(),
+      publishMessages: z.array(z.object({
+        topic: z.string().min(1),
+        payload: z.string().optional(),
+        qos: z.union([z.literal(0), z.literal(1), z.literal(2)]).optional(),
+        retain: z.boolean().optional(),
+      })).optional(),
+      connectTimeoutMs: z.number().int().min(250).max(120_000).optional(),
+      responseTimeoutMs: z.number().int().min(250).max(120_000).optional(),
+      collectMessages: z.number().int().min(0).max(50).optional(),
+      keepaliveSec: z.number().int().min(5).max(1_200).optional(),
+      expectRegex: z.string().optional(),
+      successStrategy: z.enum(["auto", "transport", "response", "expectation"]).optional(),
+      insecureSkipVerify: z.boolean().optional(),
     }),
     z.object({
       protocol: z.literal("winrm"),
@@ -172,10 +197,13 @@ async function injectCredentialIntoCommand(
   operation: OperationSpec,
   device: Device,
   context: KernelExecutionContext,
-): Promise<string> {
+): Promise<
+  | { ok: true; command: string }
+  | { ok: false; output: string }
+> {
   const adapter = operation.adapterId.toLowerCase();
   if (!(adapter === "ssh" || adapter === "network-ssh" || adapter === "shell")) {
-    return command;
+    return { ok: true, command };
   }
 
   const hostPatterns = [device.ip, device.ip.includes(":") ? `[${device.ip}]` : null]
@@ -183,7 +211,7 @@ async function injectCredentialIntoCommand(
 
   const usesSshHost = hostPatterns.some((host) => command.includes(`ssh ${host}`));
   if (!usesSshHost) {
-    return command;
+    return { ok: true, command };
   }
 
   const { credential, availableStatuses } = selectCredentialForExecution(device, context);
@@ -202,10 +230,36 @@ async function injectCredentialIntoCommand(
         availableStatuses,
       },
     });
-    return command;
+    return {
+      ok: false,
+      output: "SSH command requires a stored Steward credential. Ambient SSH usernames, keys, and agent state are not used.",
+    };
   }
 
   const username = (credential.accountLabel ?? "").trim();
+  if (username.length === 0) {
+    stateStore.logCredentialAccess({
+      credentialId: credential.id,
+      deviceId: device.id,
+      protocol: credential.protocol,
+      playbookRunId: context.playbookRunId,
+      operationId: operation.id,
+      adapterId: operation.adapterId,
+      actor: context.actor,
+      purpose: operation.kind,
+      result: "credential_unusable",
+      details: {
+        accountLabel: credential.accountLabel ?? null,
+        credentialStatus: credential.status,
+        reason: "missing_account_label",
+      },
+    });
+    return {
+      ok: false,
+      output: "Stored SSH credential is missing an account username.",
+    };
+  }
+
   const hostToken = username.length > 0 ? `${username}@${device.ip}` : device.ip;
   const baseSsh = `ssh -o BatchMode=yes -o StrictHostKeyChecking=no ${hostToken}`;
 
@@ -231,7 +285,10 @@ async function injectCredentialIntoCommand(
         credentialStatus: credential.status,
       },
     });
-    return rewritten;
+    return {
+      ok: false,
+      output: "Stored SSH credential is missing a usable secret.",
+    };
   }
 
   stateStore.logCredentialAccess({
@@ -257,19 +314,19 @@ async function injectCredentialIntoCommand(
     if (match?.[1]) {
       const remoteCommand = match[1];
       const plinkCommand = `${plinkPath} -batch -ssh ${hostToken} -pw "${shellEscapeDoubleQuoted(secret)}" "${shellEscapeDoubleQuoted(remoteCommand)}"`;
-      return rewritten.replace(sshWithQuotedCommand, plinkCommand);
+      return { ok: true, command: rewritten.replace(sshWithQuotedCommand, plinkCommand) };
     }
 
     const plinkPrefix = `${plinkPath} -batch -ssh ${hostToken} -pw "${shellEscapeDoubleQuoted(secret)}"`;
     const sshCommandPattern = /ssh(?:\s+-[^\s]+(?:\s+[^\s]+)?)*\s+[^\s]+/;
-    return rewritten.replace(sshCommandPattern, plinkPrefix);
+    return { ok: true, command: rewritten.replace(sshCommandPattern, plinkPrefix) };
   }
 
   if (rewritten.includes("sshpass -p")) {
-    return rewritten;
+    return { ok: true, command: rewritten };
   }
 
-  return `sshpass -p '${shellEscapeSingleQuoted(secret)}' ${rewritten}`;
+  return { ok: true, command: `sshpass -p '${shellEscapeSingleQuoted(secret)}' ${rewritten}` };
 }
 
 function gate(
@@ -311,6 +368,7 @@ const ADAPTER_ALIASES: Record<string, string[]> = {
   winrm: ["winrm"],
   docker: ["docker"],
   "http-api": ["http", "https", "http-api"],
+  mqtt: ["mqtt"],
   snmp: ["snmp"],
   "network-ssh": ["ssh"],
   shell: ["ssh", "winrm", "docker", "http-api"],
@@ -348,6 +406,13 @@ function adapterMatchesDevice(operation: OperationSpec, device: Device): boolean
       return device.services.some((service) =>
         service.transport === "tcp"
         && (service.port === 2375 || service.port === 2376 || /docker/i.test(service.name)),
+      );
+    }
+
+    if (alias === "mqtt") {
+      return device.services.some((service) =>
+        service.transport === "tcp"
+        && (service.port === 1883 || service.port === 8883 || /mqtt/i.test(service.name)),
       );
     }
 
@@ -401,7 +466,10 @@ async function runOperationCommand(
 
   const command = interpolateOperationValue(commandTemplate, device.ip, params);
   const commandWithCredential = await injectCredentialIntoCommand(command, operation, device, context);
-  const result = await runShell(commandWithCredential, operation.timeoutMs);
+  if (!commandWithCredential.ok) {
+    return { ok: false, output: commandWithCredential.output };
+  }
+  const result = await runShell(commandWithCredential.command, operation.timeoutMs);
   const output = `${result.stdout}${result.stderr ? `\n[stderr] ${result.stderr}` : ""}`.trim();
 
   if (!result.ok) {
@@ -434,7 +502,10 @@ async function dryRunIfSupported(
 
   const command = interpolateOperationValue(dryTemplate, device.ip, params);
   const commandWithCredential = await injectCredentialIntoCommand(command, operation, device, context);
-  const result = await runShell(commandWithCredential, Math.min(operation.timeoutMs, 45_000));
+  if (!commandWithCredential.ok) {
+    return { ok: false, output: commandWithCredential.output };
+  }
+  const result = await runShell(commandWithCredential.command, Math.min(operation.timeoutMs, 45_000));
   const output = `${result.stdout}${result.stderr ? `\n[stderr] ${result.stderr}` : ""}`.trim();
 
   if (!result.ok) {

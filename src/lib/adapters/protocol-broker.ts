@@ -10,6 +10,10 @@ import {
   resolveWinrmConnection,
 } from "@/lib/adapters/winrm";
 import { requestText } from "@/lib/network/http-client";
+import {
+  executeRenderedMqttRequest,
+  renderMqttBrokerRequest,
+} from "@/lib/network/mqtt-client";
 import { markCredentialValidatedFromUse } from "@/lib/adoption/credentials";
 import { vault } from "@/lib/security/vault";
 import { stateStore } from "@/lib/state/store";
@@ -219,23 +223,15 @@ async function executeSshBroker(
         availableStatuses,
       },
     );
-    if (context.allowUnauthenticated) {
-      return brokerResult({
-        handled: false,
-        status: "failed",
-        phase: "not-started",
-        proof: "none",
-        summary: "SSH credential not available",
-        output: "",
-      });
-    }
     return brokerResult({
       status: "failed",
       phase: "not-started",
       proof: "none",
-      summary: "SSH credential required",
-      output: "SSH broker requires a stored SSH credential",
-      details: { availableStatuses },
+      summary: context.allowUnauthenticated ? "SSH credential not available" : "SSH credential required",
+      output: context.allowUnauthenticated
+        ? "No stored SSH credential is available. Steward will not use ambient SSH usernames, keys, or agent state from the host machine."
+        : "SSH broker requires a stored SSH credential",
+      details: { availableStatuses, usedAmbientSsh: false },
     });
   }
 
@@ -245,16 +241,6 @@ async function executeSshBroker(
       accountLabel: credential.accountLabel ?? null,
       credentialStatus: credential.status,
     }, credential.id);
-    if (context.allowUnauthenticated) {
-      return brokerResult({
-        handled: false,
-        status: "failed",
-        phase: "not-started",
-        proof: "none",
-        summary: "SSH secret missing",
-        output: "",
-      });
-    }
     return brokerResult({
       status: "failed",
       phase: "not-started",
@@ -267,13 +253,27 @@ async function executeSshBroker(
     });
   }
 
+  const accountLabel = credential.accountLabel?.trim() ?? "";
+  if (accountLabel.length === 0) {
+    logCredentialAccess(context, operation, device, "ssh", "credential_unusable", {
+      credentialStatus: credential.status,
+      reason: "missing_account_label",
+    }, credential.id);
+    return brokerResult({
+      status: "failed",
+      phase: "not-started",
+      proof: "none",
+      summary: "SSH username is required",
+      output: "SSH broker requires a credential with an accountLabel username.",
+      details: { credentialId: credential.id },
+    });
+  }
+
   const remoteArgv = broker.argv.map((arg) => interpolateOperationValue(arg, device.ip, params));
-  const host = (credential.accountLabel?.trim() || "").length > 0
-    ? `${credential.accountLabel?.trim()}@${device.ip}`
-    : device.ip;
+  const host = `${accountLabel}@${device.ip}`;
 
   logCredentialAccess(context, operation, device, "ssh", "granted", {
-    accountLabel: credential.accountLabel ?? null,
+    accountLabel,
     argv: remoteArgv,
     credentialStatus: credential.status,
   }, credential.id);
@@ -784,6 +784,94 @@ async function executeHttpBroker(
   });
 }
 
+async function executeMqttBroker(
+  operation: OperationSpec,
+  device: Device,
+  params: Record<string, string>,
+  context: BrokerExecutionContext,
+): Promise<BrokerExecutionResult> {
+  const broker = operation.brokerRequest;
+  if (!broker || broker.protocol !== "mqtt") {
+    return brokerResult({
+      handled: false,
+      status: "failed",
+      phase: "not-started",
+      proof: "none",
+      summary: "MQTT broker not applicable",
+      output: "",
+    });
+  }
+
+  const { credential, availableStatuses } = getCredentialForBroker(
+    device.id,
+    ["mqtt"],
+    context.allowProvidedCredentials,
+  );
+  let secret: string | undefined;
+
+  if (credential) {
+    const candidateSecret = await vault.getSecret(credential.vaultSecretRef);
+    if (!candidateSecret || candidateSecret.trim().length === 0) {
+      logCredentialAccess(context, operation, device, "mqtt", "missing_secret", {
+        accountLabel: credential.accountLabel ?? null,
+        credentialStatus: credential.status,
+      }, credential.id);
+    } else {
+      secret = candidateSecret;
+    }
+  } else if (availableStatuses.length > 0) {
+    logCredentialAccess(context, operation, device, "mqtt", "credential_unusable", {
+      allowedStatuses: ["pending", "provided", "validated", "invalid"],
+      availableStatuses,
+    });
+  }
+
+  const rendered = renderMqttBrokerRequest({
+    device,
+    broker,
+    params,
+    credentialUsername: credential?.accountLabel,
+    password: secret,
+  });
+
+  if (credential && secret) {
+    logCredentialAccess(context, operation, device, "mqtt", "granted", {
+      accountLabel: credential.accountLabel ?? null,
+      renderedUsername: rendered.username ?? null,
+      credentialStatus: credential.status,
+      url: rendered.url,
+      subscribeTopics: rendered.subscribeTopics,
+      publishTopics: rendered.publishMessages.map((message) => message.topic),
+    }, credential.id);
+  }
+
+  const result = await executeRenderedMqttRequest(rendered);
+  if (result.ok && credential) {
+    await markCredentialValidatedFromUse({
+      deviceId: device.id,
+      credentialId: credential.id,
+      actor: context.actor,
+      method: "mqtt.exchange",
+      details: {
+        adapterId: operation.adapterId,
+        operationId: operation.id,
+        url: rendered.url,
+        subscribeTopics: rendered.subscribeTopics,
+        publishTopics: rendered.publishMessages.map((message) => message.topic),
+      },
+    });
+  }
+
+  return brokerResult({
+    status: result.status,
+    phase: result.phase,
+    proof: result.proof,
+    summary: result.summary,
+    output: result.output,
+    details: result.details,
+  });
+}
+
 async function normalizeWebSocketPayload(data: unknown): Promise<string> {
   if (typeof data === "string") {
     return data;
@@ -1188,6 +1276,10 @@ export async function executeBrokerOperation(
 
   if (operation.brokerRequest.protocol === "websocket") {
     return executeWebSocketBroker(operation, device, params, context);
+  }
+
+  if (operation.brokerRequest.protocol === "mqtt") {
+    return executeMqttBroker(operation, device, params, context);
   }
 
   if (operation.brokerRequest.protocol === "winrm") {

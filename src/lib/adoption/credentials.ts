@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { validateMqttCredentialConnection } from "@/lib/network/mqtt-client";
 import { stateStore } from "@/lib/state/store";
 import { vault } from "@/lib/security/vault";
 import type { DeviceCredential } from "@/lib/state/types";
@@ -42,6 +43,8 @@ function defaultScope(protocol: string): Record<string, unknown> {
       return { level: "admin", operations: ["workload-control"] };
     case "http-api":
       return { level: "admin", operations: ["api", "config"] };
+    case "mqtt":
+      return { level: "operator", operations: ["telemetry", "message-publish", "message-subscribe"] };
     default:
       return { level: "read", operations: ["observe"] };
   }
@@ -130,6 +133,30 @@ export async function validateDeviceCredential(
   if (!hasSecret) {
     throw new Error("Stored credential secret is missing");
   }
+  let validationMethod = "manual-status-mark";
+  let validationDetails: Record<string, unknown> = {
+    source: "user_or_agent_assertion",
+    note: "No programmatic network verification was performed.",
+  };
+
+  if (credential.protocol === "mqtt") {
+    const validation = await validateMqttCredentialConnection({
+      device,
+      credentialUsername: credential.accountLabel,
+      password: secret,
+    });
+    if (!validation.ok) {
+      throw new Error(validation.output || validation.summary || "MQTT credential validation failed");
+    }
+    validationMethod = "mqtt.connect";
+    validationDetails = {
+      summary: validation.summary,
+      phase: validation.phase,
+      proof: validation.proof,
+      output: validation.output,
+      transport: validation.details,
+    };
+  }
   const validatedAt = nowIso();
 
   const updated: DeviceCredential = {
@@ -149,11 +176,8 @@ export async function validateDeviceCredential(
       credentialId: credential.id,
       protocol: credential.protocol,
       hasSecret,
-      validationMethod: "manual-status-mark",
-      validationDetails: {
-        source: "user_or_agent_assertion",
-        note: "No programmatic network verification was performed.",
-      },
+      validationMethod,
+      validationDetails,
       status: updated.status,
     },
   });

@@ -53,6 +53,9 @@ const LEGACY_SERVICE_CONTRACT_FAILURE_INCIDENT_TYPE = "service-contract.failure"
 const TLS_CERT_WARNING_WINDOW_DAYS = 30;
 const TLS_CERT_CRITICAL_WINDOW_DAYS = 7;
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
 const daysUntilIso = (value: string): number | null => {
   const at = new Date(value).getTime();
   if (!Number.isFinite(at)) {
@@ -64,6 +67,33 @@ const daysUntilIso = (value: string): number | null => {
 const tlsServiceLabel = (device: Device, service: Device["services"][number]): string => {
   const base = service.httpInfo?.title?.trim() || service.product?.trim() || service.name;
   return `${base} on ${device.name}:${service.port}`;
+};
+
+const mergeProtectedDeviceMetadata = (device: Device): Device => {
+  const latest = stateStore.getDeviceById(device.id);
+  if (!latest) {
+    return device;
+  }
+
+  const latestAdoption = getAdoptionRecord(latest);
+  const incomingAdoption = isRecord(device.metadata.adoption) ? device.metadata.adoption : {};
+  const latestStatus = getDeviceAdoptionStatus(latest);
+  const incomingStatus = typeof incomingAdoption.status === "string" ? incomingAdoption.status : undefined;
+  const preserveStickyStatus = (latestStatus === "adopted" || latestStatus === "ignored")
+    && (incomingStatus === undefined || incomingStatus === "discovered");
+
+  return {
+    ...device,
+    metadata: {
+      ...latest.metadata,
+      ...device.metadata,
+      adoption: {
+        ...latestAdoption,
+        ...incomingAdoption,
+        ...(preserveStickyStatus ? { status: latestStatus } : {}),
+      },
+    },
+  };
 };
 
 const latencyFromPingOutput = (stdout: string): number | undefined => {
@@ -621,7 +651,7 @@ const discoverPhase = async (
     for (const secIp of device.secondaryIps ?? []) {
       seenIps.add(secIp);
     }
-    await stateStore.upsertDevice(device);
+    await stateStore.upsertDevice(mergeProtectedDeviceMetadata(device));
     stateStore.attachRecentObservationsToDevice(device.ip, device.id);
     await graphStore.attachDevice(device);
     updated += 1;
@@ -786,6 +816,7 @@ const inferCredentialTypes = (protocols: string[]): string[] => {
   if (protocols.includes("http-api")) requirements.add("api/web-admin");
   if (protocols.includes("docker")) requirements.add("docker");
   if (protocols.includes("kubernetes")) requirements.add("kubernetes");
+  if (protocols.includes("mqtt")) requirements.add("mqtt");
   return Array.from(requirements);
 };
 
@@ -819,7 +850,7 @@ const understandPhase = async (devices: Device[], deepScan: boolean): Promise<vo
       },
     };
     enrichedDevices.push(enriched);
-    await stateStore.upsertDevice(enriched);
+    await stateStore.upsertDevice(mergeProtectedDeviceMetadata(enriched));
   }
 
   for (const device of enrichedDevices) {
@@ -880,7 +911,7 @@ const understandPhase = async (devices: Device[], deepScan: boolean): Promise<vo
       continue;
     }
     const existingAdoption = getAdoptionRecord(device);
-    await stateStore.upsertDevice({
+    await stateStore.upsertDevice(mergeProtectedDeviceMetadata({
       ...device,
       role: device.role ?? item.role,
       metadata: {
@@ -895,7 +926,7 @@ const understandPhase = async (devices: Device[], deepScan: boolean): Promise<vo
           requiredCredentials: item.requiredCredentials,
         },
       },
-    });
+    }));
   }
 };
 

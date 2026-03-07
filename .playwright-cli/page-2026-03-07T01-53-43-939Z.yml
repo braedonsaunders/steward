@@ -1,0 +1,215 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - img [ref=e7]
+          - generic [ref=e9]:
+            - heading "Steward" [level=1] [ref=e10]
+            - paragraph [ref=e11]: Network Operations
+          - button [ref=e12]:
+            - img [ref=e13]
+        - navigation [ref=e19]:
+          - generic [ref=e20]:
+            - paragraph [ref=e21]: Overview
+            - link "Dashboard" [ref=e23] [cursor=pointer]:
+              - /url: /
+              - generic [ref=e24]:
+                - img [ref=e25]
+                - generic [ref=e30]: Dashboard
+            - link "Digest" [ref=e32] [cursor=pointer]:
+              - /url: /digest
+              - generic [ref=e33]:
+                - img [ref=e34]
+                - generic [ref=e37]: Digest
+          - generic [ref=e38]:
+            - paragraph [ref=e39]: Network
+            - link "Devices" [ref=e41] [cursor=pointer]:
+              - /url: /devices
+              - generic [ref=e42]:
+                - img [ref=e43]
+                - generic [ref=e46]: Devices
+            - link "Discovery" [ref=e48] [cursor=pointer]:
+              - /url: /discovery
+              - generic [ref=e49]:
+                - img [ref=e50]
+                - generic [ref=e53]: Discovery
+            - link "Topology" [ref=e55] [cursor=pointer]:
+              - /url: /topology
+              - generic [ref=e56]:
+                - img [ref=e57]
+                - generic [ref=e62]: Topology
+          - generic [ref=e63]:
+            - paragraph [ref=e64]: Health
+            - link "Incidents 12" [ref=e191] [cursor=pointer]:
+              - /url: /incidents
+              - generic [ref=e67]:
+                - img [ref=e68]
+                - generic [ref=e70]: Incidents
+              - generic [ref=e192]: "12"
+            - link "Activity" [ref=e72] [cursor=pointer]:
+              - /url: /activity
+              - generic [ref=e73]:
+                - img [ref=e74]
+                - generic [ref=e76]: Activity
+          - generic [ref=e77]:
+            - paragraph [ref=e78]: Control
+            - link "Approvals" [ref=e80] [cursor=pointer]:
+              - /url: /approvals
+              - generic [ref=e81]:
+                - img [ref=e82]
+                - generic [ref=e85]: Approvals
+            - link "Policies" [ref=e87] [cursor=pointer]:
+              - /url: /policies
+              - generic [ref=e88]:
+                - img [ref=e89]
+                - generic [ref=e92]: Policies
+          - generic [ref=e93]:
+            - paragraph [ref=e94]: Assistant
+            - link "Chat" [active] [ref=e96] [cursor=pointer]:
+              - /url: /chat
+              - generic [ref=e98]:
+                - img [ref=e99]
+                - generic [ref=e101]: Chat
+          - generic [ref=e102]:
+            - paragraph [ref=e103]: System
+            - link "Adapters" [ref=e105] [cursor=pointer]:
+              - /url: /adapters
+              - generic [ref=e106]:
+                - img [ref=e107]
+                - generic [ref=e109]: Adapters
+            - link "Access" [ref=e111] [cursor=pointer]:
+              - /url: /access
+              - generic [ref=e112]:
+                - img [ref=e113]
+                - generic [ref=e125]: Access
+            - link "Settings" [ref=e127] [cursor=pointer]:
+              - /url: /settings
+              - generic [ref=e128]:
+                - img [ref=e129]
+                - generic [ref=e132]: Settings
+        - generic [ref=e193]:
+          - img [ref=e194]
+          - generic [ref=e196]: "Vault: Unlocked"
+    - main [ref=e134]:
+      - generic [ref=e485]:
+        - generic [ref=e486]:
+          - generic [ref=e487]:
+            - generic [ref=e488]:
+              - button "New Chat" [ref=e489]:
+                - img [ref=e490]
+                - text: New Chat
+              - button [ref=e492]:
+                - img [ref=e493]
+            - generic [ref=e496]:
+              - generic [ref=e497]:
+                - generic [ref=e498]: Device
+                - combobox [ref=e499]:
+                  - generic: Any device
+                  - img
+              - generic [ref=e500]:
+                - generic [ref=e501]: Group
+                - generic [ref=e502]:
+                  - button "Recent" [ref=e503]
+                  - button "Device" [ref=e504]
+          - generic [ref=e509]:
+            - generic [ref=e510]:
+              - button "New Chat just now" [ref=e511]:
+                - paragraph [ref=e512]: New Chat
+                - paragraph [ref=e513]: just now
+              - generic [ref=e514]:
+                - button "Rename" [ref=e515]
+                - button "Delete" [ref=e516]
+            - generic [ref=e517]:
+              - 'button "Give me a very long response: 80 numbere... 1m ago" [ref=e518]':
+                - paragraph [ref=e519]: "Give me a very long response: 80 numbere..."
+                - paragraph [ref=e520]: 1m ago
+              - generic [ref=e521]:
+                - button "Rename" [ref=e522]
+                - button "Delete" [ref=e523]
+            - generic [ref=e524]:
+              - button "[Onboarding] ampak-technology-iot-192-168-68-57 2m ago Bambu Lab X1 Carbon (00M09D481700117)" [ref=e525]:
+                - paragraph [ref=e526]: "[Onboarding] ampak-technology-iot-192-168-68-57"
+                - paragraph [ref=e527]: 2m ago
+                - paragraph [ref=e528]:
+                  - img [ref=e529]
+                  - generic [ref=e532]: Bambu Lab X1 Carbon (00M09D481700117)
+              - generic [ref=e533]:
+                - button "Rename" [ref=e534]
+                - button "Delete" [ref=e535]
+            - generic [ref=e536]:
+              - button "[Onboarding] server-192-168-68-83 26m ago server-192-168-68-83" [ref=e537]:
+                - paragraph [ref=e538]: "[Onboarding] server-192-168-68-83"
+                - paragraph [ref=e539]: 26m ago
+                - paragraph [ref=e540]:
+                  - img [ref=e541]
+                  - generic [ref=e544]: server-192-168-68-83
+              - generic [ref=e545]:
+                - button "Rename" [ref=e546]
+                - button "Delete" [ref=e547]
+            - generic [ref=e548]:
+              - button "[Onboarding] iot-192-168-68-67 31m ago iot-192-168-68-67" [ref=e549]:
+                - paragraph [ref=e550]: "[Onboarding] iot-192-168-68-67"
+                - paragraph [ref=e551]: 31m ago
+                - paragraph [ref=e552]:
+                  - img [ref=e553]
+                  - generic [ref=e556]: iot-192-168-68-67
+              - generic [ref=e557]:
+                - button "Rename" [ref=e558]
+                - button "Delete" [ref=e559]
+            - generic [ref=e560]:
+              - button "[Onboarding] this device and change its category 34m ago Samsung 7 Series 82\" Smart TV" [ref=e561]:
+                - paragraph [ref=e562]: "[Onboarding] this device and change its category"
+                - paragraph [ref=e563]: 34m ago
+                - paragraph [ref=e564]:
+                  - img [ref=e565]
+                  - generic [ref=e568]: Samsung 7 Series 82" Smart TV
+              - generic [ref=e569]:
+                - button "Rename" [ref=e570]
+                - button "Delete" [ref=e571]
+            - generic [ref=e572]:
+              - button "[Onboarding] asustek-computer-iot-192-168-68-85 12h ago asustek-computer-iot-192-168-68-85" [ref=e573]:
+                - paragraph [ref=e574]: "[Onboarding] asustek-computer-iot-192-168-68-85"
+                - paragraph [ref=e575]: 12h ago
+                - paragraph [ref=e576]:
+                  - img [ref=e577]
+                  - generic [ref=e580]: asustek-computer-iot-192-168-68-85
+              - generic [ref=e581]:
+                - button "Rename" [ref=e582]
+                - button "Delete" [ref=e583]
+            - generic [ref=e584]:
+              - button "[Onboarding] raspberry-pi-foundation-iot-192-168-68-70 20h ago raspberry-pi-foundation-iot-192-168-68-70" [ref=e585]:
+                - paragraph [ref=e586]: "[Onboarding] raspberry-pi-foundation-iot-192-168-68-70"
+                - paragraph [ref=e587]: 20h ago
+                - paragraph [ref=e588]:
+                  - img [ref=e589]
+                  - generic [ref=e592]: raspberry-pi-foundation-iot-192-168-68-70
+              - generic [ref=e593]:
+                - button "Rename" [ref=e594]
+                - button "Delete" [ref=e595]
+        - generic [ref=e596]:
+          - generic [ref=e597]:
+            - generic [ref=e598]:
+              - img [ref=e599]
+              - heading "Chat with Steward" [level=1] [ref=e602]
+            - generic [ref=e603]:
+              - combobox [ref=e604]:
+                - generic: Anthropic
+                - img
+              - generic [ref=e605]: claude-opus-4-6
+          - generic [ref=e608]:
+            - img [ref=e610]
+            - heading "Start a conversation" [level=2] [ref=e613]
+            - paragraph [ref=e614]: Ask Steward about your network, diagnose issues, or request remediation actions.
+            - button "New Chat" [ref=e615]:
+              - img [ref=e616]
+              - text: New Chat
+          - generic [ref=e618]:
+            - generic [ref=e619]:
+              - textbox "Ask Steward anything about your environment..." [ref=e620]
+              - button "Interrupt response" [ref=e621]:
+                - img [ref=e622]
+            - paragraph [ref=e624]: Streaming live... 44s elapsed. Press stop to interrupt.
+  - button "Open Next.js Dev Tools" [ref=e187] [cursor=pointer]:
+    - img [ref=e188]
+  - alert [ref=e287]

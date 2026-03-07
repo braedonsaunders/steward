@@ -12,6 +12,7 @@ import {
 } from "@/lib/adapters/skills";
 import {
   type AdapterManifest,
+  type AdapterProfileMatch,
   type AdapterSkillMarkdown,
   type AdapterRecord,
   type AdapterCapability,
@@ -1272,6 +1273,50 @@ class AdapterRegistry {
     }
 
     return result;
+  }
+
+  /** Aggregate: deterministic device profile matches from loaded profile adapters. */
+  async getDeviceProfileMatches(device: Device): Promise<AdapterProfileMatch[]> {
+    const matches: AdapterProfileMatch[] = [];
+
+    for (const [id, entry] of this.loaded) {
+      if (!entry.adapter.match) {
+        continue;
+      }
+
+      try {
+        const result = await entry.adapter.match(device, this.runtimeContext(id, entry));
+        const normalized = Array.isArray(result)
+          ? result
+          : result
+            ? [result]
+            : [];
+
+        for (const match of normalized) {
+          if (!match || typeof match !== "object") {
+            continue;
+          }
+          matches.push({
+            ...match,
+            adapterId: match.adapterId ?? id,
+            name: match.name ?? entry.manifest.name,
+            kind: match.kind ?? "primary",
+          });
+        }
+      } catch (err) {
+        console.warn(`[adapters] Profile match error in ${id}:`, err);
+      }
+    }
+
+    matches.sort((left, right) => {
+      if ((left.kind ?? "primary") !== (right.kind ?? "primary")) {
+        const rank = (value: string) => (value === "primary" ? 0 : value === "fallback" ? 1 : 2);
+        return rank(left.kind ?? "primary") - rank(right.kind ?? "primary");
+      }
+      return (right.confidence ?? 0) - (left.confidence ?? 0);
+    });
+
+    return matches;
   }
 
   /** Aggregate: extra capabilities from all loaded protocol adapters. */

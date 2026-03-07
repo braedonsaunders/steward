@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { motion, useReducedMotion, type Variants } from "framer-motion";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -197,6 +197,8 @@ export default function DeviceDetailPage() {
   const [chatSessionRefreshToken, setChatSessionRefreshToken] = useState(0);
   const [preferredChatSessionId, setPreferredChatSessionId] = useState<string | undefined>(undefined);
   const [hasOnboardingSession, setHasOnboardingSession] = useState<boolean | null>(null);
+  const [pendingOnboardingReveal, setPendingOnboardingReveal] = useState(false);
+  const chatPanelRef = useRef<HTMLDivElement | null>(null);
 
   const device = useMemo(
     () => devices.find((d) => d.id === deviceId),
@@ -233,6 +235,22 @@ export default function DeviceDetailPage() {
       setActiveTab("access");
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    if (!pendingOnboardingReveal || activeTab !== "steward") {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      chatPanelRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+      setPendingOnboardingReveal(false);
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeTab, pendingOnboardingReveal]);
 
   useEffect(() => {
     if (!deviceId || !device || adoptionStatus !== "adopted") {
@@ -327,15 +345,20 @@ export default function DeviceDetailPage() {
   const startOnboardingFromNudge = async () => {
     if (!device || startingOnboarding) return;
     setStartingOnboarding(true);
+    setPendingOnboardingReveal(true);
+    setActiveTab("steward");
     try {
       const res = await fetch(`/api/devices/${device.id}/onboarding/session`, withClientApiToken({ method: "POST" }));
       const data = (await res.json()) as { session?: { id?: string } | null };
       if (data.session?.id) {
-        setPreferredChatSessionId(data.session.id);
         setHasOnboardingSession(true);
+        setPreferredChatSessionId(undefined);
+        window.requestAnimationFrame(() => {
+          setPreferredChatSessionId(data.session?.id);
+          setPendingOnboardingReveal(true);
+        });
       }
       setChatSessionRefreshToken((prev) => prev + 1);
-      setActiveTab("steward");
     } finally {
       setStartingOnboarding(false);
     }
@@ -470,7 +493,7 @@ export default function DeviceDetailPage() {
                 <div>
                   <p className="text-sm font-medium text-amber-900 dark:text-amber-100">Onboarding pending</p>
                   <p className="text-xs text-amber-800/90 dark:text-amber-200/90">
-                    This device is adopted. Start onboarding from Chat so it can model workloads, assurances, and access.
+                    This device is adopted. Start onboarding from Chat so it can commit workloads, assurances, management profile, and access.
                   </p>
                 </div>
                 <Button size="sm" onClick={() => void startOnboardingFromNudge()} disabled={startingOnboarding}>
@@ -767,16 +790,18 @@ export default function DeviceDetailPage() {
 
         <TabsContent value="steward" forceMount className="mt-3 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
           <AnimatedTabPanel active={activeTab === "steward"} persistent className="overflow-hidden">
-            <Card className="flex h-full min-h-0 min-w-0 overflow-hidden bg-card/85">
-              <ChatWorkspace
-                initialDeviceId={device.id}
-                sessionScope="device"
-                respectUrlParams={false}
-                compact
-                sessionRefreshToken={chatSessionRefreshToken}
-                preferredSessionId={preferredChatSessionId}
-              />
-            </Card>
+            <div ref={chatPanelRef} className="h-full min-h-0">
+              <Card className="flex h-full min-h-0 min-w-0 overflow-hidden bg-card/85">
+                <ChatWorkspace
+                  initialDeviceId={device.id}
+                  sessionScope="device"
+                  respectUrlParams={false}
+                  compact
+                  sessionRefreshToken={chatSessionRefreshToken}
+                  preferredSessionId={preferredChatSessionId}
+                />
+              </Card>
+            </div>
           </AnimatedTabPanel>
         </TabsContent>
 

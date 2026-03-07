@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Activity, LayoutGrid, Maximize2, Minimize2, RefreshCw, ShieldAlert, Sparkles, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -38,6 +39,8 @@ type WidgetBridgeRequest =
   | { method: "runOperation"; params: Record<string, unknown> }
   | { method: "runOperationDetailed"; params: Record<string, unknown> };
 
+type WidgetFrameLayoutMode = "content" | "scroll";
+
 function serializeForScript(value: unknown): string {
   return JSON.stringify(value)
     .replace(/</g, "\\u003c")
@@ -69,9 +72,9 @@ function buildWidgetDocument(args: {
     '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\'; script-src \'unsafe-inline\'; connect-src \'none\'; base-uri \'none\'; form-action \'none\'; frame-ancestors \'none\'" />',
     "<style>",
     ":root { color-scheme: light dark; }",
-    "html, body { margin: 0; padding: 0; min-height: 100%; background: transparent; }",
+    "html, body { margin: 0; padding: 0; height: 100%; min-height: 100%; background: transparent; }",
     "body { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }",
-    "#steward-widget-root { min-height: 100%; box-sizing: border-box; }",
+    "#steward-widget-root { min-height: 100%; height: 100%; box-sizing: border-box; }",
     args.widget.css,
     "</style>",
     "</head>",
@@ -123,6 +126,64 @@ function buildWidgetDocument(args: {
             );
             postToHost({ type: "resize", height });
           });
+        };
+
+        const normalizeMqttMessages = (result) => {
+          const details = result && typeof result === "object" && result.details && typeof result.details === "object"
+            ? result.details
+            : null;
+          const messages = details && Array.isArray(details.messages) ? details.messages : [];
+          return messages
+            .filter((message) => message && typeof message === "object")
+            .map((message) => {
+              const payload = typeof message.payload === "string" ? message.payload : "";
+              let json = null;
+              if (payload.length > 0) {
+                try {
+                  json = JSON.parse(payload);
+                } catch {
+                  json = null;
+                }
+              }
+              return {
+                topic: typeof message.topic === "string" ? message.topic : "",
+                payload,
+                payloadBytes: typeof message.payloadBytes === "number" ? message.payloadBytes : payload.length,
+                payloadTruncated: Boolean(message.payloadTruncated),
+                qos: typeof message.qos === "number" ? message.qos : 0,
+                retain: Boolean(message.retain),
+                dup: Boolean(message.dup),
+                json,
+              };
+            });
+        };
+
+        const toMqttOperation = (request) => {
+          const source = request && typeof request === "object" ? request : {};
+          const {
+            mode,
+            timeoutMs,
+            args,
+            expectedSemanticTarget,
+            ...brokerRequest
+          } = source;
+          const publishMessages = Array.isArray(brokerRequest.publishMessages) ? brokerRequest.publishMessages : [];
+          return {
+            mode: mode === "mutate" || mode === "read"
+              ? mode
+              : (publishMessages.length > 0 ? "mutate" : "read"),
+            kind: "mqtt.message",
+            adapterId: "mqtt",
+            timeoutMs: typeof timeoutMs === "number" ? timeoutMs : 10_000,
+            brokerRequest: {
+              protocol: "mqtt",
+              ...brokerRequest,
+            },
+            ...(args && typeof args === "object" ? { args } : {}),
+            ...(typeof expectedSemanticTarget === "string" && expectedSemanticTarget.trim().length > 0
+              ? { expectedSemanticTarget }
+              : {}),
+          };
         };
 
         window.addEventListener("message", (event) => {
@@ -214,6 +275,24 @@ function buildWidgetDocument(args: {
             }
             return requestFromHost("runOperationDetailed", operation);
           },
+          buildMqttOperation(request) {
+            return toMqttOperation(request);
+          },
+          async runMqtt(request) {
+            if (!capabilities.includes("device-control")) {
+              throw new Error("This widget does not have the device-control capability.");
+            }
+            return requestFromHost("runOperationDetailed", toMqttOperation(request));
+          },
+          getMqttMessages(result) {
+            return normalizeMqttMessages(result);
+          },
+          setLayout(options) {
+            const nextMode = options && options.mode === "scroll" ? "scroll" : "content";
+            postToHost({ type: "layout", mode: nextMode });
+            scheduleResize();
+            return { mode: nextMode };
+          },
           setStatus(text) {
             postToHost({ type: "status", text: typeof text === "string" ? text : String(text ?? "") });
           },
@@ -291,6 +370,8 @@ function WidgetRuntimeFrame({
   widget,
   context,
   active,
+  fullscreen,
+  onToggleFullscreen,
   onContextRefresh,
   maxFrameHeight = 2_200,
 }: {
@@ -298,6 +379,8 @@ function WidgetRuntimeFrame({
   widget: DeviceWidget;
   context: DeviceWidgetContext;
   active: boolean;
+  fullscreen: boolean;
+  onToggleFullscreen: () => void;
   onContextRefresh: () => Promise<DeviceWidgetContext | null>;
   maxFrameHeight?: number;
 }) {
@@ -306,6 +389,7 @@ function WidgetRuntimeFrame({
   const [runtimeState, setRuntimeState] = useState<Record<string, unknown>>({});
   const [runtimeLoading, setRuntimeLoading] = useState(true);
   const [frameHeight, setFrameHeight] = useState(640);
+  const [frameLayoutMode, setFrameLayoutMode] = useState<WidgetFrameLayoutMode>("content");
   const [frameStatus, setFrameStatus] = useState("Ready");
   const [frameError, setFrameError] = useState<string | null>(null);
   const [bootSnapshot, setBootSnapshot] = useState<{ context: DeviceWidgetContext; state: Record<string, unknown> } | null>(null);
@@ -375,6 +459,7 @@ function WidgetRuntimeFrame({
     setFrameStatus("Ready");
     setFrameError(null);
     setFrameHeight(640);
+    setFrameLayoutMode("content");
     setBootSnapshot(null);
   }, [widget.id, widget.revision]);
 
@@ -451,10 +536,18 @@ function WidgetRuntimeFrame({
 
       const type = data.type;
       if (type === "resize") {
+        if (frameLayoutMode === "scroll") {
+          return;
+        }
         const rawHeight = Number(data.height);
         if (Number.isFinite(rawHeight)) {
           setFrameHeight(Math.max(320, Math.min(maxFrameHeight, Math.ceil(rawHeight))));
         }
+        return;
+      }
+
+      if (type === "layout") {
+        setFrameLayoutMode(data.mode === "scroll" ? "scroll" : "content");
         return;
       }
 
@@ -576,6 +669,7 @@ function WidgetRuntimeFrame({
     onContextRefresh,
     postWidgetOperation,
     maxFrameHeight,
+    frameLayoutMode,
     respondToWidget,
     runtimeState,
     widget.id,
@@ -599,25 +693,29 @@ function WidgetRuntimeFrame({
     [bootSnapshot, widget],
   );
 
-  if (runtimeLoading || !bootSnapshot) {
-    return <Skeleton className="h-[480px] w-full rounded-2xl" />;
-  }
+  const iframeHeight = frameLayoutMode === "scroll"
+    ? (fullscreen ? "100%" : "clamp(480px, 75vh, 880px)")
+    : `${frameHeight}px`;
 
   return (
-    <div ref={containerRef} className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        <Badge variant="secondary" className="gap-1">
-          <Activity className="size-3" />
-          {frameStatus}
-        </Badge>
-        {!runtimeActive && <Badge variant="outline">Paused (off-screen)</Badge>}
-        <Badge variant="outline">rev {widget.revision}</Badge>
-        {widget.capabilities.map((capability) => (
-          <Badge key={capability} variant="outline" className="capitalize">
-            {capability.replace(/-/g, " ")}
-          </Badge>
-        ))}
-      </div>
+    <div ref={containerRef} className={cn("space-y-3", fullscreen && "h-full")}>
+      {!fullscreen && !runtimeLoading && bootSnapshot ? (
+        <>
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <Badge variant="secondary" className="gap-1">
+              <Activity className="size-3" />
+              {frameStatus}
+            </Badge>
+            {!runtimeActive && <Badge variant="outline">Paused (off-screen)</Badge>}
+            <Badge variant="outline">rev {widget.revision}</Badge>
+            {widget.capabilities.map((capability) => (
+              <Badge key={capability} variant="outline" className="capitalize">
+                {capability.replace(/-/g, " ")}
+              </Badge>
+            ))}
+          </div>
+        </>
+      ) : null}
 
       {frameError && (
         <Card className="border-destructive/50">
@@ -628,23 +726,97 @@ function WidgetRuntimeFrame({
         </Card>
       )}
 
-      {runtimeActive ? (
-        <iframe
-          ref={iframeRef}
-          title={widget.name}
-          sandbox="allow-scripts"
-          srcDoc={documentHtml}
-          className="block min-h-[320px] w-full rounded-2xl border bg-background"
-          style={{ height: `${frameHeight}px` }}
-        />
-      ) : (
-        <Card>
-          <CardContent className="flex min-h-[320px] items-center justify-center p-4 text-sm text-muted-foreground">
-            Widget runtime is paused while this panel is off-screen.
-          </CardContent>
-        </Card>
-      )}
+      <div className={cn("group/widget-canvas relative", fullscreen && "h-full")}>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label={fullscreen ? "Exit widget fullscreen" : "Enter widget fullscreen"}
+          className={cn(
+            "absolute right-3 top-3 z-10 h-8 w-8 rounded-full border border-border/60 bg-background/72 text-muted-foreground shadow-sm backdrop-blur-sm transition-opacity duration-150",
+            "opacity-100 hover:bg-background hover:text-foreground md:opacity-0 md:focus-visible:opacity-100 md:group-hover/widget-canvas:opacity-100 md:group-focus-within/widget-canvas:opacity-100",
+          )}
+          onClick={onToggleFullscreen}
+        >
+          {fullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+        </Button>
+
+        {runtimeLoading || !bootSnapshot ? (
+          <Skeleton className="h-[480px] w-full rounded-2xl" />
+        ) : runtimeActive ? (
+          <iframe
+            ref={iframeRef}
+            title={widget.name}
+            sandbox="allow-scripts"
+            srcDoc={documentHtml}
+            className={cn(
+              "block min-h-[320px] w-full rounded-2xl border bg-background",
+              fullscreen && "h-full min-h-full rounded-[24px]",
+            )}
+            style={{ height: iframeHeight }}
+          />
+        ) : (
+          <Card>
+            <CardContent className="flex min-h-[320px] items-center justify-center p-4 text-sm text-muted-foreground">
+              Widget runtime is paused while this panel is off-screen.
+            </CardContent>
+          </Card>
+        )}
+      </div>
     </div>
+  );
+}
+
+function WidgetSurface({
+  deviceId,
+  widget,
+  context,
+  active,
+  fullscreen,
+  onToggleFullscreen,
+  onContextRefresh,
+}: {
+  deviceId: string;
+  widget: DeviceWidget;
+  context: DeviceWidgetContext;
+  active: boolean;
+  fullscreen: boolean;
+  onToggleFullscreen: () => void;
+  onContextRefresh: () => Promise<DeviceWidgetContext | null>;
+}) {
+  return (
+    <Card
+      className={cn(
+        "min-h-0 min-w-0 overflow-hidden",
+        fullscreen && "flex h-full flex-col rounded-[28px] border-border/70 bg-background/95 shadow-2xl",
+      )}
+    >
+      {!fullscreen && (
+        <CardHeader className="pb-3">
+          <div className="flex flex-wrap items-start gap-3">
+            <div className="min-w-0 flex-1">
+              <CardTitle className="text-base">{widget.name}</CardTitle>
+              {widget.description && (
+                <CardDescription className="mt-1">{widget.description}</CardDescription>
+              )}
+            </div>
+            <Badge variant="outline" className="capitalize">{widget.slug}</Badge>
+          </div>
+        </CardHeader>
+      )}
+      <CardContent className={cn("min-h-0 min-w-0 overflow-auto", fullscreen && "flex-1 overflow-hidden p-3 md:p-4")}>
+        <WidgetRuntimeFrame
+          deviceId={deviceId}
+          widget={widget}
+          context={context}
+          active={active}
+          fullscreen={fullscreen}
+          onToggleFullscreen={onToggleFullscreen}
+          onContextRefresh={onContextRefresh}
+          maxFrameHeight={fullscreen ? 4_000 : 2_000}
+        />
+      </CardContent>
+    </Card>
   );
 }
 
@@ -667,6 +839,30 @@ export function DeviceWidgetsPanel({ deviceId, active = false, className }: Devi
     setLoading(true);
     setFullscreen(false);
   }, [deviceId]);
+
+  useEffect(() => {
+    if (!active) {
+      setFullscreen(false);
+    }
+  }, [active]);
+
+  useEffect(() => {
+    if (!fullscreen || typeof document === "undefined") {
+      return;
+    }
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setFullscreen(false);
+      }
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [fullscreen]);
 
   const loadContext = useCallback(async (): Promise<DeviceWidgetContext | null> => {
     const response = await fetch(
@@ -791,119 +987,99 @@ export function DeviceWidgetsPanel({ deviceId, active = false, className }: Devi
     );
   }
 
-  return (
-    <div
-      className={cn(
-        "relative grid h-full min-h-0 min-w-0 gap-4 overflow-x-hidden",
-        fullscreen ? "grid-cols-1" : "lg:grid-cols-[300px_1fr]",
-        className,
-      )}
-    >
-      {!fullscreen && (
-        <Card className="flex min-h-0 min-w-0 flex-col overflow-hidden">
-        <CardHeader className="gap-3 pb-3">
-          <div className="flex items-center gap-2">
-            <LayoutGrid className="size-4 text-primary" />
-            <CardTitle className="text-base">Saved Widgets</CardTitle>
-            <Badge variant="secondary" className="ml-auto">{widgets.length}</Badge>
-          </div>
-          <CardDescription>
-            Persistent, device-scoped UI surfaces generated in chat and stored with Steward.
-          </CardDescription>
-          <div className="flex flex-wrap gap-2">
-            <Button size="sm" variant="outline" onClick={() => void refreshAll()} disabled={refreshing}>
-              <RefreshCw className={cn("mr-2 size-3.5", refreshing && "animate-spin")} />
-              Refresh
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => void deleteSelectedWidget()}>
-              <Trash2 className="mr-2 size-3.5" />
-              Delete
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent className="flex min-h-0 min-w-0 flex-1 p-0">
-          <ScrollArea className="h-full min-w-0 [&>[data-radix-scroll-area-viewport]]:overflow-x-hidden">
-            <div className="space-y-2 p-3 pr-4">
-              {widgets.map((widget) => (
-                <button
-                  key={widget.id}
-                  type="button"
-                  onClick={() => setSelectedWidgetId(widget.id)}
-                  className={cn(
-                    "block w-full min-w-0 max-w-full overflow-hidden rounded-2xl border px-3 py-3 text-left transition-colors",
-                    widget.id === selectedWidgetId
-                      ? "border-primary bg-primary/5 shadow-sm"
-                      : "border-border/70 bg-card hover:border-primary/40 hover:bg-accent/40",
-                  )}
-                >
-                  <div className="flex min-w-0 flex-wrap items-start gap-2">
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-foreground">{widget.name}</p>
-                      {widget.description && (
-                        <p className="mt-1 break-words text-xs leading-5 text-muted-foreground">
-                          {widget.description}
-                        </p>
-                      )}
-                    </div>
-                    <Badge variant={widget.status === "active" ? "default" : "outline"} className="shrink-0 capitalize">
-                      {widget.status}
-                    </Badge>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </ScrollArea>
-        </CardContent>
-        </Card>
-      )}
+  const widgetSurface = (
+    <WidgetSurface
+      deviceId={deviceId}
+      widget={selectedWidget}
+      context={context}
+      active={active}
+      fullscreen={fullscreen}
+      onToggleFullscreen={() => setFullscreen((current) => !current)}
+      onContextRefresh={loadContext}
+    />
+  );
 
-      <Card
+  const fullscreenOverlay = fullscreen && typeof document !== "undefined"
+    ? createPortal(
+      <div className="fixed inset-y-0 left-0 right-0 z-[60] bg-background/86 backdrop-blur-sm md:left-[var(--steward-sidebar-width)]">
+        <div className="flex h-full min-h-0 flex-col p-2 md:p-3 lg:p-4">
+          {widgetSurface}
+        </div>
+      </div>,
+      document.body,
+    )
+    : null;
+
+  return (
+    <>
+      <div
         className={cn(
-          "min-h-0 min-w-0 overflow-hidden",
-          fullscreen && "flex h-full w-full flex-col",
+          "relative grid h-full min-h-0 min-w-0 gap-4 overflow-x-hidden lg:grid-cols-[300px_1fr]",
+          className,
         )}
       >
-        <CardHeader className="pb-3">
-          <div className="flex flex-wrap items-start gap-3">
-            <div className="min-w-0 flex-1">
-              <CardTitle className="text-base">{selectedWidget.name}</CardTitle>
-              {selectedWidget.description && (
-                <CardDescription className="mt-1">{selectedWidget.description}</CardDescription>
-              )}
+        <Card className="flex min-h-0 min-w-0 flex-col overflow-hidden">
+          <CardHeader className="gap-3 pb-3">
+            <div className="flex items-center gap-2">
+              <LayoutGrid className="size-4 text-primary" />
+              <CardTitle className="text-base">Saved Widgets</CardTitle>
+              <Badge variant="secondary" className="ml-auto">{widgets.length}</Badge>
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="shrink-0"
-              onClick={() => setFullscreen((current) => !current)}
-            >
-              {fullscreen ? (
-                <>
-                  <Minimize2 className="mr-2 size-3.5" />
-                  Exit Fullscreen
-                </>
-              ) : (
-                <>
-                  <Maximize2 className="mr-2 size-3.5" />
-                  Fullscreen
-                </>
-              )}
-            </Button>
-            <Badge variant="outline" className="capitalize">{selectedWidget.slug}</Badge>
-          </div>
-        </CardHeader>
-        <CardContent className="min-h-0 min-w-0 overflow-auto">
-          <WidgetRuntimeFrame
-            deviceId={deviceId}
-            widget={selectedWidget}
-            context={context}
-            active={active}
-            onContextRefresh={loadContext}
-            maxFrameHeight={fullscreen ? 4_000 : 2_000}
-          />
-        </CardContent>
-      </Card>
-    </div>
+            <CardDescription>
+              Persistent, device-scoped UI surfaces generated in chat and stored with Steward.
+            </CardDescription>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="outline" onClick={() => void refreshAll()} disabled={refreshing}>
+                <RefreshCw className={cn("mr-2 size-3.5", refreshing && "animate-spin")} />
+                Refresh
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => void deleteSelectedWidget()}>
+                <Trash2 className="mr-2 size-3.5" />
+                Delete
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="flex min-h-0 min-w-0 flex-1 p-0">
+            <ScrollArea className="h-full min-w-0 [&>[data-radix-scroll-area-viewport]]:overflow-x-hidden">
+              <div className="space-y-2 p-3 pr-4">
+                {widgets.map((widget) => (
+                  <button
+                    key={widget.id}
+                    type="button"
+                    onClick={() => setSelectedWidgetId(widget.id)}
+                    className={cn(
+                      "block w-full min-w-0 max-w-full overflow-hidden rounded-2xl border px-3 py-3 text-left transition-colors",
+                      widget.id === selectedWidgetId
+                        ? "border-primary bg-primary/5 shadow-sm"
+                        : "border-border/70 bg-card hover:border-primary/40 hover:bg-accent/40",
+                    )}
+                  >
+                    <div className="flex min-w-0 flex-wrap items-start gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-foreground">{widget.name}</p>
+                        {widget.description && (
+                          <p className="mt-1 break-words text-xs leading-5 text-muted-foreground">
+                            {widget.description}
+                          </p>
+                        )}
+                      </div>
+                      <Badge
+                        variant={widget.status === "active" ? "default" : "outline"}
+                        className="shrink-0 capitalize"
+                      >
+                        {widget.status}
+                      </Badge>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </ScrollArea>
+          </CardContent>
+        </Card>
+
+        {!fullscreen && widgetSurface}
+      </div>
+      {fullscreenOverlay}
+    </>
   );
 }

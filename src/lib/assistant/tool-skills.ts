@@ -9,6 +9,7 @@ import {
 } from "@/lib/assistant/web-research-config";
 import { runWebResearch } from "@/lib/assistant/web-research";
 import { markCredentialValidatedFromUse } from "@/lib/adoption/credentials";
+import { completeDeviceOnboarding } from "@/lib/adoption/orchestrator";
 import {
   computeDeviceStateHash,
   executeOperationWithGates,
@@ -19,7 +20,19 @@ import { dedupeObservations } from "@/lib/discovery/evidence";
 import { fingerprintDevice } from "@/lib/discovery/fingerprint";
 import { runNmapDeepFingerprint } from "@/lib/discovery/nmap-deep";
 import { collectPacketIntelSnapshot } from "@/lib/discovery/packet-intel";
+import {
+  createAssurance,
+  createResponsibility,
+  deleteAssurance,
+  deleteResponsibility,
+  resolveAssuranceForDevice,
+  resolveResponsibilityForDevice,
+  summarizeDeviceContractForPrompt,
+  updateAssurance,
+  updateResponsibility,
+} from "@/lib/devices/contract-management";
 import { parseWinrmCommandTemplate } from "@/lib/adapters/winrm";
+import { getDeviceNameValidationError, normalizeDeviceName } from "@/lib/devices/naming";
 import { getDefaultProvider } from "@/lib/llm/config";
 import { evaluatePolicy } from "@/lib/policy/engine";
 import { getAdoptionRecord, getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
@@ -31,13 +44,19 @@ import { generateAndStoreDeviceWidget } from "@/lib/widgets/generator";
 import { DEVICE_TYPE_VALUES, type DeviceType } from "@/lib/state/types";
 import type {
   ActionClass,
+  Assurance,
   Device,
+  DiscoveryObservation,
   LLMProvider,
+  OnboardingDraftAssurance,
+  OnboardingDraftWorkload,
   OperationKind,
   OperationMode,
   OperationSpec,
   ProtocolBrokerRequest,
   ServiceFingerprint,
+  Workload,
+  WorkloadCategory,
 } from "@/lib/state/types";
 import type { DiscoveryCandidate } from "@/lib/discovery/types";
 
@@ -76,6 +95,7 @@ const OPERATION_KINDS: OperationKind[] = [
   "container.stop",
   "http.request",
   "websocket.message",
+  "mqtt.message",
   "cert.renew",
   "file.copy",
   "network.config",
@@ -164,6 +184,7 @@ function normalizeCredentialProtocol(value: string): string {
   const normalized = value.trim().toLowerCase();
   if (normalized === "windows") return "winrm";
   if (normalized === "http" || normalized === "https") return "http-api";
+  if (normalized === "mqtts") return "mqtt";
   return normalized;
 }
 
@@ -215,27 +236,229 @@ function validateDeviceReadyForToolUse(
     return { ok: false, reason: `Device ${device.name} onboarding is not complete yet.` };
   }
 
-  const unresolvedRequired = stateStore
-    .getAdoptionQuestions(device.id, { runId: run.id, unresolvedOnly: true })
-    .filter((question) => question.required)
-    .length;
-
-  if (unresolvedRequired > 0) {
-    return {
-      ok: false,
-      reason: `Device ${device.name} still has ${unresolvedRequired} required onboarding questions pending.`,
-    };
-  }
-
   return { ok: true };
 }
 
-function hasSelectedAccessSurfaceForAdapter(deviceId: string, adapterId: string): boolean {
-  const accessSurfaces = stateStore.getAccessSurfaces(deviceId);
-  if (accessSurfaces.length === 0) {
+function validateDeviceReadyForContractToolUse(
+  device: Device,
+): { ok: true } | { ok: false; reason: string } {
+  return validateDeviceReadyForToolUse(device);
+}
+
+function hasSelectedProfileForAdapter(deviceId: string, adapterId: string): boolean {
+  const profiles = stateStore.getDeviceProfiles(deviceId);
+  const matchingProfiles = profiles.filter((profile) =>
+    profile.profileId === adapterId || profile.adapterId === adapterId,
+  );
+  if (matchingProfiles.length === 0) {
     return true;
   }
-  return accessSurfaces.some((surface) => surface.selected && surface.adapterId === adapterId);
+  return matchingProfiles.some((profile) =>
+    ["selected", "verified", "active"].includes(profile.status)
+  );
+}
+
+function sameSubnet24(a: string, b: string): boolean {
+  const aParts = a.split(".");
+  const bParts = b.split(".");
+  return aParts.length === 4 && bParts.length === 4
+    && aParts[0] === bParts[0]
+    && aParts[1] === bParts[1]
+    && aParts[2] === bParts[2];
+}
+
+function deviceLooksLikeGateway(device: Device): boolean {
+  if (["router", "firewall", "modem", "access-point"].includes(device.type)) {
+    return true;
+  }
+
+  const ports = new Set(device.services.map((service) => service.port));
+  const identityText = `${device.name} ${device.hostname ?? ""} ${device.vendor ?? ""}`.toLowerCase();
+  return /\b(router|gateway|firewall|pfsense|opnsense|unifi|dream machine|mikrotik)\b/.test(identityText)
+    || ((ports.has(53) || ports.has(67)) && (ports.has(80) || ports.has(443)));
+}
+
+function summarizeDiscoveryObservation(observation: DiscoveryObservation): string {
+  const details = observation.details;
+
+  if (observation.evidenceType === "dhcp_lease") {
+    const hostname = typeof details.hostname === "string" ? details.hostname : undefined;
+    const hostnames = Array.isArray(details.hostnames)
+      ? details.hostnames.filter((value): value is string => typeof value === "string").slice(0, 3)
+      : [];
+    return hostname
+      ? `DHCP hostname ${hostname}`
+      : hostnames.length > 0
+        ? `DHCP hostnames ${hostnames.join(", ")}`
+        : "DHCP lease hint";
+  }
+
+  if (observation.evidenceType === "packet_traffic_profile") {
+    const dnsNames = Array.isArray(details.dnsNames)
+      ? details.dnsNames.filter((value): value is string => typeof value === "string").slice(0, 2)
+      : [];
+    const httpHosts = Array.isArray(details.httpHosts)
+      ? details.httpHosts.filter((value): value is string => typeof value === "string").slice(0, 2)
+      : [];
+    const tlsSni = Array.isArray(details.tlsSni)
+      ? details.tlsSni.filter((value): value is string => typeof value === "string").slice(0, 2)
+      : [];
+    const parts = [
+      dnsNames.length > 0 ? `dns=${dnsNames.join(",")}` : "",
+      httpHosts.length > 0 ? `http=${httpHosts.join(",")}` : "",
+      tlsSni.length > 0 ? `tls=${tlsSni.join(",")}` : "",
+    ].filter((part) => part.length > 0);
+    return parts.length > 0 ? `Traffic hints ${parts.join(" ")}` : "Traffic profile";
+  }
+
+  if (observation.evidenceType === "browser_observation") {
+    const title = typeof details.title === "string" ? details.title : undefined;
+    const url = typeof details.finalUrl === "string"
+      ? details.finalUrl
+      : typeof details.url === "string"
+        ? details.url
+        : undefined;
+    const vendorHints = Array.isArray(details.vendorHints)
+      ? details.vendorHints.filter((value): value is string => typeof value === "string").slice(0, 2)
+      : [];
+    const parts = [title, vendorHints.length > 0 ? vendorHints.join(", ") : "", url].filter(Boolean);
+    return parts.length > 0 ? `Browser ${parts.join(" | ")}` : "Browser observation";
+  }
+
+  if (observation.evidenceType === "favicon_hash") {
+    const hash = typeof details.hash === "string" ? details.hash : "";
+    return hash ? `Favicon hash ${hash.slice(0, 16)}` : "Favicon hash";
+  }
+
+  if (observation.evidenceType === "protocol_hint") {
+    const protocol = typeof details.protocol === "string" ? details.protocol : "unknown";
+    const port = typeof details.port === "number" ? details.port : "";
+    return `Protocol hint ${protocol}${port ? ` on ${port}` : ""}`;
+  }
+
+  if (observation.evidenceType === "nmap_script") {
+    const scriptId = typeof details.scriptId === "string" ? details.scriptId : "script";
+    const port = typeof details.port === "number" ? details.port : "";
+    return `Nmap ${scriptId}${port ? ` on ${port}` : ""}`;
+  }
+
+  if (observation.evidenceType === "http_banner") {
+    const title = typeof details.title === "string" ? details.title : undefined;
+    return title ? `HTTP title ${title}` : "HTTP banner";
+  }
+
+  return observation.evidenceType.replace(/_/g, " ");
+}
+
+function getRecentDiscoveryObservationsForDevice(
+  device: Device,
+  observationWindowMinutes: number,
+  limitPerIp = 8,
+): DiscoveryObservation[] {
+  const ips = [device.ip, ...(device.secondaryIps ?? [])].filter((value, index, all) => all.indexOf(value) === index);
+  const sinceAt = new Date(Date.now() - observationWindowMinutes * 60_000).toISOString();
+  const grouped = stateStore.getRecentDiscoveryObservationsByIp(ips, { sinceAt, limitPerIp });
+  return Array.from(grouped.values())
+    .flat()
+    .sort((a, b) => b.observedAt.localeCompare(a.observedAt));
+}
+
+function buildDiscoveryHintBuckets(observations: DiscoveryObservation[]): Record<string, string[]> {
+  const dhcpHostnames = new Set<string>();
+  const dnsNames = new Set<string>();
+  const httpHosts = new Set<string>();
+  const tlsSni = new Set<string>();
+  const faviconHashes = new Set<string>();
+  const browserTitles = new Set<string>();
+  const browserVendorHints = new Set<string>();
+  const protocolHints = new Set<string>();
+
+  for (const observation of observations) {
+    const details = observation.details;
+    if (observation.evidenceType === "dhcp_lease") {
+      if (typeof details.hostname === "string") dhcpHostnames.add(details.hostname);
+      if (Array.isArray(details.hostnames)) {
+        for (const value of details.hostnames) {
+          if (typeof value === "string") dhcpHostnames.add(value);
+        }
+      }
+    }
+
+    if (observation.evidenceType === "packet_traffic_profile") {
+      for (const key of ["dnsNames", "httpHosts", "tlsSni"] as const) {
+        const values = details[key];
+        if (!Array.isArray(values)) continue;
+        for (const value of values) {
+          if (typeof value !== "string") continue;
+          if (key === "dnsNames") dnsNames.add(value);
+          if (key === "httpHosts") httpHosts.add(value);
+          if (key === "tlsSni") tlsSni.add(value);
+        }
+      }
+    }
+
+    if (observation.evidenceType === "browser_observation") {
+      if (typeof details.title === "string") browserTitles.add(details.title);
+      if (Array.isArray(details.vendorHints)) {
+        for (const value of details.vendorHints) {
+          if (typeof value === "string") browserVendorHints.add(value);
+        }
+      }
+    }
+
+    if (observation.evidenceType === "favicon_hash" && typeof details.hash === "string") {
+      faviconHashes.add(details.hash.slice(0, 16));
+    }
+
+    if (observation.evidenceType === "protocol_hint" && typeof details.protocol === "string") {
+      protocolHints.add(details.protocol);
+    }
+  }
+
+  return {
+    dhcpHostnames: Array.from(dhcpHostnames).slice(0, 6),
+    dnsNames: Array.from(dnsNames).slice(0, 6),
+    httpHosts: Array.from(httpHosts).slice(0, 6),
+    tlsSni: Array.from(tlsSni).slice(0, 6),
+    browserTitles: Array.from(browserTitles).slice(0, 4),
+    browserVendorHints: Array.from(browserVendorHints).slice(0, 4),
+    faviconHashes: Array.from(faviconHashes).slice(0, 4),
+    protocolHints: Array.from(protocolHints).slice(0, 6),
+  };
+}
+
+async function buildRouterCandidateSummaries(device: Device, limit = 5): Promise<Array<Record<string, unknown>>> {
+  const state = await stateStore.getState();
+  return state.devices
+    .filter((candidate) => candidate.id !== device.id && deviceLooksLikeGateway(candidate))
+    .sort((a, b) => {
+      const subnetScore = Number(sameSubnet24(b.ip, device.ip)) - Number(sameSubnet24(a.ip, device.ip));
+      if (subnetScore !== 0) return subnetScore;
+      const typeScore = Number(b.type === "router" || b.type === "firewall") - Number(a.type === "router" || a.type === "firewall");
+      if (typeScore !== 0) return typeScore;
+      return a.name.localeCompare(b.name);
+    })
+    .slice(0, limit)
+    .map((candidate) => {
+      const routerLeaseIntel = isRecord(candidate.metadata.routerLeaseIntel) ? candidate.metadata.routerLeaseIntel : {};
+      const hasHttpCredential = stateStore.getDeviceCredentials(candidate.id)
+        .some((credential) => credential.protocol.toLowerCase() === "http-api");
+      return {
+        deviceId: candidate.id,
+        name: candidate.name,
+        ip: candidate.ip,
+        type: candidate.type,
+        vendor: candidate.vendor ?? null,
+        hostname: candidate.hostname ?? null,
+        sameSubnet24: sameSubnet24(candidate.ip, device.ip),
+        services: candidate.services.slice(0, 6).map((service) => `${service.name}:${service.port}`),
+        hasRouterLeaseIntel: Object.keys(routerLeaseIntel).length > 0,
+        preferredLeaseEndpoint: typeof routerLeaseIntel.preferredLeaseEndpoint === "string"
+          ? routerLeaseIntel.preferredLeaseEndpoint
+          : null,
+        hasHttpCredential,
+      };
+    });
 }
 
 const UNKNOWN_SERVICE_NAMES = new Set(["", "unknown", "tcpwrapped", "generic"]);
@@ -315,6 +538,7 @@ function inferAdapterForKind(kind: OperationKind, device: Device): string {
   const protocols = new Set(device.protocols.map((protocol) => protocol.toLowerCase()));
 
   if (kind === "http.request") return "http-api";
+  if (kind === "mqtt.message") return "mqtt";
   if (kind === "container.restart" || kind === "container.stop") return "docker";
   if (kind === "service.restart" || kind === "service.stop") {
     if (protocols.has("winrm")) return "winrm";
@@ -329,6 +553,7 @@ function inferAdapterForKind(kind: OperationKind, device: Device): string {
   if (protocols.has("ssh")) return "ssh";
   if (protocols.has("winrm")) return "winrm";
   if (protocols.has("docker")) return "docker";
+  if (protocols.has("mqtt")) return "mqtt";
   if (protocols.has("http-api") || protocols.has("http")) return "http-api";
   return "ssh";
 }
@@ -339,6 +564,7 @@ const HTTP_PORT_HINTS = new Set([80, 8080, 8000, 9000, 5000, 5985, 1883, 2375]);
 const SSH_PORT_PREFERENCE = [22, 2222, 2200];
 const WINRM_PORT_PREFERENCE = [5985, 5986];
 const DOCKER_PORT_PREFERENCE = [2375, 2376];
+const MQTT_PORT_PREFERENCE = [8883, 1883];
 const HTTP_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
 const SSH_OPTIONS_WITH_VALUE = new Set([
   "-b",
@@ -375,6 +601,7 @@ function inputPort(input: Record<string, unknown>): number | undefined {
     ?? coercePort(input.http_port)
     ?? coercePort(input.api_port)
     ?? coercePort(input.docker_port)
+    ?? coercePort(input.mqtt_port)
     ?? coercePort(input.snmp_port)
     ?? coercePort(input.connection_port)
     ?? coercePort(input.management_port);
@@ -400,17 +627,100 @@ function inputBoolean(input: Record<string, unknown>, ...keys: string[]): boolea
   return undefined;
 }
 
-const INVALID_DEVICE_NAME_TOKENS = new Set([
-  "this",
-  "that",
-  "it",
-  "device",
-  "host",
-  "box",
-  "machine",
-  "appliance",
-  "thing",
-]);
+function inputStringArray(input: Record<string, unknown>, ...keys: string[]): string[] | undefined {
+  for (const key of keys) {
+    const value = input[key];
+    if (!Array.isArray(value)) {
+      continue;
+    }
+    const items = value
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    return items;
+  }
+  return undefined;
+}
+
+function parseWorkloadCategory(value: unknown): WorkloadCategory | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  return [
+    "application",
+    "platform",
+    "data",
+    "network",
+    "perimeter",
+    "storage",
+    "telemetry",
+    "background",
+    "unknown",
+  ].includes(normalized)
+    ? normalized as WorkloadCategory
+    : undefined;
+}
+
+function parseCriticality(value: unknown): Workload["criticality"] | undefined {
+  if (value === "low" || value === "medium" || value === "high") {
+    return value;
+  }
+  return undefined;
+}
+
+function parseDesiredState(value: unknown): Assurance["desiredState"] | undefined {
+  if (value === "running" || value === "stopped") {
+    return value;
+  }
+  return undefined;
+}
+
+function summarizeResponsibilityEntry(workload: Workload): Record<string, unknown> {
+  return {
+    id: workload.id,
+    key: workload.workloadKey,
+    displayName: workload.displayName,
+    category: workload.category,
+    criticality: workload.criticality,
+    summary: workload.summary ?? null,
+  };
+}
+
+function summarizeAssuranceEntry(
+  assurance: Assurance,
+  responsibilitiesById: Map<string, Workload>,
+): Record<string, unknown> {
+  const linkedResponsibility = assurance.workloadId
+    ? responsibilitiesById.get(assurance.workloadId)
+    : undefined;
+  return {
+    id: assurance.id,
+    key: assurance.assuranceKey,
+    displayName: assurance.displayName,
+    responsibilityId: assurance.workloadId ?? null,
+    responsibilityKey: linkedResponsibility?.workloadKey ?? null,
+    responsibilityName: linkedResponsibility?.displayName ?? null,
+    criticality: assurance.criticality,
+    desiredState: assurance.desiredState,
+    checkIntervalSec: assurance.checkIntervalSec,
+    monitorType: assurance.monitorType ?? null,
+    requiredProtocols: assurance.requiredProtocols ?? [],
+    rationale: assurance.rationale ?? null,
+  };
+}
+
+function buildContractSnapshotPayload(deviceId: string): {
+  responsibilities: Record<string, unknown>[];
+  assurances: Record<string, unknown>[];
+} {
+  const responsibilities = stateStore.getWorkloads(deviceId);
+  const responsibilitiesById = new Map(responsibilities.map((item) => [item.id, item]));
+  return {
+    responsibilities: responsibilities.map((item) => summarizeResponsibilityEntry(item)),
+    assurances: stateStore.getAssurances(deviceId).map((item) => summarizeAssuranceEntry(item, responsibilitiesById)),
+  };
+}
 
 const DEVICE_TYPE_ALIAS_MAP: Record<string, DeviceType> = {
   server: "server",
@@ -461,23 +771,8 @@ const DEVICE_TYPE_ALIAS_MAP: Record<string, DeviceType> = {
   unknown: "unknown",
 };
 
-function normalizeDeviceNameInput(value: string): string {
-  return value.trim().replace(/\s+/g, " ").replace(/[.?!,;:]+$/, "");
-}
-
 function isAcceptableDeviceName(value: string): boolean {
-  const normalized = normalizeDeviceNameInput(value);
-  if (normalized.length < 2 || normalized.length > 128) {
-    return false;
-  }
-  const lowered = normalized.toLowerCase();
-  if (INVALID_DEVICE_NAME_TOKENS.has(lowered)) {
-    return false;
-  }
-  if (/^(?:this|that|it)(?:\s+device)?$/i.test(lowered)) {
-    return false;
-  }
-  return true;
+  return getDeviceNameValidationError(value) === null;
 }
 
 function parseDeviceCategory(value: string | undefined): DeviceType | null {
@@ -491,21 +786,21 @@ function parseDeviceCategory(value: string | undefined): DeviceType | null {
 
 function inferManageableDeviceName(device: Device): string | null {
   const identity = isRecord(device.metadata.identity) ? device.metadata.identity : null;
-  const identityName = typeof identity?.name === "string" ? normalizeDeviceNameInput(identity.name) : "";
+  const identityName = typeof identity?.name === "string" ? normalizeDeviceName(identity.name) : "";
   if (identityName && isAcceptableDeviceName(identityName)) {
     return identityName;
   }
 
   const inferredProduct = isRecord(device.metadata.fingerprint)
     && typeof device.metadata.fingerprint.inferredProduct === "string"
-    ? normalizeDeviceNameInput(device.metadata.fingerprint.inferredProduct)
+    ? normalizeDeviceName(device.metadata.fingerprint.inferredProduct)
     : "";
   if (inferredProduct && isAcceptableDeviceName(inferredProduct)) {
     return inferredProduct;
   }
 
   if (device.hostname) {
-    const host = normalizeDeviceNameInput(device.hostname);
+    const host = normalizeDeviceName(device.hostname);
     if (isAcceptableDeviceName(host)) {
       return host;
     }
@@ -707,6 +1002,24 @@ function winrmSkipCertChecksPreference(input: Record<string, unknown>): boolean 
   return inputBoolean(input, "skip_cert_checks", "skipCertChecks", "insecure_skip_verify");
 }
 
+function mqttSecurePreference(input: Record<string, unknown>): boolean | undefined {
+  const scheme = inputString(input, "scheme");
+  if (scheme === "mqtts") return true;
+  if (scheme === "mqtt") return false;
+  const explicit = inputSecurePreference(input);
+  if (explicit !== undefined) {
+    return explicit;
+  }
+  const port = inputPort(input);
+  if (port === 8883) return true;
+  if (port === 1883) return false;
+  return undefined;
+}
+
+function mqttSkipCertChecksPreference(input: Record<string, unknown>): boolean | undefined {
+  return inputBoolean(input, "insecure_skip_verify", "skip_cert_checks", "skipCertChecks");
+}
+
 function preferredWinrmPort(device?: Device, explicitPort?: number, secure?: boolean): number | undefined {
   if (explicitPort) {
     return explicitPort;
@@ -761,6 +1074,95 @@ function preferredDockerPort(device?: Device, explicitPort?: number, secure?: bo
     });
 
   return candidates[0]?.port ?? (secure === true ? 2376 : 2375);
+}
+
+function preferredMqttPort(device?: Device, explicitPort?: number, secure?: boolean): number | undefined {
+  if (explicitPort) {
+    return explicitPort;
+  }
+
+  if (!device) {
+    return secure === false ? 1883 : 8883;
+  }
+
+  const candidates = device.services
+    .filter((service) =>
+      service.transport === "tcp"
+      && (service.port === 1883 || service.port === 8883 || /mqtt/i.test(service.name)),
+    )
+    .sort((a, b) => {
+      const ai = MQTT_PORT_PREFERENCE.indexOf(a.port);
+      const bi = MQTT_PORT_PREFERENCE.indexOf(b.port);
+      const aRank = ai === -1 ? 999 : ai;
+      const bRank = bi === -1 ? 999 : bi;
+      if (secure === true) {
+        return Number(b.secure) - Number(a.secure) || aRank - bRank;
+      }
+      if (secure === false) {
+        return Number(a.secure) - Number(b.secure) || aRank - bRank;
+      }
+      return aRank - bRank;
+    });
+
+  return candidates[0]?.port ?? (secure === false ? 1883 : 8883);
+}
+
+function normalizeTopicList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => typeof item === "string" ? item.trim() : "")
+    .filter((item) => item.length > 0);
+}
+
+function normalizeMqttPublishMessages(input: Record<string, unknown>): Array<{
+  topic: string;
+  payload?: string;
+  qos?: 0 | 1 | 2;
+  retain?: boolean;
+}> {
+  const raw = input.publish_messages ?? input.publishMessages;
+  if (Array.isArray(raw)) {
+    return raw
+      .filter(isRecord)
+      .map((item) => {
+        const topic = typeof item.topic === "string" ? item.topic.trim() : "";
+        if (!topic) return undefined;
+        const payload = typeof item.payload === "string"
+          ? item.payload
+          : Array.isArray(item.payload) || isRecord(item.payload)
+            ? JSON.stringify(item.payload)
+            : undefined;
+        const qosValue = Number(item.qos);
+        const qos = qosValue === 0 || qosValue === 1 || qosValue === 2 ? qosValue : undefined;
+        const retain = typeof item.retain === "boolean" ? item.retain : undefined;
+        return { topic, ...(payload !== undefined ? { payload } : {}), ...(qos !== undefined ? { qos } : {}), ...(retain !== undefined ? { retain } : {}) };
+      })
+      .filter((item): item is { topic: string; payload?: string; qos?: 0 | 1 | 2; retain?: boolean } => Boolean(item));
+  }
+
+  const topic = inputString(input, "topic");
+  if (!topic) {
+    return [];
+  }
+  const payloadRaw = input.payload;
+  if (payloadRaw === undefined) {
+    return [];
+  }
+  const payload = typeof payloadRaw === "string"
+    ? payloadRaw
+    : Array.isArray(payloadRaw) || isRecord(payloadRaw)
+      ? JSON.stringify(payloadRaw)
+      : undefined;
+  const qosValue = Number(input.qos);
+  const qos = qosValue === 0 || qosValue === 1 || qosValue === 2 ? qosValue : undefined;
+  const retain = inputBoolean(input, "retain");
+  return [{ topic, ...(payload !== undefined ? { payload } : {}), ...(qos !== undefined ? { qos } : {}), ...(retain !== undefined ? { retain } : {}) }];
+}
+
+function hasMqttPublishInput(input: Record<string, unknown>): boolean {
+  return normalizeMqttPublishMessages(input).length > 0;
 }
 
 function dockerHostTarget(device: Device | undefined, input: Record<string, unknown>): string {
@@ -1179,6 +1581,65 @@ function defaultBrokerRequest(
     };
   }
 
+  if (adapterId === "mqtt" || kind === "mqtt.message") {
+    if (kind !== "mqtt.message") {
+      return undefined;
+    }
+
+    const secure = mqttSecurePreference(input);
+    const port = preferredMqttPort(device, inputPort(input), secure);
+    const resolvedSecure = secure ?? (port === 8883);
+    const publishMessages = normalizeMqttPublishMessages(input);
+    let subscribeTopics = normalizeTopicList(
+      input.subscribe_topics ?? input.subscribeTopics ?? input.topics,
+    );
+    if (subscribeTopics.length === 0 && publishMessages.length === 0) {
+      const singleTopic = inputString(input, "topic");
+      if (singleTopic) {
+        subscribeTopics = [singleTopic];
+      }
+    }
+    if (subscribeTopics.length === 0 && publishMessages.length === 0) {
+      return undefined;
+    }
+
+    const successStrategyRaw = inputString(input, "success_strategy");
+    const successStrategy = successStrategyRaw && ["auto", "transport", "response", "expectation"].includes(successStrategyRaw)
+      ? successStrategyRaw as "auto" | "transport" | "response" | "expectation"
+      : undefined;
+    const username = inputString(input, "username", "mqtt_username");
+    const clientId = inputString(input, "client_id", "mqtt_client_id");
+    const qosValue = Number(input.qos);
+    const qos = qosValue === 0 || qosValue === 1 || qosValue === 2 ? qosValue : undefined;
+    const retain = inputBoolean(input, "retain");
+    const connectTimeoutMs = Number(input.connect_timeout_ms);
+    const responseTimeoutMs = Number(input.response_timeout_ms);
+    const collectMessages = Number(input.collect_messages);
+    const keepaliveSec = Number(input.keepalive_sec);
+    const expectRegex = inputString(input, "expect_regex");
+    const insecureSkipVerify = mqttSkipCertChecksPreference(input);
+
+    return {
+      protocol: "mqtt",
+      scheme: resolvedSecure ? "mqtts" : "mqtt",
+      ...(port ? { port } : {}),
+      ...(clientId ? { clientId } : {}),
+      ...(username ? { username } : {}),
+      ...(typeof input.clean === "boolean" ? { clean: input.clean } : {}),
+      ...(qos !== undefined ? { qos } : {}),
+      ...(retain !== undefined ? { retain } : {}),
+      ...(subscribeTopics.length > 0 ? { subscribeTopics } : {}),
+      ...(publishMessages.length > 0 ? { publishMessages } : {}),
+      ...(Number.isFinite(connectTimeoutMs) ? { connectTimeoutMs: clampInt(connectTimeoutMs, 250, 120_000, 5_000) } : {}),
+      ...(Number.isFinite(responseTimeoutMs) ? { responseTimeoutMs: clampInt(responseTimeoutMs, 250, 120_000, 2_000) } : {}),
+      ...(Number.isFinite(collectMessages) ? { collectMessages: clampInt(collectMessages, 0, 50, 1) } : {}),
+      ...(Number.isFinite(keepaliveSec) ? { keepaliveSec: clampInt(keepaliveSec, 5, 1_200, 30) } : {}),
+      ...(expectRegex ? { expectRegex } : {}),
+      ...(successStrategy ? { successStrategy } : {}),
+      ...(insecureSkipVerify !== undefined ? { insecureSkipVerify } : {}),
+    };
+  }
+
   const sshCapable = adapterId === "ssh" || adapterId === "network-ssh" || adapterId === "shell";
   if (!sshCapable) {
     return undefined;
@@ -1216,10 +1677,12 @@ function buildCommonToolArgumentProperties(): Record<string, unknown> {
     operation_kind: { type: "string", description: "Optional operation override when a skill supports multiple actions." },
     mode: { type: "string", description: "Optional mode override: read or mutate." },
     adapter_id: { type: "string", description: "Optional adapter override when multiple protocols are possible." },
-    protocol: { type: "string", description: "Optional protocol override such as ssh, winrm, docker, snmp, or http-api." },
+    protocol: { type: "string", description: "Optional protocol override such as ssh, winrm, docker, snmp, mqtt, or http-api." },
     port: { type: "integer", description: "Optional management port override for this tool call." },
     secure: { type: "boolean", description: "Optional secure transport hint, such as HTTPS or WinRM over TLS." },
     use_ssl: { type: "boolean", description: "Alias for secure transport where applicable." },
+    client_id: { type: "string", description: "Optional MQTT client id override." },
+    username: { type: "string", description: "Optional protocol username override, such as MQTT username or HTTP basic-auth username." },
     authentication: { type: "string", description: "Optional authentication mode override, such as basic or negotiate for WinRM." },
     winrm_authentication: { type: "string", description: "Optional WinRM authentication mode override." },
     scheme: { type: "string", description: "Optional URL scheme override, typically http or https." },
@@ -1230,6 +1693,31 @@ function buildCommonToolArgumentProperties(): Record<string, unknown> {
     query: { type: "object", description: "Optional HTTP query parameters.", additionalProperties: true },
     body: { type: ["string", "object", "array"], description: "Optional request body for HTTP tools." },
     expect_regex: { type: "string", description: "Optional HTTP response regex expectation." },
+    topic: { type: "string", description: "Optional MQTT topic. If payload is also provided, Steward publishes to this topic; otherwise it subscribes." },
+    subscribe_topics: { type: "array", description: "Optional MQTT topics to subscribe to before waiting for messages.", items: { type: "string" } },
+    publish_messages: {
+      type: "array",
+      description: "Optional MQTT publish messages. Each item may include topic, payload, qos, and retain.",
+      items: {
+        type: "object",
+        properties: {
+          topic: { type: "string" },
+          payload: { type: ["string", "object", "array"] },
+          qos: { type: "integer" },
+          retain: { type: "boolean" },
+        },
+        required: ["topic"],
+        additionalProperties: false,
+      },
+    },
+    payload: { type: ["string", "object", "array"], description: "Optional MQTT payload for single-message publish flows." },
+    qos: { type: "integer", description: "Optional MQTT QoS level (0, 1, or 2)." },
+    retain: { type: "boolean", description: "Optional MQTT retain flag." },
+    collect_messages: { type: "integer", description: "Optional MQTT message collection limit before Steward returns." },
+    connect_timeout_ms: { type: "integer", description: "Optional MQTT connect timeout in milliseconds." },
+    response_timeout_ms: { type: "integer", description: "Optional MQTT response wait window in milliseconds." },
+    keepalive_sec: { type: "integer", description: "Optional MQTT keepalive in seconds." },
+    success_strategy: { type: "string", description: "Optional message success rule: auto, transport, response, expectation." },
     insecure_skip_verify: { type: "boolean", description: "Skip TLS verification for this call when true." },
     skip_cert_checks: { type: "boolean", description: "Skip WinRM certificate checks for this call when true." },
     timeout_ms: { type: "integer", description: "Optional per-call timeout override in milliseconds." },
@@ -1348,7 +1836,10 @@ function buildOperationFromDescriptor(
       ? "snmp"
       : inferAdapterForKind(kind, device));
 
-  const mode = resolveMode(kind, input.mode ?? execution.mode);
+  const requestedMode = input.mode ?? execution.mode;
+  const mode = kind === "mqtt.message" && requestedMode === undefined && hasMqttPublishInput(input)
+    ? "mutate"
+    : resolveMode(kind, requestedMode);
 
   const commandFromInput = typeof input.command_template === "string" ? input.command_template.trim() : "";
   const commandFromKindConfig = execution.commandTemplates?.[kind]?.trim() ?? "";
@@ -1400,7 +1891,21 @@ function buildOperationFromDescriptor(
 }
 
 function actionClassForOperation(operation: OperationSpec): ActionClass {
-  return operation.mode === "read" ? "A" : "C";
+  if (operation.mode === "read") {
+    return "A";
+  }
+  if (
+    operation.kind === "http.request"
+    || operation.kind === "websocket.message"
+    || operation.kind === "mqtt.message"
+    || operation.kind === "service.restart"
+    || operation.kind === "service.stop"
+    || operation.kind === "container.restart"
+    || operation.kind === "container.stop"
+  ) {
+    return "B";
+  }
+  return "C";
 }
 
 function toSkillExecutionConfig(value: unknown): SkillExecutionConfig {
@@ -1493,6 +1998,7 @@ export async function buildAdapterSkillTools(
   options?: {
     attachedDeviceId?: string;
     allowPreOnboardingExecution?: boolean;
+    includeWidgetManagementTool?: boolean;
     provider?: LLMProvider;
     model?: string;
   },
@@ -1524,11 +2030,11 @@ export async function buildAdapterSkillTools(
           return { ok: false, error: readiness.reason, deviceId: device.id };
         }
 
-        if (!options?.allowPreOnboardingExecution && !hasSelectedAccessSurfaceForAdapter(device.id, descriptor.adapterId)) {
+        if (!options?.allowPreOnboardingExecution && !hasSelectedProfileForAdapter(device.id, descriptor.adapterId)) {
           return {
             ok: false,
-            blocked: "binding",
-            error: `Adapter ${descriptor.adapterName} is not selected for ${device.name}. Complete adapter binding in onboarding first.`,
+            blocked: "profile",
+            error: `Profile ${descriptor.adapterName} is not selected for ${device.name}. Complete onboarding and select the matching management profile first.`,
           };
         }
 
@@ -1644,6 +2150,127 @@ export async function buildAdapterSkillTools(
     });
   }
 
+  tools.steward_device_identity = dynamicTool({
+    description: "Inspect Steward's stored local identity evidence for a device. Returns MAC, hostname, vendor hints, discovery evidence, recent DHCP/browser/packet signals, and candidate router/gateway devices for DHCP-client correlation. Use this before public web research or asking the user to identify a private-network device manually.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        device_id: { type: "string", description: "Target device id, name, or IP. Optional when chat is attached to a device." },
+        observation_window_minutes: {
+          type: "integer",
+          description: "How far back to read recent discovery observations. Defaults to 720 minutes.",
+        },
+        include_router_candidates: {
+          type: "boolean",
+          description: "Include likely router/gateway devices that can be queried for lease/client tables.",
+        },
+      },
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const device = await resolveDeviceByTarget(
+        inputString(args, "device_id"),
+        options?.attachedDeviceId,
+      );
+      if (!device) {
+        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+      }
+
+      const readiness = validateDeviceReadyForContractToolUse(device);
+      if (!readiness.ok) {
+        return { ok: false, error: readiness.reason, deviceId: device.id };
+      }
+
+      const observationWindowMinutes = clampInt(args.observation_window_minutes, 5, 10_080, 720);
+      const observations = getRecentDiscoveryObservationsForDevice(device, observationWindowMinutes, 10);
+      const hints = buildDiscoveryHintBuckets(observations);
+      const discovery = isRecord(device.metadata.discovery) ? device.metadata.discovery : {};
+      const classification = isRecord(device.metadata.classification) ? device.metadata.classification : {};
+      const browserObservation = isRecord(device.metadata.browserObservation) ? device.metadata.browserObservation : {};
+      const fingerprint = isRecord(device.metadata.fingerprint) ? device.metadata.fingerprint : {};
+      const routerCandidates = inputBoolean(args, "include_router_candidates") === false
+        ? []
+        : await buildRouterCandidateSummaries(device, 5);
+
+      return {
+        ok: true,
+        deviceId: device.id,
+        deviceName: device.name,
+        ip: device.ip,
+        secondaryIps: device.secondaryIps ?? [],
+        mac: device.mac ?? null,
+        hostname: device.hostname ?? null,
+        vendor: device.vendor ?? null,
+        os: device.os ?? null,
+        role: device.role ?? null,
+        type: device.type,
+        status: device.status,
+        protocols: device.protocols.slice(0, 12),
+        services: device.services.slice(0, 12).map((service) => ({
+          name: service.name,
+          port: service.port,
+          transport: service.transport,
+          secure: service.secure,
+          product: service.product ?? null,
+          version: service.version ?? null,
+        })),
+        discovery: {
+          confidence: typeof discovery.confidence === "number" ? discovery.confidence : null,
+          evidenceTypes: Array.isArray(discovery.evidenceTypes)
+            ? discovery.evidenceTypes.filter((value): value is string => typeof value === "string").slice(0, 12)
+            : [],
+          observationCount: typeof discovery.observationCount === "number" ? discovery.observationCount : null,
+          sourceCounts: isRecord(discovery.sourceCounts) ? discovery.sourceCounts : {},
+        },
+        classification: {
+          confidence: typeof classification.confidence === "number" ? classification.confidence : null,
+          signals: Array.isArray(classification.signals)
+            ? classification.signals
+              .filter((value): value is Record<string, unknown> => isRecord(value))
+              .slice(0, 6)
+              .map((signal) => ({
+                source: typeof signal.source === "string" ? signal.source : null,
+                type: typeof signal.type === "string" ? signal.type : null,
+                reason: typeof signal.reason === "string" ? signal.reason : null,
+              }))
+            : [],
+        },
+        fingerprint: {
+          inferredOs: typeof fingerprint.inferredOs === "string" ? fingerprint.inferredOs : null,
+          inferredProduct: typeof fingerprint.inferredProduct === "string" ? fingerprint.inferredProduct : null,
+          sshBanner: typeof fingerprint.sshBanner === "string" ? fingerprint.sshBanner : null,
+        },
+        browserObservation: {
+          endpoints: Array.isArray(browserObservation.endpoints)
+            ? browserObservation.endpoints
+              .filter((value): value is Record<string, unknown> => isRecord(value))
+              .slice(0, 4)
+              .map((endpoint) => ({
+                url: typeof endpoint.url === "string" ? endpoint.url : null,
+                finalUrl: typeof endpoint.finalUrl === "string" ? endpoint.finalUrl : null,
+                title: typeof endpoint.title === "string" ? endpoint.title : null,
+                vendorHints: Array.isArray(endpoint.vendorHints)
+                  ? endpoint.vendorHints.filter((value): value is string => typeof value === "string").slice(0, 3)
+                  : [],
+              }))
+            : [],
+        },
+        recentObservationWindowMinutes: observationWindowMinutes,
+        recentObservations: observations.slice(0, 12).map((observation) => ({
+          ip: observation.ip,
+          evidenceType: observation.evidenceType,
+          source: observation.source,
+          confidence: observation.confidence,
+          observedAt: observation.observedAt,
+          summary: summarizeDiscoveryObservation(observation),
+        })),
+        hints,
+        routerCandidates,
+      };
+    },
+  });
+
   tools.steward_shell_read = dynamicTool({
     description: "Run an investigative read-only command over SSH/WinRM/Docker. Use port for non-default management ports instead of embedding ssh wrappers in the command.",
     inputSchema: jsonSchema({
@@ -1667,9 +2294,7 @@ export async function buildAdapterSkillTools(
         return { ok: false, error: "Valid device_id is required." };
       }
 
-      const readiness = validateDeviceReadyForToolUse(device, {
-        allowPreOnboardingExecution: options?.allowPreOnboardingExecution,
-      });
+      const readiness = validateDeviceReadyForContractToolUse(device);
       if (!readiness.ok) {
         return { ok: false, error: readiness.reason, deviceId: device.id };
       }
@@ -1749,6 +2374,138 @@ export async function buildAdapterSkillTools(
     },
   });
 
+  tools.steward_mqtt_exchange = dynamicTool({
+    description: "Run a native MQTT or MQTTS exchange against a device using stored Steward credentials when available. Use subscribe_topics for telemetry reads, publish_messages for commands, or both for request/response flows.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        device_id: { type: "string", description: "Target device id, name, or IP." },
+        mode: { type: "string", enum: ["read", "mutate"], description: "Optional mode override. Defaults to mutate when publish_messages is provided." },
+        port: { type: "integer", description: "Optional MQTT port override." },
+        secure: { type: "boolean", description: "Optional secure transport override. True uses MQTTS." },
+        use_ssl: { type: "boolean", description: "Alias for secure transport." },
+        scheme: { type: "string", enum: ["mqtt", "mqtts"], description: "Optional MQTT scheme override." },
+        username: { type: "string", description: "Optional MQTT username override. Stored credential accountLabel is used when present." },
+        client_id: { type: "string", description: "Optional MQTT client id override." },
+        topic: { type: "string", description: "Single MQTT topic. If payload is provided Steward publishes to it, otherwise Steward subscribes to it." },
+        payload: { type: ["string", "object", "array"], description: "Optional MQTT payload for the single-topic shorthand." },
+        subscribe_topics: { type: "array", items: { type: "string" }, description: "Optional MQTT topics to subscribe to before waiting for messages." },
+        publish_messages: {
+          type: "array",
+          description: "Optional MQTT publish messages. Each item may include topic, payload, qos, and retain.",
+          items: {
+            type: "object",
+            properties: {
+              topic: { type: "string" },
+              payload: { type: ["string", "object", "array"] },
+              qos: { type: "integer" },
+              retain: { type: "boolean" },
+            },
+            required: ["topic"],
+            additionalProperties: false,
+          },
+        },
+        qos: { type: "integer", description: "Optional default MQTT QoS level (0, 1, or 2)." },
+        retain: { type: "boolean", description: "Optional default retain flag." },
+        collect_messages: { type: "integer", description: "Optional number of MQTT messages to collect before returning." },
+        connect_timeout_ms: { type: "integer", description: "Optional MQTT connect timeout in milliseconds." },
+        response_timeout_ms: { type: "integer", description: "Optional MQTT response wait window in milliseconds." },
+        keepalive_sec: { type: "integer", description: "Optional MQTT keepalive in seconds." },
+        expect_regex: { type: "string", description: "Optional regex that must match the collected MQTT payloads." },
+        success_strategy: {
+          type: "string",
+          enum: ["auto", "transport", "response", "expectation"],
+          description: "Optional success rule override. Use response or expectation for request/response protocols.",
+        },
+        insecure_skip_verify: { type: "boolean", description: "Skip MQTT TLS certificate verification when true." },
+      },
+      required: ["device_id"],
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const device = await resolveDeviceByTarget(
+        typeof args.device_id === "string" ? args.device_id : undefined,
+        options?.attachedDeviceId,
+      );
+      if (!device) {
+        return { ok: false, error: "Valid device_id is required." };
+      }
+
+      const readiness = validateDeviceReadyForContractToolUse(device);
+      if (!readiness.ok) {
+        return { ok: false, error: readiness.reason, deviceId: device.id };
+      }
+
+      const requestedMode = args.mode === "read" || args.mode === "mutate" ? args.mode : undefined;
+      const mode = requestedMode ?? (hasMqttPublishInput(args) ? "mutate" : "read");
+      const brokerRequest = defaultBrokerRequest("mqtt.message", "mqtt", args, device);
+      if (!brokerRequest || brokerRequest.protocol !== "mqtt") {
+        return {
+          ok: false,
+          error: "MQTT exchange requires at least one topic to subscribe to or a publish_messages entry to send.",
+          deviceId: device.id,
+        };
+      }
+
+      const timeoutMs = clampInt(args.timeout_ms, 1_000, 120_000, mode === "mutate" ? 15_000 : 10_000);
+      const actionClass: ActionClass = mode === "read" ? "A" : "B";
+      const operation = makeOperation(
+        "mqtt.message",
+        "mqtt",
+        mode,
+        undefined,
+        "steward_mqtt_exchange:mqtt",
+        timeoutMs,
+        brokerRequest,
+      );
+
+      const policy = evaluatePolicy(
+        actionClass,
+        device,
+        stateStore.getPolicyRules(),
+        stateStore.getMaintenanceWindows(),
+        {
+          blastRadius: "single-device",
+          criticality: "low",
+          lane: "A",
+          recentFailures: 0,
+          quarantineActive: false,
+        },
+      );
+
+      const execution = await executeOperationWithGates(operation, device, {
+        actor: "user",
+        lane: "A",
+        actionClass,
+        blastRadius: "single-device",
+        policyDecision: policy.decision,
+        policyReason: policy.reason,
+        approved: true,
+        expectedStateHash: computeDeviceStateHash(device),
+        runtimeSettings: stateStore.getRuntimeSettings(),
+        recentFailures: 0,
+        quarantineActive: false,
+        allowUnauthenticated: options?.allowPreOnboardingExecution === true,
+        allowProvidedCredentials: true,
+        idempotencySeed: `steward_mqtt_exchange:${device.id}:${nowIso()}`,
+        params: {},
+      });
+
+      return {
+        ok: execution.ok,
+        deviceId: device.id,
+        deviceName: device.name,
+        adapterId: "mqtt",
+        summary: execution.summary,
+        reason: execution.ok ? undefined : execution.summary,
+        output: execution.output,
+        details: execution.details,
+        gates: execution.gateResults,
+      };
+    },
+  });
+
   tools.steward_deep_probe = dynamicTool({
     description: "Run deep device identification (fingerprint + nmap scripts + browser observation + packet intel).",
     inputSchema: jsonSchema({
@@ -1773,9 +2530,7 @@ export async function buildAdapterSkillTools(
         return { ok: false, error: "Valid device_id is required." };
       }
 
-      const readiness = validateDeviceReadyForToolUse(device, {
-        allowPreOnboardingExecution: options?.allowPreOnboardingExecution,
-      });
+      const readiness = validateDeviceReadyForContractToolUse(device);
       if (!readiness.ok) {
         return { ok: false, error: readiness.reason, deviceId: device.id };
       }
@@ -2047,6 +2802,761 @@ export async function buildAdapterSkillTools(
         observations: mergedObservations.length,
         services: updatedDevice.services.map((service) => `${service.name}:${service.port}`),
         summary,
+      };
+    },
+  });
+
+  tools.steward_complete_onboarding = dynamicTool({
+    description: "Commit onboarding for a device by selecting the management profile, accepted access methods, and the workloads and assurances Steward will own.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        device_id: {
+          type: "string",
+          description: "Target device id, name, or IP. Optional when chat is attached to a device.",
+        },
+        summary: {
+          type: "string",
+          description: "Short operator-facing summary of the committed responsibility contract.",
+        },
+        profile_ids: {
+          type: "array",
+          items: { type: "string" },
+          description: "Selected device profile ids to activate.",
+        },
+        access_method_keys: {
+          type: "array",
+          items: { type: "string" },
+          description: "Accepted access method keys such as ssh:22 or mqtt:8883.",
+        },
+        workloads: {
+          type: "array",
+          description: "Committed workloads Steward will own after onboarding.",
+          items: {
+            type: "object",
+            properties: {
+              workloadKey: { type: "string" },
+              displayName: { type: "string" },
+              category: { type: "string" },
+              criticality: { type: "string", enum: ["low", "medium", "high"] },
+              summary: { type: "string" },
+            },
+            required: ["workloadKey", "displayName", "criticality"],
+            additionalProperties: false,
+          },
+        },
+        assurances: {
+          type: "array",
+          description: "Committed assurances/checks Steward will keep running for the device.",
+          items: {
+            type: "object",
+            properties: {
+              assuranceKey: { type: "string" },
+              workloadKey: { type: "string" },
+              displayName: { type: "string" },
+              criticality: { type: "string", enum: ["low", "medium", "high"] },
+              desiredState: { type: "string", enum: ["running", "stopped"] },
+              checkIntervalSec: { type: "integer" },
+              monitorType: { type: "string" },
+              requiredProtocols: {
+                type: "array",
+                items: { type: "string" },
+              },
+              rationale: { type: "string" },
+            },
+            required: ["assuranceKey", "displayName", "criticality", "checkIntervalSec"],
+            additionalProperties: false,
+          },
+        },
+        residual_unknowns: {
+          type: "array",
+          items: { type: "string" },
+          description: "Any explicitly acknowledged unknowns or follow-up risks that remain after completion.",
+        },
+      },
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const device = await resolveDeviceByTarget(
+        inputString(args, "device_id"),
+        options?.attachedDeviceId,
+      );
+      if (!device) {
+        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+      }
+
+      const snapshot = await completeDeviceOnboarding({
+        deviceId: device.id,
+        summary: inputString(args, "summary") ?? undefined,
+        selectedProfileIds: Array.isArray(args.profile_ids)
+          ? args.profile_ids.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+          : undefined,
+        selectedAccessMethodKeys: Array.isArray(args.access_method_keys)
+          ? args.access_method_keys.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+          : undefined,
+        workloads: Array.isArray(args.workloads)
+          ? args.workloads
+            .filter(isRecord)
+            .map((entry) => ({
+              workloadKey: inputString(entry, "workloadKey") ?? "",
+              displayName: inputString(entry, "displayName") ?? "",
+              category: (inputString(entry, "category") ?? "unknown") as OnboardingDraftWorkload["category"],
+              criticality: inputString(entry, "criticality") === "high" || inputString(entry, "criticality") === "low"
+                ? inputString(entry, "criticality") as "low" | "medium" | "high"
+                : "medium",
+              summary: inputString(entry, "summary") ?? undefined,
+            }))
+          : undefined,
+        assurances: Array.isArray(args.assurances)
+          ? args.assurances
+            .filter(isRecord)
+            .map((entry) => ({
+              assuranceKey: inputString(entry, "assuranceKey") ?? "",
+              workloadKey: inputString(entry, "workloadKey") ?? undefined,
+              displayName: inputString(entry, "displayName") ?? "",
+              criticality: inputString(entry, "criticality") === "high" || inputString(entry, "criticality") === "low"
+                ? inputString(entry, "criticality") as "low" | "medium" | "high"
+                : "medium",
+              desiredState: (inputString(entry, "desiredState") === "stopped" ? "stopped" : "running") as OnboardingDraftAssurance["desiredState"],
+              checkIntervalSec: clampInt(entry.checkIntervalSec, 15, 3600, 120),
+              monitorType: inputString(entry, "monitorType") ?? undefined,
+              requiredProtocols: Array.isArray(entry.requiredProtocols)
+                ? entry.requiredProtocols.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+                : [],
+              rationale: inputString(entry, "rationale") ?? undefined,
+            }))
+          : undefined,
+        residualUnknowns: Array.isArray(args.residual_unknowns)
+          ? args.residual_unknowns.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+          : undefined,
+        actor: "user",
+      });
+
+      return {
+        ok: true,
+        deviceId: device.id,
+        deviceName: device.name,
+        runId: snapshot.run?.id,
+        onboardingStatus: snapshot.run?.status,
+        selectedProfiles: snapshot.profiles
+          .filter((profile) => ["selected", "verified", "active"].includes(profile.status))
+          .map((profile) => ({
+            profileId: profile.profileId,
+            name: profile.name,
+            status: profile.status,
+          })),
+        selectedAccessMethods: snapshot.accessMethods
+          .filter((method) => method.selected)
+          .map((method) => ({
+            key: method.key,
+            kind: method.kind,
+            title: method.title,
+            status: method.status,
+          })),
+        workloadsCommitted: snapshot.workloads.length,
+        assurancesCommitted: snapshot.assurances.length,
+        summary: snapshot.run?.summary ?? snapshot.draft?.summary ?? `Onboarding completed for ${device.name}.`,
+        residualUnknowns: snapshot.draft?.residualUnknowns ?? [],
+      };
+    },
+  });
+
+  tools.steward_list_contract = dynamicTool({
+    description: "Read the committed Steward contract for a device, including responsibilities and assurances. Use this before editing or deleting contract items when ids or exact names are unclear.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        device_id: {
+          type: "string",
+          description: "Target device id, name, or IP. Optional when chat is attached to a device.",
+        },
+      },
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const device = await resolveDeviceByTarget(
+        inputString(args, "device_id"),
+        options?.attachedDeviceId,
+      );
+      if (!device) {
+        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+      }
+
+      const readiness = validateDeviceReadyForContractToolUse(device);
+      if (!readiness.ok) {
+        return { ok: false, error: readiness.reason, deviceId: device.id };
+      }
+
+      const snapshot = buildContractSnapshotPayload(device.id);
+      return {
+        ok: true,
+        deviceId: device.id,
+        deviceName: device.name,
+        summary: summarizeDeviceContractForPrompt(device.id),
+        responsibilityCount: snapshot.responsibilities.length,
+        assuranceCount: snapshot.assurances.length,
+        responsibilities: snapshot.responsibilities,
+        assurances: snapshot.assurances,
+      };
+    },
+  });
+
+  tools.steward_add_responsibility = dynamicTool({
+    description: "Add a committed Steward responsibility for the attached device. Use this after enabling or installing something new that Steward should own ongoing.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        device_id: {
+          type: "string",
+          description: "Target device id, name, or IP. Optional when chat is attached to a device.",
+        },
+        display_name: {
+          type: "string",
+          description: "Operator-facing name for the responsibility, for example Plex Media Server or Printer availability.",
+        },
+        responsibility_key: {
+          type: "string",
+          description: "Optional stable key. If omitted, Steward derives one from the display name.",
+        },
+        category: {
+          type: "string",
+          enum: ["application", "platform", "data", "network", "perimeter", "storage", "telemetry", "background", "unknown"],
+          description: "Responsibility category. Optional; Steward can infer a reasonable default.",
+        },
+        criticality: {
+          type: "string",
+          enum: ["low", "medium", "high"],
+          description: "Operational importance. Defaults to medium.",
+        },
+        summary: {
+          type: "string",
+          description: "Optional one-paragraph summary of what Steward is responsible for.",
+        },
+      },
+      required: ["display_name"],
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const displayName = inputString(args, "display_name", "name");
+      if (!displayName) {
+        return { ok: false, error: "display_name is required." };
+      }
+
+      const device = await resolveDeviceByTarget(
+        inputString(args, "device_id"),
+        options?.attachedDeviceId,
+      );
+      if (!device) {
+        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+      }
+
+      const readiness = validateDeviceReadyForContractToolUse(device);
+      if (!readiness.ok) {
+        return { ok: false, error: readiness.reason, deviceId: device.id };
+      }
+
+      const responsibility = await createResponsibility({
+        device,
+        displayName,
+        workloadKey: inputString(args, "responsibility_key", "workload_key"),
+        category: parseWorkloadCategory(args.category),
+        criticality: parseCriticality(args.criticality),
+        summary: inputString(args, "summary"),
+        metadata: {
+          actor: "user",
+          workloadSource: "operator",
+          method: "assistant_tool",
+          origin: "chat_contract_tool",
+        },
+      });
+      const snapshot = buildContractSnapshotPayload(device.id);
+
+      return {
+        ok: true,
+        deviceId: device.id,
+        deviceName: device.name,
+        responsibility: summarizeResponsibilityEntry(responsibility),
+        responsibilityCount: snapshot.responsibilities.length,
+        assuranceCount: snapshot.assurances.length,
+        responsibilities: snapshot.responsibilities,
+      };
+    },
+  });
+
+  tools.steward_update_responsibility = dynamicTool({
+    description: "Edit a committed Steward responsibility by id, key, or exact display name.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        device_id: {
+          type: "string",
+          description: "Target device id, name, or IP. Optional when chat is attached to a device.",
+        },
+        responsibility_id: { type: "string" },
+        responsibility_key: { type: "string" },
+        responsibility_name: { type: "string", description: "Exact current display name when id/key are unknown." },
+        display_name: { type: "string", description: "New display name." },
+        category: {
+          type: "string",
+          enum: ["application", "platform", "data", "network", "perimeter", "storage", "telemetry", "background", "unknown"],
+        },
+        criticality: {
+          type: "string",
+          enum: ["low", "medium", "high"],
+        },
+        summary: { type: "string", description: "Replacement summary text." },
+        clear_summary: { type: "boolean", description: "Clear the current summary." },
+      },
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const device = await resolveDeviceByTarget(
+        inputString(args, "device_id"),
+        options?.attachedDeviceId,
+      );
+      if (!device) {
+        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+      }
+
+      const readiness = validateDeviceReadyForContractToolUse(device);
+      if (!readiness.ok) {
+        return { ok: false, error: readiness.reason, deviceId: device.id };
+      }
+
+      const resolved = resolveResponsibilityForDevice(device.id, {
+        id: inputString(args, "responsibility_id"),
+        key: inputString(args, "responsibility_key"),
+        name: inputString(args, "responsibility_name"),
+      });
+      if (!resolved.ok || !resolved.value) {
+        return {
+          ok: false,
+          error: resolved.error ?? "Responsibility not found.",
+          matches: resolved.matches ?? [],
+        };
+      }
+
+      const responsibility = await updateResponsibility({
+        device,
+        responsibility: resolved.value,
+        displayName: inputString(args, "display_name"),
+        category: parseWorkloadCategory(args.category),
+        criticality: parseCriticality(args.criticality),
+        summary: inputString(args, "summary"),
+        clearSummary: inputBoolean(args, "clear_summary") === true,
+        metadata: {
+          actor: "user",
+          workloadSource: "operator",
+          method: "assistant_tool",
+          origin: "chat_contract_tool",
+        },
+      });
+      const snapshot = buildContractSnapshotPayload(device.id);
+
+      return {
+        ok: true,
+        deviceId: device.id,
+        deviceName: device.name,
+        responsibility: summarizeResponsibilityEntry(responsibility),
+        responsibilityCount: snapshot.responsibilities.length,
+        assuranceCount: snapshot.assurances.length,
+        responsibilities: snapshot.responsibilities,
+      };
+    },
+  });
+
+  tools.steward_delete_responsibility = dynamicTool({
+    description: "Delete a committed Steward responsibility by id, key, or exact display name. Any linked assurances are deleted with it.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        device_id: {
+          type: "string",
+          description: "Target device id, name, or IP. Optional when chat is attached to a device.",
+        },
+        responsibility_id: { type: "string" },
+        responsibility_key: { type: "string" },
+        responsibility_name: { type: "string", description: "Exact current display name when id/key are unknown." },
+      },
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const device = await resolveDeviceByTarget(
+        inputString(args, "device_id"),
+        options?.attachedDeviceId,
+      );
+      if (!device) {
+        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+      }
+
+      const readiness = validateDeviceReadyForContractToolUse(device);
+      if (!readiness.ok) {
+        return { ok: false, error: readiness.reason, deviceId: device.id };
+      }
+
+      const resolved = resolveResponsibilityForDevice(device.id, {
+        id: inputString(args, "responsibility_id"),
+        key: inputString(args, "responsibility_key"),
+        name: inputString(args, "responsibility_name"),
+      });
+      if (!resolved.ok || !resolved.value) {
+        return {
+          ok: false,
+          error: resolved.error ?? "Responsibility not found.",
+          matches: resolved.matches ?? [],
+        };
+      }
+
+      const deleted = await deleteResponsibility({
+        device,
+        responsibility: resolved.value,
+        metadata: {
+          actor: "user",
+          workloadSource: "operator",
+          method: "assistant_tool",
+          origin: "chat_contract_tool",
+        },
+      });
+      const snapshot = buildContractSnapshotPayload(device.id);
+
+      return {
+        ok: true,
+        deviceId: device.id,
+        deviceName: device.name,
+        deletedResponsibility: summarizeResponsibilityEntry(deleted.responsibility),
+        deletedAssuranceCount: deleted.deletedAssuranceCount,
+        responsibilityCount: snapshot.responsibilities.length,
+        assuranceCount: snapshot.assurances.length,
+        responsibilities: snapshot.responsibilities,
+        assurances: snapshot.assurances,
+      };
+    },
+  });
+
+  tools.steward_add_assurance = dynamicTool({
+    description: "Add a committed Steward assurance for the attached device. Link it to an existing responsibility so Steward knows what outcome it is protecting.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        device_id: {
+          type: "string",
+          description: "Target device id, name, or IP. Optional when chat is attached to a device.",
+        },
+        display_name: {
+          type: "string",
+          description: "Operator-facing assurance name, for example Plex HTTP reachability or Print failure alert.",
+        },
+        assurance_key: {
+          type: "string",
+          description: "Optional stable key. If omitted, Steward derives one from the display name.",
+        },
+        responsibility_id: { type: "string" },
+        responsibility_key: { type: "string" },
+        responsibility_name: { type: "string", description: "Exact existing responsibility name when id/key are unknown." },
+        criticality: {
+          type: "string",
+          enum: ["low", "medium", "high"],
+          description: "Operational importance. Defaults to medium.",
+        },
+        desired_state: {
+          type: "string",
+          enum: ["running", "stopped"],
+          description: "Desired enforcement state. Defaults to running.",
+        },
+        check_interval_sec: {
+          type: "integer",
+          description: "Evaluation interval in seconds. Defaults to 120.",
+        },
+        monitor_type: {
+          type: "string",
+          description: "Optional monitor type such as http, mqtt, or process.",
+        },
+        required_protocols: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional protocols Steward needs to perform the check.",
+        },
+        rationale: {
+          type: "string",
+          description: "Optional explanation of what the assurance protects or why it matters.",
+        },
+      },
+      required: ["display_name"],
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const displayName = inputString(args, "display_name", "name");
+      if (!displayName) {
+        return { ok: false, error: "display_name is required." };
+      }
+
+      const device = await resolveDeviceByTarget(
+        inputString(args, "device_id"),
+        options?.attachedDeviceId,
+      );
+      if (!device) {
+        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+      }
+
+      const readiness = validateDeviceReadyForContractToolUse(device);
+      if (!readiness.ok) {
+        return { ok: false, error: readiness.reason, deviceId: device.id };
+      }
+
+      const responsibilitySelector = {
+        id: inputString(args, "responsibility_id"),
+        key: inputString(args, "responsibility_key"),
+        name: inputString(args, "responsibility_name"),
+      };
+      const hasResponsibilitySelector = Boolean(
+        responsibilitySelector.id || responsibilitySelector.key || responsibilitySelector.name,
+      );
+      if (!hasResponsibilitySelector) {
+        return {
+          ok: false,
+          error: "Link the assurance to an existing responsibility with responsibility_id, responsibility_key, or responsibility_name. Add the responsibility first if needed.",
+        };
+      }
+
+      const resolvedResponsibility = resolveResponsibilityForDevice(device.id, responsibilitySelector);
+      if (!resolvedResponsibility.ok || !resolvedResponsibility.value) {
+        return {
+          ok: false,
+          error: resolvedResponsibility.error ?? "Responsibility not found.",
+          matches: resolvedResponsibility.matches ?? [],
+        };
+      }
+
+      const assurance = await createAssurance({
+        device,
+        displayName,
+        assuranceKey: inputString(args, "assurance_key"),
+        workloadId: resolvedResponsibility.value.id,
+        criticality: parseCriticality(args.criticality),
+        desiredState: parseDesiredState(args.desired_state),
+        checkIntervalSec: clampInt(args.check_interval_sec, 15, 3600, 120),
+        monitorType: inputString(args, "monitor_type"),
+        requiredProtocols: inputStringArray(args, "required_protocols"),
+        rationale: inputString(args, "rationale"),
+        metadata: {
+          actor: "user",
+          workloadSource: "operator",
+          method: "assistant_tool",
+          origin: "chat_contract_tool",
+        },
+      });
+      const snapshot = buildContractSnapshotPayload(device.id);
+
+      return {
+        ok: true,
+        deviceId: device.id,
+        deviceName: device.name,
+        assurance: summarizeAssuranceEntry(
+          assurance,
+          new Map(stateStore.getWorkloads(device.id).map((item) => [item.id, item])),
+        ),
+        responsibilityCount: snapshot.responsibilities.length,
+        assuranceCount: snapshot.assurances.length,
+        assurances: snapshot.assurances,
+      };
+    },
+  });
+
+  tools.steward_update_assurance = dynamicTool({
+    description: "Edit a committed Steward assurance by id, key, or exact display name.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        device_id: {
+          type: "string",
+          description: "Target device id, name, or IP. Optional when chat is attached to a device.",
+        },
+        assurance_id: { type: "string" },
+        assurance_key: { type: "string" },
+        assurance_name: { type: "string", description: "Exact current assurance name when id/key are unknown." },
+        display_name: { type: "string", description: "New display name." },
+        responsibility_id: { type: "string", description: "Move this assurance to another existing responsibility." },
+        responsibility_key: { type: "string", description: "Move this assurance to another existing responsibility." },
+        responsibility_name: { type: "string", description: "Exact name of another existing responsibility." },
+        criticality: {
+          type: "string",
+          enum: ["low", "medium", "high"],
+        },
+        desired_state: {
+          type: "string",
+          enum: ["running", "stopped"],
+        },
+        check_interval_sec: { type: "integer" },
+        monitor_type: { type: "string" },
+        clear_monitor_type: { type: "boolean" },
+        required_protocols: {
+          type: "array",
+          items: { type: "string" },
+        },
+        clear_required_protocols: { type: "boolean" },
+        rationale: { type: "string" },
+        clear_rationale: { type: "boolean" },
+      },
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const device = await resolveDeviceByTarget(
+        inputString(args, "device_id"),
+        options?.attachedDeviceId,
+      );
+      if (!device) {
+        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+      }
+
+      const readiness = validateDeviceReadyForContractToolUse(device);
+      if (!readiness.ok) {
+        return { ok: false, error: readiness.reason, deviceId: device.id };
+      }
+
+      const resolvedAssurance = resolveAssuranceForDevice(device.id, {
+        id: inputString(args, "assurance_id"),
+        key: inputString(args, "assurance_key"),
+        name: inputString(args, "assurance_name"),
+      });
+      if (!resolvedAssurance.ok || !resolvedAssurance.value) {
+        return {
+          ok: false,
+          error: resolvedAssurance.error ?? "Assurance not found.",
+          matches: resolvedAssurance.matches ?? [],
+        };
+      }
+
+      let targetResponsibilityId: string | undefined;
+      const responsibilitySelector = {
+        id: inputString(args, "responsibility_id"),
+        key: inputString(args, "responsibility_key"),
+        name: inputString(args, "responsibility_name"),
+      };
+      if (responsibilitySelector.id || responsibilitySelector.key || responsibilitySelector.name) {
+        const resolvedResponsibility = resolveResponsibilityForDevice(device.id, responsibilitySelector);
+        if (!resolvedResponsibility.ok || !resolvedResponsibility.value) {
+          return {
+            ok: false,
+            error: resolvedResponsibility.error ?? "Responsibility not found.",
+            matches: resolvedResponsibility.matches ?? [],
+          };
+        }
+        targetResponsibilityId = resolvedResponsibility.value.id;
+      }
+
+      const assurance = await updateAssurance({
+        device,
+        assurance: resolvedAssurance.value,
+        workloadId: targetResponsibilityId,
+        displayName: inputString(args, "display_name"),
+        criticality: parseCriticality(args.criticality),
+        desiredState: parseDesiredState(args.desired_state),
+        checkIntervalSec: typeof args.check_interval_sec === "number"
+          ? clampInt(args.check_interval_sec, 15, 3600, resolvedAssurance.value.checkIntervalSec)
+          : undefined,
+        monitorType: inputString(args, "monitor_type"),
+        clearMonitorType: inputBoolean(args, "clear_monitor_type") === true,
+        requiredProtocols: inputStringArray(args, "required_protocols"),
+        clearRequiredProtocols: inputBoolean(args, "clear_required_protocols") === true,
+        rationale: inputString(args, "rationale"),
+        clearRationale: inputBoolean(args, "clear_rationale") === true,
+        metadata: {
+          actor: "user",
+          workloadSource: "operator",
+          method: "assistant_tool",
+          origin: "chat_contract_tool",
+        },
+      });
+      const snapshot = buildContractSnapshotPayload(device.id);
+
+      return {
+        ok: true,
+        deviceId: device.id,
+        deviceName: device.name,
+        assurance: summarizeAssuranceEntry(
+          assurance,
+          new Map(stateStore.getWorkloads(device.id).map((item) => [item.id, item])),
+        ),
+        responsibilityCount: snapshot.responsibilities.length,
+        assuranceCount: snapshot.assurances.length,
+        assurances: snapshot.assurances,
+      };
+    },
+  });
+
+  tools.steward_delete_assurance = dynamicTool({
+    description: "Delete a committed Steward assurance by id, key, or exact display name.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        device_id: {
+          type: "string",
+          description: "Target device id, name, or IP. Optional when chat is attached to a device.",
+        },
+        assurance_id: { type: "string" },
+        assurance_key: { type: "string" },
+        assurance_name: { type: "string", description: "Exact current assurance name when id/key are unknown." },
+      },
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const device = await resolveDeviceByTarget(
+        inputString(args, "device_id"),
+        options?.attachedDeviceId,
+      );
+      if (!device) {
+        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+      }
+
+      const readiness = validateDeviceReadyForContractToolUse(device);
+      if (!readiness.ok) {
+        return { ok: false, error: readiness.reason, deviceId: device.id };
+      }
+
+      const resolved = resolveAssuranceForDevice(device.id, {
+        id: inputString(args, "assurance_id"),
+        key: inputString(args, "assurance_key"),
+        name: inputString(args, "assurance_name"),
+      });
+      if (!resolved.ok || !resolved.value) {
+        return {
+          ok: false,
+          error: resolved.error ?? "Assurance not found.",
+          matches: resolved.matches ?? [],
+        };
+      }
+
+      const assurance = await deleteAssurance({
+        device,
+        assurance: resolved.value,
+        metadata: {
+          actor: "user",
+          workloadSource: "operator",
+          method: "assistant_tool",
+          origin: "chat_contract_tool",
+        },
+      });
+      const snapshot = buildContractSnapshotPayload(device.id);
+
+      return {
+        ok: true,
+        deviceId: device.id,
+        deviceName: device.name,
+        deletedAssurance: summarizeAssuranceEntry(
+          assurance,
+          new Map(stateStore.getWorkloads(device.id).map((item) => [item.id, item])),
+        ),
+        responsibilityCount: snapshot.responsibilities.length,
+        assuranceCount: snapshot.assurances.length,
+        assurances: snapshot.assurances,
       };
     },
   });
@@ -2711,11 +4221,12 @@ export async function buildAdapterSkillTools(
       const inputName = inputString(args, "name");
       const inputCategory = inputString(args, "category");
       const nextNameRaw = inputName ?? (inferName ? inferManageableDeviceName(device) : null);
-      const normalizedName = typeof nextNameRaw === "string" ? normalizeDeviceNameInput(nextNameRaw) : null;
-      if (normalizedName !== null && !isAcceptableDeviceName(normalizedName)) {
+      const normalizedName = typeof nextNameRaw === "string" ? normalizeDeviceName(nextNameRaw) : null;
+      const nameValidationError = normalizedName !== null ? getDeviceNameValidationError(normalizedName) : null;
+      if (nameValidationError) {
         return {
           ok: false,
-          error: `Invalid device name '${normalizedName}'. Provide a specific name (not placeholders like 'this').`,
+          error: `Invalid device name '${normalizedName}'. ${nameValidationError}`,
           deviceId: device.id,
         };
       }
@@ -2859,269 +4370,271 @@ export async function buildAdapterSkillTools(
     },
   });
 
-  tools.steward_manage_widget = dynamicTool({
-    description: "Create, inspect, revise, save, list, or delete persistent device widgets for a device page. Use this for remotes, dashboards, control panels, and operational panels. Inspect existing widget runtime state and recent operation runs before revising broken widgets. Prefer action='generate' for AI-driven create/revise work because generate persists immediately; use save only when manually providing final HTML/CSS/JS.",
-    inputSchema: jsonSchema({
-      type: "object",
-      properties: {
-        action: {
-          type: "string",
-          enum: ["list", "get", "generate", "save", "delete"],
-          description: "Widget action to perform.",
-        },
-        device_id: {
-          type: "string",
-          description: "Target device id, name, or IP. Optional when chat is already attached to a device.",
-        },
-        widget_id: {
-          type: "string",
-          description: "Existing widget id for get, generate revision, save, or delete.",
-        },
-        widget_slug: {
-          type: "string",
-          description: "Existing widget slug for get, generate revision, save, or delete.",
-        },
-        prompt: {
-          type: "string",
-          description: "Natural-language request used for widget generation or revision.",
-        },
-        name: {
-          type: "string",
-          description: "Widget display name for save.",
-        },
-        description: {
-          type: "string",
-          description: "Widget description for save.",
-        },
-        slug: {
-          type: "string",
-          description: "Explicit widget slug for save.",
-        },
-        html: {
-          type: "string",
-          description: "Widget HTML markup for save. Do not include script or style tags.",
-        },
-        css: {
-          type: "string",
-          description: "Widget CSS for save.",
-        },
-        js: {
-          type: "string",
-          description: "Widget JavaScript for save.",
-        },
-        capabilities: {
-          type: "array",
-          items: {
+  if (options?.includeWidgetManagementTool) {
+    tools.steward_manage_widget = dynamicTool({
+      description: "Create, inspect, revise, save, list, or delete persistent device widgets for a device page, but only when the user explicitly asks for widget work. If a widget would merely be helpful, suggest it in prose instead. When a relevant widget already exists, inspect or revise it instead of creating a duplicate unless the user explicitly asks for a new one.",
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {
+          action: {
             type: "string",
-            enum: ["context", "state", "device-control"],
+            enum: ["list", "get", "generate", "save", "delete"],
+            description: "Widget action to perform.",
           },
-          description: "Widget runtime capabilities for save.",
+          device_id: {
+            type: "string",
+            description: "Target device id, name, or IP. Optional when chat is already attached to a device.",
+          },
+          widget_id: {
+            type: "string",
+            description: "Existing widget id for get, generate revision, save, or delete.",
+          },
+          widget_slug: {
+            type: "string",
+            description: "Existing widget slug for get, generate revision, save, or delete.",
+          },
+          prompt: {
+            type: "string",
+            description: "Natural-language request used for widget generation or revision.",
+          },
+          name: {
+            type: "string",
+            description: "Widget display name for save.",
+          },
+          description: {
+            type: "string",
+            description: "Widget description for save.",
+          },
+          slug: {
+            type: "string",
+            description: "Explicit widget slug for save.",
+          },
+          html: {
+            type: "string",
+            description: "Widget HTML markup for save. Do not include script or style tags.",
+          },
+          css: {
+            type: "string",
+            description: "Widget CSS for save.",
+          },
+          js: {
+            type: "string",
+            description: "Widget JavaScript for save.",
+          },
+          capabilities: {
+            type: "array",
+            items: {
+              type: "string",
+              enum: ["context", "state", "device-control"],
+            },
+            description: "Widget runtime capabilities for save.",
+          },
         },
-      },
-      required: ["action"],
-      additionalProperties: false,
-    }),
-    execute: async (argsUnknown: unknown) => {
-      const args = isRecord(argsUnknown) ? argsUnknown : {};
-      const action = inputString(args, "action");
-      if (!action) {
-        return { ok: false, error: "action is required." };
-      }
-
-      const device = await resolveDeviceByTarget(
-        inputString(args, "device_id"),
-        options?.attachedDeviceId,
-      );
-      if (!device) {
-        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
-      }
-
-      const widgetId = inputString(args, "widget_id");
-      const widgetSlug = inputString(args, "widget_slug");
-      const resolveWidget = () => {
-        const widget = widgetId
-          ? stateStore.getDeviceWidgetById(widgetId)
-          : widgetSlug
-            ? stateStore.getDeviceWidgetBySlug(device.id, widgetSlug)
-            : null;
-        if (widget && widget.deviceId !== device.id) {
-          return null;
+        required: ["action"],
+        additionalProperties: false,
+      }),
+      execute: async (argsUnknown: unknown) => {
+        const args = isRecord(argsUnknown) ? argsUnknown : {};
+        const action = inputString(args, "action");
+        if (!action) {
+          return { ok: false, error: "action is required." };
         }
-        return widget;
-      };
 
-      if (action === "list") {
-        const widgets = stateStore.getDeviceWidgets(device.id);
-        return {
-          ok: true,
-          deviceId: device.id,
-          deviceName: device.name,
-          count: widgets.length,
-          widgets: widgets.map((widget) => ({
-            id: widget.id,
-            slug: widget.slug,
-            name: widget.name,
-            description: widget.description,
-            status: widget.status,
-            revision: widget.revision,
-            capabilities: widget.capabilities,
-            updatedAt: widget.updatedAt,
-          })),
-        };
-      }
-
-      if (action === "get") {
-        const widget = resolveWidget();
-        if (!widget) {
-          return { ok: false, error: "Existing widget not found for this device." };
+        const device = await resolveDeviceByTarget(
+          inputString(args, "device_id"),
+          options?.attachedDeviceId,
+        );
+        if (!device) {
+          return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
         }
-        return {
-          ok: true,
-          deviceId: device.id,
-          deviceName: device.name,
-          widget,
-          runtimeState: stateStore.getDeviceWidgetRuntimeState(widget.id)?.stateJson ?? {},
-          recentOperationRuns: stateStore.getDeviceWidgetOperationRuns(widget.id, 15),
+
+        const widgetId = inputString(args, "widget_id");
+        const widgetSlug = inputString(args, "widget_slug");
+        const resolveWidget = () => {
+          const widget = widgetId
+            ? stateStore.getDeviceWidgetById(widgetId)
+            : widgetSlug
+              ? stateStore.getDeviceWidgetBySlug(device.id, widgetSlug)
+              : null;
+          if (widget && widget.deviceId !== device.id) {
+            return null;
+          }
+          return widget;
         };
-      }
 
-      if (action === "generate") {
-        const prompt = inputString(args, "prompt");
-        if (!prompt) {
-          return { ok: false, error: "prompt is required for generate." };
-        }
-        const widget = resolveWidget();
-        const provider = typeof options?.provider === "string" && options.provider.length > 0
-          ? options.provider
-          : await getDefaultProvider();
-        const generated = await generateAndStoreDeviceWidget({
-          deviceId: device.id,
-          prompt,
-          provider,
-          model: options?.model,
-          actor: "steward",
-          targetWidgetId: widget?.id,
-          targetWidgetSlug: widget ? undefined : widgetSlug,
-        });
-        await stateStore.addAction({
-          actor: "steward",
-          kind: "config",
-          message: `${generated.updatedExisting ? "Updated" : "Created"} widget ${generated.widget.name} for ${device.name}`,
-          context: {
-            deviceId: device.id,
-            widgetId: generated.widget.id,
-            widgetSlug: generated.widget.slug,
-            updatedExisting: generated.updatedExisting,
-            viaTool: "steward_manage_widget",
-          },
-        });
-        return {
-          ok: true,
-          deviceId: device.id,
-          deviceName: device.name,
-          updatedExisting: generated.updatedExisting,
-          summary: generated.summary,
-          widget: generated.widget,
-        };
-      }
-
-      if (action === "save") {
-        const existing = resolveWidget();
-        const name = inputString(args, "name") ?? existing?.name;
-        const html = inputString(args, "html") ?? existing?.html;
-        const js = inputString(args, "js") ?? existing?.js;
-        const capabilitiesRaw = Array.isArray(args.capabilities)
-          ? args.capabilities.filter((value): value is string =>
-            typeof value === "string" && ["context", "state", "device-control"].includes(value),
-          )
-          : existing?.capabilities;
-
-        if (!name || !html || !js || !capabilitiesRaw || capabilitiesRaw.length === 0) {
+        if (action === "list") {
+          const widgets = stateStore.getDeviceWidgets(device.id);
           return {
-            ok: false,
-            error: "save requires name, html, js, and capabilities unless updating an existing widget with those fields already present.",
+            ok: true,
+            deviceId: device.id,
+            deviceName: device.name,
+            count: widgets.length,
+            widgets: widgets.map((widget) => ({
+              id: widget.id,
+              slug: widget.slug,
+              name: widget.name,
+              description: widget.description,
+              status: widget.status,
+              revision: widget.revision,
+              capabilities: widget.capabilities,
+              updatedAt: widget.updatedAt,
+            })),
           };
         }
 
-        const now = new Date().toISOString();
-        const slug = inputString(args, "slug") ?? existing?.slug ?? slugifyWidgetKey(name);
-        const saved = stateStore.upsertDeviceWidget({
-          id: existing?.id ?? `widget-${randomUUID()}`,
-          deviceId: device.id,
-          slug,
-          name,
-          description: inputString(args, "description") ?? existing?.description,
-          status: existing?.status ?? "active",
-          html,
-          css: inputString(args, "css") ?? existing?.css ?? "",
-          js,
-          capabilities: capabilitiesRaw as Array<"context" | "state" | "device-control">,
-          sourcePrompt: existing?.sourcePrompt,
-          createdBy: existing?.createdBy ?? "steward",
-          revision: existing?.revision ?? 1,
-          createdAt: existing?.createdAt ?? now,
-          updatedAt: now,
-        });
-        if (!stateStore.getDeviceWidgetRuntimeState(saved.id)) {
-          stateStore.upsertDeviceWidgetRuntimeState({
-            widgetId: saved.id,
+        if (action === "get") {
+          const widget = resolveWidget();
+          if (!widget) {
+            return { ok: false, error: "Existing widget not found for this device." };
+          }
+          return {
+            ok: true,
             deviceId: device.id,
-            stateJson: {},
-            updatedAt: now,
-          });
+            deviceName: device.name,
+            widget,
+            runtimeState: stateStore.getDeviceWidgetRuntimeState(widget.id)?.stateJson ?? {},
+            recentOperationRuns: stateStore.getDeviceWidgetOperationRuns(widget.id, 15),
+          };
         }
-        await stateStore.addAction({
-          actor: "steward",
-          kind: "config",
-          message: `${existing ? "Saved changes to" : "Saved new"} widget ${saved.name} for ${device.name}`,
-          context: {
-            deviceId: device.id,
-            widgetId: saved.id,
-            widgetSlug: saved.slug,
-            updatedExisting: Boolean(existing),
-            viaTool: "steward_manage_widget",
-          },
-        });
-        return {
-          ok: true,
-          deviceId: device.id,
-          deviceName: device.name,
-          updatedExisting: Boolean(existing),
-          widget: saved,
-        };
-      }
 
-      if (action === "delete") {
-        const widget = resolveWidget();
-        if (!widget) {
-          return { ok: false, error: "Existing widget not found for this device." };
-        }
-        const deleted = stateStore.deleteDeviceWidget(widget.id);
-        if (deleted) {
+        if (action === "generate") {
+          const prompt = inputString(args, "prompt");
+          if (!prompt) {
+            return { ok: false, error: "prompt is required for generate." };
+          }
+          const widget = resolveWidget();
+          const provider = typeof options?.provider === "string" && options.provider.length > 0
+            ? options.provider
+            : await getDefaultProvider();
+          const generated = await generateAndStoreDeviceWidget({
+            deviceId: device.id,
+            prompt,
+            provider,
+            model: options?.model,
+            actor: "steward",
+            targetWidgetId: widget?.id,
+            targetWidgetSlug: widget ? undefined : widgetSlug,
+          });
           await stateStore.addAction({
             actor: "steward",
             kind: "config",
-            message: `Deleted widget ${widget.name} for ${device.name}`,
+            message: `${generated.updatedExisting ? "Updated" : "Created"} widget ${generated.widget.name} for ${device.name}`,
             context: {
               deviceId: device.id,
-              widgetId: widget.id,
-              widgetSlug: widget.slug,
+              widgetId: generated.widget.id,
+              widgetSlug: generated.widget.slug,
+              updatedExisting: generated.updatedExisting,
               viaTool: "steward_manage_widget",
             },
           });
+          return {
+            ok: true,
+            deviceId: device.id,
+            deviceName: device.name,
+            updatedExisting: generated.updatedExisting,
+            summary: generated.summary,
+            widget: generated.widget,
+          };
         }
-        return {
-          ok: deleted,
-          deviceId: device.id,
-          deviceName: device.name,
-          deletedWidgetId: widget.id,
-          deletedWidgetSlug: widget.slug,
-        };
-      }
 
-      return { ok: false, error: `Unsupported widget action: ${action}` };
-    },
-  });
+        if (action === "save") {
+          const existing = resolveWidget();
+          const name = inputString(args, "name") ?? existing?.name;
+          const html = inputString(args, "html") ?? existing?.html;
+          const js = inputString(args, "js") ?? existing?.js;
+          const capabilitiesRaw = Array.isArray(args.capabilities)
+            ? args.capabilities.filter((value): value is string =>
+              typeof value === "string" && ["context", "state", "device-control"].includes(value),
+            )
+            : existing?.capabilities;
+
+          if (!name || !html || !js || !capabilitiesRaw || capabilitiesRaw.length === 0) {
+            return {
+              ok: false,
+              error: "save requires name, html, js, and capabilities unless updating an existing widget with those fields already present.",
+            };
+          }
+
+          const now = new Date().toISOString();
+          const slug = inputString(args, "slug") ?? existing?.slug ?? slugifyWidgetKey(name);
+          const saved = stateStore.upsertDeviceWidget({
+            id: existing?.id ?? `widget-${randomUUID()}`,
+            deviceId: device.id,
+            slug,
+            name,
+            description: inputString(args, "description") ?? existing?.description,
+            status: existing?.status ?? "active",
+            html,
+            css: inputString(args, "css") ?? existing?.css ?? "",
+            js,
+            capabilities: capabilitiesRaw as Array<"context" | "state" | "device-control">,
+            sourcePrompt: existing?.sourcePrompt,
+            createdBy: existing?.createdBy ?? "steward",
+            revision: existing?.revision ?? 1,
+            createdAt: existing?.createdAt ?? now,
+            updatedAt: now,
+          });
+          if (!stateStore.getDeviceWidgetRuntimeState(saved.id)) {
+            stateStore.upsertDeviceWidgetRuntimeState({
+              widgetId: saved.id,
+              deviceId: device.id,
+              stateJson: {},
+              updatedAt: now,
+            });
+          }
+          await stateStore.addAction({
+            actor: "steward",
+            kind: "config",
+            message: `${existing ? "Saved changes to" : "Saved new"} widget ${saved.name} for ${device.name}`,
+            context: {
+              deviceId: device.id,
+              widgetId: saved.id,
+              widgetSlug: saved.slug,
+              updatedExisting: Boolean(existing),
+              viaTool: "steward_manage_widget",
+            },
+          });
+          return {
+            ok: true,
+            deviceId: device.id,
+            deviceName: device.name,
+            updatedExisting: Boolean(existing),
+            widget: saved,
+          };
+        }
+
+        if (action === "delete") {
+          const widget = resolveWidget();
+          if (!widget) {
+            return { ok: false, error: "Existing widget not found for this device." };
+          }
+          const deleted = stateStore.deleteDeviceWidget(widget.id);
+          if (deleted) {
+            await stateStore.addAction({
+              actor: "steward",
+              kind: "config",
+              message: `Deleted widget ${widget.name} for ${device.name}`,
+              context: {
+                deviceId: device.id,
+                widgetId: widget.id,
+                widgetSlug: widget.slug,
+                viaTool: "steward_manage_widget",
+              },
+            });
+          }
+          return {
+            ok: deleted,
+            deviceId: device.id,
+            deviceName: device.name,
+            deletedWidgetId: widget.id,
+            deletedWidgetSlug: widget.slug,
+          };
+        }
+
+        return { ok: false, error: `Unsupported widget action: ${action}` };
+      },
+    });
+  }
 
   return tools;
 }

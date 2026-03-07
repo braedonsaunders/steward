@@ -6,13 +6,12 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { isAuthorized } from "@/lib/auth/guard";
 import { buildAssistantContext } from "@/lib/assistant/context";
-import { tryHandleDeviceChatAction } from "@/lib/assistant/device-actions";
-import { tryExecuteGraphQuery } from "@/lib/assistant/graph-query";
 import { maybeUpdateOperatorNotes } from "@/lib/assistant/operator-notes";
 import { buildStewardSystemPrompt } from "@/lib/assistant/prompt";
 import { buildAdapterSkillTools } from "@/lib/assistant/tool-skills";
 import { planWidgetRoute, type WidgetRoutePlan } from "@/lib/assistant/widget-routing";
 import { buildOnboardingSystemPrompt, isOnboardingSession } from "@/lib/adoption/conversation";
+import { summarizeDeviceContractForPrompt } from "@/lib/devices/contract-management";
 import { getDefaultProvider } from "@/lib/llm/config";
 import { buildLanguageModel } from "@/lib/llm/providers";
 import { getDataDir } from "@/lib/state/db";
@@ -86,94 +85,6 @@ function humanizeToolName(toolName: string): string {
     .filter((part) => part.length > 0)
     .map((part) => part[0]?.toUpperCase() + part.slice(1))
     .join(" ");
-}
-
-function buildAttachedDeviceWidgetPrompt(deviceId: string): string {
-  const widgets = stateStore.getDeviceWidgets(deviceId).slice(0, 8);
-  if (widgets.length === 0) {
-    return "Attached device widgets:\n- none";
-  }
-
-  const lines = widgets.map(
-    (widget) =>
-      `- id=${widget.id} slug=${widget.slug} name=${widget.name} revision=${widget.revision} updatedAt=${widget.updatedAt}`,
-  );
-  const latest = widgets[0];
-
-  return [
-    "Attached device widgets (newest first):",
-    ...lines,
-    `Default revision target: id=${latest.id} slug=${latest.slug} name=${latest.name}`,
-  ].join("\n");
-}
-
-function buildWidgetToolDirective(plan: WidgetRoutePlan | null, attachedDeviceId: string | undefined): string {
-  if (!plan || plan.route !== "widget" || !attachedDeviceId) {
-    return "";
-  }
-
-  const toolArgs = {
-    ...plan.toolArgs,
-    device_id: attachedDeviceId,
-  };
-
-  return [
-    "Widget tool execution is required for this turn.",
-    "On the first step, call steward_manage_widget with the exact JSON below before any prose.",
-    "After the tool result, summarize only what actually happened.",
-    "If the tool creates a new widget when a revision was expected, say that explicitly.",
-    "Forced tool call JSON:",
-    JSON.stringify(toolArgs, null, 2),
-  ].join("\n");
-}
-
-function inferDeterministicWidgetRoute(args: {
-  input: string;
-  attachedDeviceId: string;
-}): WidgetRoutePlan | null {
-  const text = args.input.trim();
-  if (!text) {
-    return null;
-  }
-  const lowered = text.toLowerCase();
-
-  const widgetSignal = /(widget|dashboard|control panel|panel|remote|device page)/i.test(lowered);
-  if (!widgetSignal) {
-    return null;
-  }
-
-  const asksList = /(list|show|what.*widgets|which.*widgets|saved widgets)/i.test(lowered);
-  if (asksList) {
-    return {
-      route: "widget",
-      reason: "deterministic-widget-list",
-      toolArgs: { action: "list" },
-    };
-  }
-
-  const latestWidget = stateStore.getDeviceWidgets(args.attachedDeviceId)[0] ?? null;
-  const asksInspect = /(inspect|get widget|show widget source|debug widget|widget state|widget runs)/i.test(lowered);
-  if (asksInspect && latestWidget) {
-    return {
-      route: "widget",
-      reason: "deterministic-widget-inspect",
-      toolArgs: {
-        action: "get",
-        widget_id: latestWidget.id,
-      },
-    };
-  }
-
-  const wantsNew = /(new widget|separate widget|another widget|from scratch|fresh widget)/i.test(lowered);
-  return {
-    route: "widget",
-    reason: "deterministic-widget-generate",
-    toolArgs: {
-      action: "generate",
-      widget_id: wantsNew ? undefined : latestWidget?.id,
-      prompt: clampText(text.replace(/\s+/g, " "), 500),
-    },
-  };
 }
 
 async function executePlannedWidgetAction(args: {
@@ -320,7 +231,7 @@ function inferToolKind(toolName: string, inputPreview?: string, outputPreview?: 
   if (/shell|terminal|nmap|curl|ssh|shasum|ping|traceroute/.test(combined)) {
     return "terminal";
   }
-  if (/probe|fingerprint|router|http|favicon|browser|packet/.test(combined)) {
+  if (/probe|fingerprint|router|http|mqtt|favicon|browser|packet/.test(combined)) {
     return "probe";
   }
   return "tool";
@@ -711,22 +622,45 @@ function validateAttachedDeviceChatReadiness(deviceId: string): { ok: true } | {
   if (!run || run.status !== "completed") {
     return {
       ok: false,
-      reason: `Finish onboarding for ${device.name} first so Steward has workload context, assurance intent, and access surfaces.`,
-    };
-  }
-
-  const unresolvedRequired = stateStore
-    .getAdoptionQuestions(device.id, { runId: run.id, unresolvedOnly: true })
-    .filter((question) => question.required)
-    .length;
-  if (unresolvedRequired > 0) {
-    return {
-      ok: false,
-      reason: `Onboarding for ${device.name} still has ${unresolvedRequired} required question(s) pending.`,
+      reason: `Finish onboarding for ${device.name} first so Steward has a committed responsibility contract, management profile, and access plan.`,
     };
   }
 
   return { ok: true };
+}
+
+function persistEarlySessionError(args: {
+  sessionId?: string;
+  provider: LLMProvider;
+  input: string;
+  error: string;
+  suppressUserMessage?: boolean;
+}): void {
+  if (!args.sessionId) {
+    return;
+  }
+
+  const createdAt = new Date().toISOString();
+  if (!args.suppressUserMessage) {
+    stateStore.addChatMessage({
+      id: randomUUID(),
+      sessionId: args.sessionId,
+      role: "user",
+      content: args.input,
+      error: false,
+      createdAt,
+    });
+  }
+
+  stateStore.addChatMessage({
+    id: randomUUID(),
+    sessionId: args.sessionId,
+    role: "assistant",
+    content: args.error,
+    provider: args.provider,
+    error: true,
+    createdAt,
+  });
 }
 
 async function autoContinueIfTruncated(args: {
@@ -795,6 +729,13 @@ export async function POST(request: NextRequest) {
   if (session?.deviceId && !onboardingSession) {
     const readiness = validateAttachedDeviceChatReadiness(session.deviceId);
     if (!readiness.ok) {
+      persistEarlySessionError({
+        sessionId,
+        provider,
+        input: payload.data.input,
+        error: readiness.reason,
+        suppressUserMessage: payload.data.suppressUserMessage,
+      });
       if (payload.data.stream) {
         return ndjsonStreamFromEvents([
           { type: "start", provider },
@@ -818,156 +759,19 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const graphQuery = onboardingSession
-      ? { handled: false as const, response: "" }
-      : await tryExecuteGraphQuery(payload.data.input, attachedDevice);
-    if (graphQuery.handled && graphQuery.response) {
-      if (sessionId) {
-        stateStore.addChatMessage({
-          id: randomUUID(),
-          sessionId,
-          role: "assistant",
-          content: graphQuery.response,
-          provider: "custom",
-          error: false,
-          createdAt: new Date().toISOString(),
-        });
-      }
-
-      await stateStore.addAction({
-        actor: "user",
-        kind: "diagnose",
-        message: "Graph query handled deterministically",
-        context: {
-          sessionId,
-          ...graphQuery.metadata,
-        },
-      });
-
-      if (attachedDevice) {
-        await maybeUpdateOperatorNotes({
-          device: attachedDevice,
-          provider,
-          model: payload.data.model,
-          userInput: payload.data.input,
-          assistantOutput: graphQuery.response,
-          sessionId,
-          onboarding: onboardingSession,
-          toolEvents: undefined,
-        });
-      }
-
-      if (payload.data.stream) {
-        return ndjsonStreamFromEvents([
-          { type: "start", provider: "graph" },
-          { type: "finish", provider: "graph", text: graphQuery.response, reasoning: "" },
-        ]);
-      }
-
-      return NextResponse.json({
-        provider: "graph",
-        response: graphQuery.response,
-      });
-    }
-
-    const deviceAction = await tryHandleDeviceChatAction({
-      input: payload.data.input,
-      provider,
-      model: payload.data.model,
-      attachedDevice,
-      sessionId: sessionId ?? undefined,
-    });
-    if (deviceAction.handled && deviceAction.response) {
-      const deviceActionToolEvent: ChatToolEvent | undefined = attachedDevice
-        ? {
-          id: `device-settings-${randomUUID()}`,
-          toolName: "steward_manage_device",
-          label: "Manage Device",
-          kind: "tool",
-          status: "completed",
-          startedAt: new Date().toISOString(),
-          finishedAt: new Date().toISOString(),
-          inputPreview: previewValue({ request: payload.data.input }, 700),
-          summary: deviceAction.response,
-          outputPreview: previewValue(deviceAction.metadata ?? {}, 1200),
-        }
-        : undefined;
-      const metadata: ChatMessageMetadata | undefined = deviceActionToolEvent
-        ? { toolEvents: [deviceActionToolEvent] }
-        : undefined;
-
-      if (sessionId) {
-        stateStore.addChatMessage({
-          id: randomUUID(),
-          sessionId,
-          role: "assistant",
-          content: deviceAction.response,
-          provider: "custom",
-          error: false,
-          createdAt: new Date().toISOString(),
-          metadata,
-        });
-      }
-
-      if (attachedDevice) {
-        await maybeUpdateOperatorNotes({
-          device: attachedDevice,
-          provider,
-          model: payload.data.model,
-          userInput: payload.data.input,
-          assistantOutput: deviceAction.response,
-          sessionId,
-          onboarding: onboardingSession,
-          toolEvents: undefined,
-        });
-      }
-
-      if (payload.data.stream) {
-        const events: Array<Record<string, unknown>> = [
-          { type: "start", provider: "steward-action" },
-        ];
-        if (deviceActionToolEvent) {
-          events.push({ type: "tool-event", event: deviceActionToolEvent });
-        }
-        events.push({
-          type: "finish",
-          provider: "steward-action",
-          text: deviceAction.response,
-          reasoning: "",
-          metadata,
-        });
-        return ndjsonStreamFromEvents(events);
-      }
-
-      return NextResponse.json({
-        provider: "steward-action",
-        response: deviceAction.response,
-        metadata: {
-          ...(deviceAction.metadata ?? {}),
-          ...(metadata ?? {}),
-        },
-      });
-    }
-
     const persistedHistory = sessionId ? stateStore.getChatMessages(sessionId) : [];
     const historyExcludingCurrent = sessionId && !payload.data.suppressUserMessage
       ? persistedHistory.slice(0, -1)
       : persistedHistory;
 
     const widgetRoutePlan = attachedDevice && !onboardingSession
-      ? (
-          inferDeterministicWidgetRoute({
-            input: payload.data.input,
-            attachedDeviceId: attachedDevice.id,
-          })
-          ?? await planWidgetRoute({
-            provider,
-            model: payload.data.model,
-            attachedDevice,
-            history: historyExcludingCurrent,
-            userInput: payload.data.input,
-          })
-        )
+      ? await planWidgetRoute({
+        provider,
+        model: payload.data.model,
+        attachedDevice,
+        history: historyExcludingCurrent,
+        userInput: payload.data.input,
+      })
       : null;
 
     if (widgetRoutePlan?.route === "widget" && attachedDevice) {
@@ -1126,14 +930,13 @@ export async function POST(request: NextRequest) {
       && (attachedDevice.metadata.notes as Record<string, unknown>).structuredContext !== null
       ? JSON.stringify((attachedDevice.metadata.notes as Record<string, unknown>).structuredContext)
       : "";
-    const attachedDeviceWidgetPrompt = attachedDevice
-      ? buildAttachedDeviceWidgetPrompt(attachedDevice.id)
+    const contractSummary = attachedDevice && !onboardingSession
+      ? summarizeDeviceContractForPrompt(attachedDevice.id)
       : "";
-    const widgetToolDirective = buildWidgetToolDirective(widgetRoutePlan, attachedDevice?.id);
     const systemPrompt = onboardingSession && attachedDevice
-      ? buildOnboardingSystemPrompt(attachedDevice)
+      ? await buildOnboardingSystemPrompt(attachedDevice)
       : attachedDevice
-        ? `${buildStewardSystemPrompt(context)}\n\nAttached conversation device:\n- ${attachedDevice.name} (${attachedDevice.ip}) id=${attachedDevice.id} type=${attachedDevice.type} status=${attachedDevice.status}${operatorNotes.trim().length > 0 ? `\n- Operator notes: ${operatorNotes}` : ""}${structuredMemory.trim().length > 0 ? `\n- Structured memory: ${structuredMemory}` : ""}\n${attachedDeviceWidgetPrompt}${widgetToolDirective.trim().length > 0 ? `\n\n${widgetToolDirective}` : ""}\nPrioritize this device when the user's question is ambiguous.`
+        ? `${buildStewardSystemPrompt(context)}\n\nAttached conversation device:\n- ${attachedDevice.name} (${attachedDevice.ip}) id=${attachedDevice.id} type=${attachedDevice.type} status=${attachedDevice.status}${operatorNotes.trim().length > 0 ? `\n- Operator notes: ${operatorNotes}` : ""}${structuredMemory.trim().length > 0 ? `\n- Structured memory: ${structuredMemory}` : ""}${contractSummary.trim().length > 0 ? `\n${contractSummary}` : ""}\nPrioritize this device when the user's question is ambiguous.`
         : buildStewardSystemPrompt(context);
 
     // Build conversation history from DB for multi-turn context
@@ -1152,24 +955,13 @@ export async function POST(request: NextRequest) {
     const tools = await buildAdapterSkillTools({
       attachedDeviceId: attachedDevice?.id,
       allowPreOnboardingExecution: onboardingSession,
+      includeWidgetManagementTool: false,
       provider,
       model: payload.data.model,
     });
     const maxOutputTokens = onboardingSession
       ? ONBOARDING_MAX_OUTPUT_TOKENS
       : CHAT_MAX_OUTPUT_TOKENS;
-    const widgetPrepareStep = widgetRoutePlan?.route === "widget"
-      ? ({ stepNumber }: { stepNumber: number }) => {
-        if (stepNumber === 1) {
-          return {
-            system: systemPrompt,
-            activeTools: ["steward_manage_widget"],
-            toolChoice: { type: "tool" as const, toolName: "steward_manage_widget" },
-          };
-        }
-        return { system: systemPrompt };
-      }
-      : undefined;
 
     if (payload.data.stream) {
       const encoder = new TextEncoder();
@@ -1188,7 +980,6 @@ export async function POST(request: NextRequest) {
         system: systemPrompt,
         messages,
         tools,
-        prepareStep: widgetPrepareStep,
         stopWhen: stepCountIs(CHAT_MAX_STEPS),
         temperature: 0.2,
         maxOutputTokens,
@@ -1531,7 +1322,6 @@ export async function POST(request: NextRequest) {
       system: systemPrompt,
       messages,
       tools,
-      prepareStep: widgetPrepareStep,
       stopWhen: stepCountIs(CHAT_MAX_STEPS),
       temperature: 0.2,
       maxOutputTokens,

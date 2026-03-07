@@ -1,0 +1,216 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - img [ref=e7]
+          - generic [ref=e9]:
+            - heading "Steward" [level=1] [ref=e10]
+            - paragraph [ref=e11]: Network Operations
+          - button [ref=e12]:
+            - img [ref=e13]
+        - navigation [ref=e19]:
+          - generic [ref=e20]:
+            - paragraph [ref=e21]: Overview
+            - link "Dashboard" [active] [ref=e23] [cursor=pointer]:
+              - /url: /
+              - generic [ref=e24]:
+                - img [ref=e25]
+                - generic [ref=e30]: Dashboard
+            - link "Digest" [ref=e32] [cursor=pointer]:
+              - /url: /digest
+              - generic [ref=e33]:
+                - img [ref=e34]
+                - generic [ref=e37]: Digest
+          - generic [ref=e38]:
+            - paragraph [ref=e39]: Network
+            - link "Devices" [ref=e41] [cursor=pointer]:
+              - /url: /devices
+              - generic [ref=e42]:
+                - img [ref=e43]
+                - generic [ref=e46]: Devices
+            - link "Discovery" [ref=e48] [cursor=pointer]:
+              - /url: /discovery
+              - generic [ref=e49]:
+                - img [ref=e50]
+                - generic [ref=e53]: Discovery
+            - link "Topology" [ref=e55] [cursor=pointer]:
+              - /url: /topology
+              - generic [ref=e56]:
+                - img [ref=e57]
+                - generic [ref=e62]: Topology
+          - generic [ref=e63]:
+            - paragraph [ref=e64]: Health
+            - link "Incidents 12" [ref=e191] [cursor=pointer]:
+              - /url: /incidents
+              - generic [ref=e67]:
+                - img [ref=e68]
+                - generic [ref=e70]: Incidents
+              - generic [ref=e192]: "12"
+            - link "Activity" [ref=e72] [cursor=pointer]:
+              - /url: /activity
+              - generic [ref=e73]:
+                - img [ref=e74]
+                - generic [ref=e76]: Activity
+          - generic [ref=e77]:
+            - paragraph [ref=e78]: Control
+            - link "Approvals" [ref=e80] [cursor=pointer]:
+              - /url: /approvals
+              - generic [ref=e81]:
+                - img [ref=e82]
+                - generic [ref=e85]: Approvals
+            - link "Policies" [ref=e87] [cursor=pointer]:
+              - /url: /policies
+              - generic [ref=e88]:
+                - img [ref=e89]
+                - generic [ref=e92]: Policies
+          - generic [ref=e93]:
+            - paragraph [ref=e94]: Assistant
+            - link "Chat" [ref=e96] [cursor=pointer]:
+              - /url: /chat
+              - generic [ref=e98]:
+                - img [ref=e99]
+                - generic [ref=e101]: Chat
+          - generic [ref=e102]:
+            - paragraph [ref=e103]: System
+            - link "Adapters" [ref=e105] [cursor=pointer]:
+              - /url: /adapters
+              - generic [ref=e106]:
+                - img [ref=e107]
+                - generic [ref=e109]: Adapters
+            - link "Access" [ref=e111] [cursor=pointer]:
+              - /url: /access
+              - generic [ref=e112]:
+                - img [ref=e113]
+                - generic [ref=e125]: Access
+            - link "Settings" [ref=e127] [cursor=pointer]:
+              - /url: /settings
+              - generic [ref=e128]:
+                - img [ref=e129]
+                - generic [ref=e132]: Settings
+        - generic [ref=e193]:
+          - img [ref=e194]
+          - generic [ref=e196]: "Vault: Unlocked"
+    - main [ref=e134]:
+      - generic [ref=e346]:
+        - generic [ref=e348]:
+          - heading "Dashboard" [level=1] [ref=e349]
+          - paragraph [ref=e350]: Network operations overview
+        - generic [ref=e351]:
+          - generic [ref=e353]:
+            - img [ref=e355]
+            - generic [ref=e358]:
+              - paragraph [ref=e359]: "21"
+              - paragraph [ref=e360]: Total Devices
+          - generic [ref=e362]:
+            - img [ref=e364]
+            - generic [ref=e368]:
+              - paragraph [ref=e369]: "21"
+              - paragraph [ref=e370]: Online
+          - generic [ref=e372]:
+            - img [ref=e374]
+            - generic [ref=e376]:
+              - paragraph [ref=e377]: "12"
+              - paragraph [ref=e378]: Open Incidents
+          - generic [ref=e380]:
+            - img [ref=e382]
+            - generic [ref=e384]:
+              - paragraph [ref=e385]: "10"
+              - paragraph [ref=e386]: Recommendations
+          - generic [ref=e388]:
+            - img [ref=e390]
+            - generic [ref=e393]:
+              - paragraph [ref=e394]: "0"
+              - paragraph [ref=e395]: Pending Approvals
+          - generic [ref=e397]:
+            - img [ref=e399]
+            - generic [ref=e401]:
+              - paragraph [ref=e402]: "0"
+              - paragraph [ref=e403]: Playbooks Running
+        - generic [ref=e404]:
+          - tablist [ref=e405]:
+            - tab "Overview" [selected] [ref=e406]
+            - tab "Operations" [ref=e407]
+          - tabpanel "Overview" [ref=e408]:
+            - generic [ref=e409]:
+              - generic [ref=e410]:
+                - generic [ref=e411]:
+                  - generic [ref=e412]:
+                    - heading "Recent Incidents" [level=3] [ref=e413]
+                    - paragraph [ref=e414]: Issues that need attention
+                  - link "View all" [ref=e415] [cursor=pointer]:
+                    - /url: /incidents
+                    - text: View all
+                    - img [ref=e416]
+                - generic [ref=e419]:
+                  - link "asustek-computer-iot-192-168-68-85 is offline asustek-computer-iot-192-168-68-85 (192.168.68.85) has not been seen recently and appears offline. warning 12h ago · 1 device" [ref=e420] [cursor=pointer]:
+                    - /url: /incidents/8aa2a3e8-d063-444b-bd4a-726120130b32
+                    - generic [ref=e421]:
+                      - generic [ref=e422]:
+                        - paragraph [ref=e423]: asustek-computer-iot-192-168-68-85 is offline
+                        - paragraph [ref=e424]: asustek-computer-iot-192-168-68-85 (192.168.68.85) has not been seen recently and appears offline.
+                      - generic [ref=e425]: warning
+                    - paragraph [ref=e426]: 12h ago · 1 device
+                  - link "[tv]-samsung-7-series-(82) is offline [tv]-samsung-7-series-(82) (192.168.68.74) has not been seen recently and appears offline. warning 12h ago · 1 device" [ref=e427] [cursor=pointer]:
+                    - /url: /incidents/23974a55-943c-4ba9-918f-791762a62497
+                    - generic [ref=e428]:
+                      - generic [ref=e429]:
+                        - paragraph [ref=e430]: "[tv]-samsung-7-series-(82) is offline"
+                        - paragraph [ref=e431]: "[tv]-samsung-7-series-(82) (192.168.68.74) has not been seen recently and appears offline."
+                      - generic [ref=e432]: warning
+                    - paragraph [ref=e433]: 12h ago · 1 device
+                  - link "iot-192-168-68-68 is offline iot-192-168-68-68 (192.168.68.68) has not been seen recently and appears offline. warning 12h ago · 1 device" [ref=e434] [cursor=pointer]:
+                    - /url: /incidents/3c8d98c3-7ef1-4460-a5c2-8b372d7144e3
+                    - generic [ref=e435]:
+                      - generic [ref=e436]:
+                        - paragraph [ref=e437]: iot-192-168-68-68 is offline
+                        - paragraph [ref=e438]: iot-192-168-68-68 (192.168.68.68) has not been seen recently and appears offline.
+                      - generic [ref=e439]: warning
+                    - paragraph [ref=e440]: 12h ago · 1 device
+                  - link "iot-192-168-68-67 is offline iot-192-168-68-67 (192.168.68.67) has not been seen recently and appears offline. warning 12h ago · 1 device" [ref=e441] [cursor=pointer]:
+                    - /url: /incidents/00c0ad62-2358-4200-ad6d-68554f862f33
+                    - generic [ref=e442]:
+                      - generic [ref=e443]:
+                        - paragraph [ref=e444]: iot-192-168-68-67 is offline
+                        - paragraph [ref=e445]: iot-192-168-68-67 (192.168.68.67) has not been seen recently and appears offline.
+                      - generic [ref=e446]: warning
+                    - paragraph [ref=e447]: 12h ago · 1 device
+                  - link "ieee-registration-authority-iot-192-168-68-61 is offline ieee-registration-authority-iot-192-168-68-61 (192.168.68.61) has not been seen recently and appears offline. warning 12h ago · 1 device" [ref=e448] [cursor=pointer]:
+                    - /url: /incidents/006dffc1-ad31-47f0-a930-75b33d2bdee0
+                    - generic [ref=e449]:
+                      - generic [ref=e450]:
+                        - paragraph [ref=e451]: ieee-registration-authority-iot-192-168-68-61 is offline
+                        - paragraph [ref=e452]: ieee-registration-authority-iot-192-168-68-61 (192.168.68.61) has not been seen recently and appears offline.
+                      - generic [ref=e453]: warning
+                    - paragraph [ref=e454]: 12h ago · 1 device
+              - generic [ref=e455]:
+                - generic [ref=e456]:
+                  - generic [ref=e457]:
+                    - heading "Top Recommendations" [level=3] [ref=e458]
+                    - paragraph [ref=e459]: Suggested improvements
+                  - link "View all" [ref=e460] [cursor=pointer]:
+                    - /url: /incidents
+                    - text: View all
+                    - img [ref=e461]
+                - generic [ref=e464]:
+                  - generic [ref=e465]:
+                    - generic [ref=e466]:
+                      - paragraph [ref=e467]: Provide ssh credentials for server-192-168-68-67
+                      - generic [ref=e468]: high
+                    - paragraph [ref=e469]: Remediation playbook "Restart failed systemd service" is blocked by missing credentials.
+                    - paragraph [ref=e470]: Enables automated diagnosis and recovery actions for this device.
+                  - generic [ref=e471]:
+                    - generic [ref=e472]:
+                      - paragraph [ref=e473]: Provide ssh credentials for iot-192-168-68-67
+                      - generic [ref=e474]: high
+                    - paragraph [ref=e475]: Remediation playbook "Restart failed systemd service" is blocked by missing credentials.
+                    - paragraph [ref=e476]: Enables automated diagnosis and recovery actions for this device.
+                  - generic [ref=e477]:
+                    - generic [ref=e478]:
+                      - paragraph [ref=e479]: Provide winrm credentials for asustek-computer-iot-192-168-68-85
+                      - generic [ref=e480]: high
+                    - paragraph [ref=e481]: Remediation playbook "Restart stopped Windows service" is blocked by missing credentials.
+                    - paragraph [ref=e482]: Enables automated diagnosis and recovery actions for this device.
+  - button "Open Next.js Dev Tools" [ref=e187] [cursor=pointer]:
+    - img [ref=e188]
+  - alert [ref=e287]

@@ -79,7 +79,8 @@ export const graphStore = {
       const tx = db.transaction(() => {
         const workloads = stateStore.getWorkloads(device.id);
         const assurances = stateStore.getAssurances(device.id);
-        const accessSurfaces = stateStore.getAccessSurfaces(device.id);
+        const accessMethods = stateStore.getAccessMethods(device.id);
+        const profiles = stateStore.getDeviceProfiles(device.id);
 
         // Upsert device node
         const node: GraphNode = {
@@ -204,27 +205,55 @@ export const graphStore = {
           });
         }
 
-        // Upsert access surface nodes and edges.
-        for (const surface of accessSurfaces) {
-          const surfaceNodeId = `access-surface:${surface.id}`;
+        // Upsert access method nodes and edges.
+        for (const method of accessMethods) {
+          const methodNodeId = `access-method:${method.id}`;
           upsertNode.run({
-            id: surfaceNodeId,
-            type: "access_surface",
-            label: `${surface.adapterId} (${surface.protocol})`,
-            properties: JSON.stringify({ ...surface }),
-            createdAt: surface.createdAt,
-            updatedAt: surface.updatedAt,
+            id: methodNodeId,
+            type: "access_method",
+            label: method.title,
+            properties: JSON.stringify({ ...method }),
+            createdAt: method.createdAt,
+            updatedAt: method.updatedAt,
           });
 
-          const surfaceEdgeExisting = findEdge(db, node.id, surfaceNodeId, "reachable_via");
+          const methodEdgeExisting = findEdge(db, node.id, methodNodeId, "reachable_via");
           upsertEdge.run({
-            id: surfaceEdgeExisting?.id ?? randomUUID(),
+            id: methodEdgeExisting?.id ?? randomUUID(),
             from: node.id,
-            to: surfaceNodeId,
+            to: methodNodeId,
             type: "reachable_via",
-            properties: JSON.stringify({ selected: surface.selected, score: surface.score }),
-            createdAt: surface.createdAt,
-            updatedAt: surface.updatedAt,
+            properties: JSON.stringify({ selected: method.selected, status: method.status, protocol: method.protocol }),
+            createdAt: method.createdAt,
+            updatedAt: method.updatedAt,
+          });
+        }
+
+        // Upsert device profile nodes and edges.
+        for (const profile of profiles) {
+          const profileNodeId = `device-profile:${profile.id}`;
+          upsertNode.run({
+            id: profileNodeId,
+            type: "device_profile",
+            label: profile.name,
+            properties: JSON.stringify({ ...profile }),
+            createdAt: profile.createdAt,
+            updatedAt: profile.updatedAt,
+          });
+
+          const profileEdgeExisting = findEdge(db, node.id, profileNodeId, "managed_by");
+          upsertEdge.run({
+            id: profileEdgeExisting?.id ?? randomUUID(),
+            from: node.id,
+            to: profileNodeId,
+            type: "managed_by",
+            properties: JSON.stringify({
+              status: profile.status,
+              confidence: profile.confidence,
+              kind: profile.kind,
+            }),
+            createdAt: profile.createdAt,
+            updatedAt: profile.updatedAt,
           });
         }
 
@@ -258,14 +287,14 @@ export const graphStore = {
           });
 
           for (const protocol of assurance.requiredProtocols ?? []) {
-            const matchedSurfaces = accessSurfaces.filter((surface) => surface.protocol === protocol);
-            for (const surface of matchedSurfaces) {
-              const surfaceNodeId = `access-surface:${surface.id}`;
-              const dependencyEdgeExisting = findEdge(db, assuranceNodeId, surfaceNodeId, "requires_access");
+            const matchedMethods = accessMethods.filter((method) => method.protocol === protocol || method.kind === protocol);
+            for (const method of matchedMethods) {
+              const methodNodeId = `access-method:${method.id}`;
+              const dependencyEdgeExisting = findEdge(db, assuranceNodeId, methodNodeId, "requires_access");
               upsertEdge.run({
                 id: dependencyEdgeExisting?.id ?? randomUUID(),
                 from: assuranceNodeId,
-                to: surfaceNodeId,
+                to: methodNodeId,
                 type: "requires_access",
                 properties: JSON.stringify({ protocol }),
                 createdAt: assurance.createdAt,

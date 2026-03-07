@@ -20,6 +20,8 @@ const OperationSpecSchema = z.object({
     "container.restart",
     "container.stop",
     "http.request",
+    "websocket.message",
+    "mqtt.message",
     "cert.renew",
     "file.copy",
     "network.config",

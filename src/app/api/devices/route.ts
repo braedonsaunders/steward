@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { isAuthorized } from "@/lib/auth/guard";
 import { startDeviceAdoption } from "@/lib/adoption/orchestrator";
+import { getDeviceNameValidationError, normalizeDeviceName } from "@/lib/devices/naming";
 import { graphStore } from "@/lib/state/graph";
 import { stateStore } from "@/lib/state/store";
 import { DEVICE_TYPE_VALUES } from "@/lib/state/types";
@@ -40,13 +41,22 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: payload.error.flatten() }, { status: 400 });
   }
 
+  const normalizedName = normalizeDeviceName(payload.data.name);
+  const nameValidationError = getDeviceNameValidationError(normalizedName);
+  if (nameValidationError) {
+    return NextResponse.json(
+      { error: `Invalid device name '${normalizedName}'. ${nameValidationError}` },
+      { status: 400 },
+    );
+  }
+
   const state = await stateStore.getState();
   const existing = state.devices.find((item) => item.ip === payload.data.ip);
   const now = new Date().toISOString();
 
   const device = {
     id: existing?.id ?? randomUUID(),
-    name: payload.data.name,
+    name: normalizedName,
     ip: payload.data.ip,
     type: payload.data.type ?? existing?.type ?? "unknown",
     autonomyTier: payload.data.autonomyTier ?? existing?.autonomyTier ?? 1,

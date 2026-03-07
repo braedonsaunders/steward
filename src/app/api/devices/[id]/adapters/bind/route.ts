@@ -1,14 +1,19 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { isAuthorized } from "@/lib/auth/guard";
+import { getDeviceAdoptionSnapshot, startDeviceAdoption } from "@/lib/adoption/orchestrator";
 import { stateStore } from "@/lib/state/store";
 
 export const runtime = "nodejs";
 
 const bindSchema = z.object({
-  adapterId: z.string().trim().min(1),
-  protocol: z.string().trim().min(1),
-});
+  profileId: z.string().trim().min(1).optional(),
+  profileIds: z.array(z.string().trim().min(1)).optional(),
+  accessMethodKeys: z.array(z.string().trim().min(1)).optional(),
+}).refine(
+  (value) => Boolean(value.profileId || (value.profileIds && value.profileIds.length > 0) || (value.accessMethodKeys && value.accessMethodKeys.length > 0)),
+  "Provide at least one profileId/profileIds or accessMethodKeys value.",
+);
 
 export async function POST(
   request: NextRequest,
@@ -29,28 +34,42 @@ export async function POST(
     return NextResponse.json({ error: "Device not found" }, { status: 404 });
   }
 
-  const accessSurfaces = stateStore.getAccessSurfaces(id);
-  const target = accessSurfaces.find(
-    (surface) => surface.adapterId === payload.data.adapterId && surface.protocol === payload.data.protocol,
-  );
-  if (!target) {
-    return NextResponse.json({ error: "Access surface candidate not found for protocol" }, { status: 404 });
+  const snapshot = await startDeviceAdoption(id, { triggeredBy: "user" });
+  const profileIds = Array.from(new Set([
+    ...(payload.data.profileIds ?? []),
+    ...(payload.data.profileId ? [payload.data.profileId] : []),
+  ]));
+
+  if (profileIds.length > 0) {
+    const available = new Set(snapshot.profiles.map((profile) => profile.profileId));
+    const missing = profileIds.filter((profileId) => !available.has(profileId));
+    if (missing.length > 0) {
+      return NextResponse.json({ error: `Unknown profile selection: ${missing.join(", ")}` }, { status: 404 });
+    }
+    stateStore.selectDeviceProfiles(id, profileIds);
   }
 
-  stateStore.selectAccessSurface(id, payload.data.adapterId, payload.data.protocol);
+  if ((payload.data.accessMethodKeys ?? []).length > 0) {
+    const available = new Set(snapshot.accessMethods.map((method) => method.key));
+    const missing = payload.data.accessMethodKeys!.filter((key) => !available.has(key));
+    if (missing.length > 0) {
+      return NextResponse.json({ error: `Unknown access method selection: ${missing.join(", ")}` }, { status: 404 });
+    }
+    stateStore.selectAccessMethods(id, payload.data.accessMethodKeys!);
+  }
+
+  const nextSnapshot = await getDeviceAdoptionSnapshot(id);
+
   await stateStore.addAction({
     actor: "user",
     kind: "config",
-    message: `Selected access surface ${payload.data.adapterId} for ${device.name} (${payload.data.protocol})`,
+    message: `Updated onboarding selection for ${device.name}`,
     context: {
       deviceId: id,
-      adapterId: payload.data.adapterId,
-      protocol: payload.data.protocol,
+      profileIds,
+      accessMethodKeys: payload.data.accessMethodKeys ?? [],
     },
   });
 
-  return NextResponse.json({
-    accessSurfaces: stateStore.getAccessSurfaces(id),
-    bindings: stateStore.getAccessSurfaces(id),
-  });
+  return NextResponse.json(nextSnapshot);
 }

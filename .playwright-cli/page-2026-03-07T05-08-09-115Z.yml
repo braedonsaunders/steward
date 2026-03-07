@@ -1,0 +1,431 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - img [ref=e7]
+          - generic [ref=e9]:
+            - heading "Steward" [level=1] [ref=e10]
+            - paragraph [ref=e11]: Network Operations
+          - button [ref=e12]:
+            - img [ref=e13]
+        - navigation [ref=e19]:
+          - generic [ref=e20]:
+            - paragraph [ref=e21]: Overview
+            - link "Dashboard" [ref=e23] [cursor=pointer]:
+              - /url: /
+              - generic [ref=e24]:
+                - img [ref=e25]
+                - generic [ref=e30]: Dashboard
+            - link "Digest" [ref=e32] [cursor=pointer]:
+              - /url: /digest
+              - generic [ref=e33]:
+                - img [ref=e34]
+                - generic [ref=e37]: Digest
+          - generic [ref=e38]:
+            - paragraph [ref=e39]: Network
+            - link "Devices" [ref=e41] [cursor=pointer]:
+              - /url: /devices
+              - generic [ref=e43]:
+                - img [ref=e44]
+                - generic [ref=e47]: Devices
+            - link "Discovery" [ref=e49] [cursor=pointer]:
+              - /url: /discovery
+              - generic [ref=e50]:
+                - img [ref=e51]
+                - generic [ref=e54]: Discovery
+            - link "Topology" [ref=e56] [cursor=pointer]:
+              - /url: /topology
+              - generic [ref=e57]:
+                - img [ref=e58]
+                - generic [ref=e63]: Topology
+          - generic [ref=e64]:
+            - paragraph [ref=e65]: Health
+            - link "Incidents 12" [ref=e147] [cursor=pointer]:
+              - /url: /incidents
+              - generic [ref=e68]:
+                - img [ref=e69]
+                - generic [ref=e71]: Incidents
+              - generic [ref=e148]: "12"
+            - link "Activity" [ref=e73] [cursor=pointer]:
+              - /url: /activity
+              - generic [ref=e74]:
+                - img [ref=e75]
+                - generic [ref=e77]: Activity
+          - generic [ref=e78]:
+            - paragraph [ref=e79]: Control
+            - link "Approvals" [ref=e81] [cursor=pointer]:
+              - /url: /approvals
+              - generic [ref=e82]:
+                - img [ref=e83]
+                - generic [ref=e86]: Approvals
+            - link "Policies" [ref=e88] [cursor=pointer]:
+              - /url: /policies
+              - generic [ref=e89]:
+                - img [ref=e90]
+                - generic [ref=e93]: Policies
+          - generic [ref=e94]:
+            - paragraph [ref=e95]: Assistant
+            - link "Chat" [ref=e97] [cursor=pointer]:
+              - /url: /chat
+              - generic [ref=e98]:
+                - img [ref=e99]
+                - generic [ref=e101]: Chat
+          - generic [ref=e102]:
+            - paragraph [ref=e103]: System
+            - link "Adapters" [ref=e105] [cursor=pointer]:
+              - /url: /adapters
+              - generic [ref=e106]:
+                - img [ref=e107]
+                - generic [ref=e109]: Adapters
+            - link "Access" [ref=e111] [cursor=pointer]:
+              - /url: /access
+              - generic [ref=e112]:
+                - img [ref=e113]
+                - generic [ref=e125]: Access
+            - link "Settings" [ref=e127] [cursor=pointer]:
+              - /url: /settings
+              - generic [ref=e128]:
+                - img [ref=e129]
+                - generic [ref=e132]: Settings
+        - generic [ref=e149]:
+          - img [ref=e150]
+          - generic [ref=e152]: "Vault: Unlocked"
+    - main [ref=e134]:
+      - main [ref=e137]:
+        - generic [ref=e153]:
+          - generic [ref=e154]:
+            - generic [ref=e155]:
+              - generic [ref=e156]:
+                - heading "Bambu Lab X1 Carbon" [level=1] [ref=e159]
+                - generic [ref=e160]:
+                  - generic [ref=e161]: online
+                  - generic [ref=e162]: iot
+                  - generic [ref=e163]:
+                    - img [ref=e164]
+                    - text: Tier 1
+                  - generic [ref=e166]: Adopted
+                - paragraph [ref=e167]: Bambu Lab X1 Carbon 3D printer identified at 192.168.68.57. This is an IoT device manufactured by AMPAK Technology (Taiwan) running an MQTT-over-TLS service on port 8883. The device is online and classified as IoT with moderate confidence (0.71). No existing assurance policies are in place.
+              - generic [ref=e169]:
+                - paragraph [ref=e170]: "First seen: 3/4/2026, 8:46:04 PM"
+                - paragraph [ref=e171]: "Last seen: 5m ago"
+            - generic [ref=e173]:
+              - generic [ref=e174]:
+                - paragraph [ref=e175]: Onboarding pending
+                - paragraph [ref=e176]: This device is adopted. Start onboarding from Chat so it can commit workloads, assurances, management profile, and access.
+              - button "Start Onboarding" [ref=e177]
+          - generic [ref=e178]:
+            - tablist [ref=e179]:
+              - tab "Overview" [ref=e180]
+              - tab "Workloads" [active] [selected] [ref=e181]
+              - tab "Access" [ref=e182]
+              - tab "Widgets" [ref=e183]
+              - tab "Chat" [ref=e184]
+              - tab "Activity" [ref=e185]
+              - tab "Settings" [ref=e186]
+            - tabpanel "Workloads" [ref=e293]:
+              - generic [ref=e296]:
+                - generic [ref=e298]:
+                  - generic [ref=e299]:
+                    - heading "Steward Contract" [level=3] [ref=e300]
+                    - paragraph [ref=e301]: Committed responsibilities, enforcement checks, and the profile/access plan Steward uses for this device.
+                  - generic [ref=e302]:
+                    - generic [ref=e303]: awaiting_user
+                    - generic [ref=e304]: contract
+                - generic [ref=e305]:
+                  - generic [ref=e306]:
+                    - generic [ref=e307]:
+                      - paragraph [ref=e308]: Responsibilities
+                      - paragraph [ref=e309]: "0"
+                    - generic [ref=e310]:
+                      - paragraph [ref=e311]: Assurances
+                      - paragraph [ref=e312]: "0"
+                    - generic [ref=e313]:
+                      - paragraph [ref=e314]: Profiles
+                      - paragraph [ref=e315]: "1"
+                    - generic [ref=e316]:
+                      - paragraph [ref=e317]: Access Paths
+                      - paragraph [ref=e318]: "2"
+                    - generic [ref=e319]:
+                      - paragraph [ref=e320]: Open Concerns
+                      - paragraph [ref=e321]: "0"
+                  - paragraph [ref=e322]: Steward should end onboarding with a committed responsibility contract. Edit responsibilities and checks here when you want deterministic control; use Chat when you want Steward to refine the model agentically.
+                  - generic [ref=e323]:
+                    - generic [ref=e324]:
+                      - generic [ref=e325]:
+                        - img [ref=e326]
+                        - paragraph [ref=e328]: Selected Profiles
+                      - generic [ref=e330]:
+                        - generic [ref=e331]:
+                          - generic [ref=e332]:
+                            - paragraph [ref=e333]: Bambu Printer
+                            - paragraph [ref=e334]: primary profile · 90% confidence
+                          - generic [ref=e335]: selected
+                        - paragraph [ref=e336]: Bambu Lab printer with native MQTT telemetry and printer-specific responsibilities.
+                        - paragraph [ref=e337]: "Requires: mqtt"
+                    - generic [ref=e338]:
+                      - generic [ref=e339]:
+                        - img [ref=e340]
+                        - paragraph [ref=e347]: Accepted Access Methods
+                      - generic [ref=e348]:
+                        - generic [ref=e349]:
+                          - generic [ref=e350]:
+                            - generic [ref=e351]:
+                              - paragraph [ref=e352]: MQTT
+                              - paragraph [ref=e353]: mqtt · secure
+                            - generic [ref=e354]: validated
+                          - paragraph [ref=e355]: Observed protocol hint
+                        - generic [ref=e356]:
+                          - generic [ref=e357]:
+                            - generic [ref=e358]:
+                              - paragraph [ref=e359]: MQTT :8883
+                              - paragraph [ref=e360]: mqtt:8883 · secure
+                            - generic [ref=e361]: validated
+                          - paragraph [ref=e362]: Native MQTT telemetry or command bus
+                  - generic [ref=e363]:
+                    - generic [ref=e364]:
+                      - generic [ref=e365]:
+                        - generic [ref=e366]: Committed Responsibilities
+                        - paragraph [ref=e367]: What Steward is explicitly responsible for keeping healthy on this endpoint.
+                      - generic [ref=e368]:
+                        - button "Add Assurance" [ref=e369]:
+                          - img [ref=e370]
+                          - text: Add Assurance
+                        - button "Add Responsibility" [ref=e372]:
+                          - img [ref=e373]
+                          - text: Add Responsibility
+                    - paragraph [ref=e374]: No responsibilities have been committed yet. Finish onboarding in Chat to convert observed access and profiles into a concrete Steward contract.
+                  - generic [ref=e375]:
+                    - generic [ref=e376]:
+                      - generic [ref=e377]:
+                        - generic [ref=e378]: Pending Onboarding Draft
+                        - paragraph [ref=e379]: Current onboarding draft before final commitment.
+                      - generic [ref=e380]:
+                        - generic [ref=e381]: ready to commit
+                        - button "Edit Draft" [ref=e382]:
+                          - img [ref=e383]
+                          - text: Edit Draft
+                        - button "Reset" [ref=e386]:
+                          - img [ref=e387]
+                          - text: Reset
+                    - paragraph [ref=e390]: Bambu Lab X1 Carbon 3D printer identified at 192.168.68.57. This is an IoT device manufactured by AMPAK Technology (Taiwan) running an MQTT-over-TLS service on port 8883. The device is online and classified as IoT with moderate confidence (0.71). No existing assurance policies are in place.
+                    - generic [ref=e391]:
+                      - generic [ref=e392]:
+                        - paragraph [ref=e393]: Draft profiles and access
+                        - paragraph [ref=e394]: No uncommitted profile or access changes.
+                      - generic [ref=e395]:
+                        - generic [ref=e396]:
+                          - paragraph [ref=e397]: Draft responsibilities and assurances
+                          - generic [ref=e398]:
+                            - button "Add Draft Assurance" [ref=e399]:
+                              - img [ref=e400]
+                              - text: Add Draft Assurance
+                            - button "Add Draft Responsibility" [ref=e402]:
+                              - img [ref=e403]
+                              - text: Add Draft Responsibility
+                        - generic [ref=e404]:
+                          - generic [ref=e405]:
+                            - generic [ref=e406]:
+                              - paragraph [ref=e407]: Printer availability
+                              - paragraph [ref=e408]: perimeter responsibility
+                            - generic [ref=e409]:
+                              - generic [ref=e410]: high
+                              - button "Add Check" [ref=e411]:
+                                - img [ref=e412]
+                                - text: Add Check
+                              - button "Edit" [ref=e413]:
+                                - img [ref=e414]
+                                - text: Edit
+                              - button "Delete" [ref=e417]:
+                                - img [ref=e418]
+                                - text: Delete
+                          - paragraph [ref=e421]: Keep the printer reachable and ready for jobs.
+                          - generic [ref=e423]:
+                            - generic [ref=e424]:
+                              - generic [ref=e425]:
+                                - paragraph [ref=e426]: Printer web reachability
+                                - paragraph [ref=e427]: Every 120s · http reachability · target running
+                              - generic [ref=e428]: medium
+                            - paragraph [ref=e429]: A secondary HTTP reachability check helps Steward detect management surface drift early.
+                            - generic [ref=e430]:
+                              - button "Edit" [ref=e431]:
+                                - img [ref=e432]
+                                - text: Edit
+                              - button "Delete" [ref=e435]:
+                                - img [ref=e436]
+                                - text: Delete
+                        - generic [ref=e439]:
+                          - generic [ref=e440]:
+                            - generic [ref=e441]:
+                              - paragraph [ref=e442]: Print telemetry and job state
+                              - paragraph [ref=e443]: telemetry responsibility
+                            - generic [ref=e444]:
+                              - generic [ref=e445]: medium
+                              - button "Add Check" [ref=e446]:
+                                - img [ref=e447]
+                                - text: Add Check
+                              - button "Edit" [ref=e448]:
+                                - img [ref=e449]
+                                - text: Edit
+                              - button "Delete" [ref=e452]:
+                                - img [ref=e453]
+                                - text: Delete
+                          - paragraph [ref=e456]: Track job state, telemetry freshness, and unusual drift from normal behavior.
+                          - generic [ref=e458]:
+                            - generic [ref=e459]:
+                              - generic [ref=e460]:
+                                - paragraph [ref=e461]: MQTT reachability
+                                - paragraph [ref=e462]: Every 60s · mqtt reachability · target running
+                              - generic [ref=e463]: high
+                            - paragraph [ref=e464]: Bambu printers expose their richest live state through MQTT and Steward should keep that path healthy.
+                            - paragraph [ref=e465]: "Needs access: mqtt"
+                            - generic [ref=e466]:
+                              - button "Edit" [ref=e467]:
+                                - img [ref=e468]
+                                - text: Edit
+                              - button "Delete" [ref=e471]:
+                                - img [ref=e472]
+                                - text: Delete
+                        - generic [ref=e475]:
+                          - generic [ref=e476]:
+                            - generic [ref=e477]:
+                              - paragraph [ref=e478]: Firmware posture
+                              - paragraph [ref=e479]: platform responsibility
+                            - generic [ref=e480]:
+                              - generic [ref=e481]: low
+                              - button "Add Check" [ref=e482]:
+                                - img [ref=e483]
+                                - text: Add Check
+                              - button "Edit" [ref=e484]:
+                                - img [ref=e485]
+                                - text: Edit
+                              - button "Delete" [ref=e488]:
+                                - img [ref=e489]
+                                - text: Delete
+                          - paragraph [ref=e492]: Watch firmware version and update posture for known issues and lifecycle drift.
+                          - generic [ref=e494]:
+                            - generic [ref=e495]:
+                              - generic [ref=e496]:
+                                - paragraph [ref=e497]: Firmware posture
+                                - paragraph [ref=e498]: Every 120s · workload presence · target running
+                              - generic [ref=e499]: low
+                            - paragraph [ref=e500]: Watch firmware version and update posture for known issues and lifecycle drift.
+                            - generic [ref=e501]:
+                              - button "Edit" [ref=e502]:
+                                - img [ref=e503]
+                                - text: Edit
+                              - button "Delete" [ref=e506]:
+                                - img [ref=e507]
+                                - text: Delete
+                        - generic [ref=e510]:
+                          - generic [ref=e511]:
+                            - generic [ref=e512]:
+                              - paragraph [ref=e513]: 3D Printing Operations
+                              - paragraph [ref=e514]: unknown responsibility
+                            - generic [ref=e515]:
+                              - generic [ref=e516]: medium
+                              - button "Add Check" [ref=e517]:
+                                - img [ref=e518]
+                                - text: Add Check
+                              - button "Edit" [ref=e519]:
+                                - img [ref=e520]
+                                - text: Edit
+                              - button "Delete" [ref=e523]:
+                                - img [ref=e524]
+                                - text: Delete
+                          - paragraph [ref=e527]: Bambu Lab X1 Carbon is a networked 3D printer; its primary function is receiving and executing print jobs.
+                          - generic [ref=e529]:
+                            - generic [ref=e530]:
+                              - generic [ref=e531]:
+                                - paragraph [ref=e532]: 3D Printing Operations
+                                - paragraph [ref=e533]: Every 120s · workload presence · target running
+                              - generic [ref=e534]: medium
+                            - paragraph [ref=e535]: Bambu Lab X1 Carbon is a networked 3D printer; its primary function is receiving and executing print jobs.
+                            - generic [ref=e536]:
+                              - button "Edit" [ref=e537]:
+                                - img [ref=e538]
+                                - text: Edit
+                              - button "Delete" [ref=e541]:
+                                - img [ref=e542]
+                                - text: Delete
+                        - generic [ref=e545]:
+                          - generic [ref=e546]:
+                            - generic [ref=e547]:
+                              - paragraph [ref=e548]: MQTT Telemetry & Control
+                              - paragraph [ref=e549]: unknown responsibility
+                            - generic [ref=e550]:
+                              - generic [ref=e551]: medium
+                              - button "Add Check" [ref=e552]:
+                                - img [ref=e553]
+                                - text: Add Check
+                              - button "Edit" [ref=e554]:
+                                - img [ref=e555]
+                                - text: Edit
+                              - button "Delete" [ref=e558]:
+                                - img [ref=e559]
+                                - text: Delete
+                          - paragraph [ref=e562]: Device exposes MQTTS (port 8883) for cloud/local telemetry reporting and remote print management via Bambu Studio or Bambu Handy.
+                          - generic [ref=e564]:
+                            - generic [ref=e565]:
+                              - generic [ref=e566]:
+                                - paragraph [ref=e567]: MQTT Telemetry & Control
+                                - paragraph [ref=e568]: Every 120s · workload presence · target running
+                              - generic [ref=e569]: medium
+                            - paragraph [ref=e570]: Device exposes MQTTS (port 8883) for cloud/local telemetry reporting and remote print management via Bambu Studio or Bambu Handy.
+                            - generic [ref=e571]:
+                              - button "Edit" [ref=e572]:
+                                - img [ref=e573]
+                                - text: Edit
+                              - button "Delete" [ref=e576]:
+                                - img [ref=e577]
+                                - text: Delete
+                        - generic [ref=e580]:
+                          - generic [ref=e581]:
+                            - generic [ref=e582]:
+                              - paragraph [ref=e583]: Firmware Updates
+                              - paragraph [ref=e584]: unknown responsibility
+                            - generic [ref=e585]:
+                              - generic [ref=e586]: low
+                              - button "Add Check" [ref=e587]:
+                                - img [ref=e588]
+                                - text: Add Check
+                              - button "Edit" [ref=e589]:
+                                - img [ref=e590]
+                                - text: Edit
+                              - button "Delete" [ref=e593]:
+                                - img [ref=e594]
+                                - text: Delete
+                          - paragraph [ref=e597]: Bambu Lab printers receive OTA firmware updates; monitoring update activity is important for security posture.
+                          - generic [ref=e599]:
+                            - generic [ref=e600]:
+                              - generic [ref=e601]:
+                                - paragraph [ref=e602]: Firmware Updates
+                                - paragraph [ref=e603]: Every 120s · workload presence · target running
+                              - generic [ref=e604]: low
+                            - paragraph [ref=e605]: Bambu Lab printers receive OTA firmware updates; monitoring update activity is important for security posture.
+                            - generic [ref=e606]:
+                              - button "Edit" [ref=e607]:
+                                - img [ref=e608]
+                                - text: Edit
+                              - button "Delete" [ref=e611]:
+                                - img [ref=e612]
+                                - text: Delete
+                    - generic [ref=e615]:
+                      - generic [ref=e616]:
+                        - paragraph [ref=e617]: Next actions
+                        - paragraph [ref=e618]: Watch Unexpected outbound connections beyond Bambu Lab cloud endpoints
+                        - paragraph [ref=e619]: Watch MQTT topic subscriptions or publishes from unauthorized clients
+                        - paragraph [ref=e620]: Watch Firmware version changes or unexpected OTA update attempts
+                        - paragraph [ref=e621]: Watch TLS certificate expiration or downgrade on port 8883
+                        - paragraph [ref=e622]: Watch New open ports or services appearing on the device
+                        - paragraph [ref=e623]: Watch Unusual data volume over MQTT indicating potential exfiltration of print files or camera streams
+                        - paragraph [ref=e624]: Review Steward's proposed responsibilities and complete onboarding when ready.
+                      - generic [ref=e625]:
+                        - paragraph [ref=e626]: Unresolved questions
+                        - paragraph [ref=e627]: Please provide a comma-separated list of workloads and responsibilities this 3D printer handles in your environment (e.g., production prototyping, batch manufacturing, personal hobby prints). Include anything discovery may have missed.
+                        - paragraph [ref=e628]: How is this printer's MQTT connection used?
+                        - paragraph [ref=e629]: Is this printer on a dedicated IoT VLAN or segmented network?
+                        - paragraph [ref=e630]: Does this printer have its built-in camera enabled for remote monitoring or timelapse?
+                        - paragraph [ref=e631]: Is LAN-only access code enabled on this printer to restrict local network control?
+                  - paragraph [ref=e632]: Onboarding still has 5 required questions pending.
+  - alert [ref=e146]

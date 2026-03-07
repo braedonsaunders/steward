@@ -153,20 +153,27 @@ docker run --rm -p 3000:3000 -v $(pwd)/.steward:/app/.steward steward
 - Bash (Linux/macOS/WSL):
 
 ```bash
+chmod +x ./scripts/install-prod.sh
 chmod +x ./scripts/run-prod.sh
+./scripts/install-prod.sh
 ./scripts/run-prod.sh
 ```
 
-Both launch scripts automatically verify/install Playwright Chromium before building.
-They also verify/install required network tools (`nmap`, `tshark`, `snmpget`, `snmpwalk`).
+On macOS and Linux, `install-prod.sh` bootstraps a production host from a fresh machine state:
+- installs Homebrew on macOS when needed
+- installs a supported Node.js runtime
+- installs PowerShell 7 (`pwsh`) so WinRM works from Unix hosts
+- verifies/installs required network tools (`nmap`, `tshark`, `snmpget`, `snmpwalk`)
+- installs the Playwright Chromium runtime and Linux browser dependencies
+
+`run-prod.sh` now calls that installer automatically before building and launching the Next standalone server.
 On Windows, if package-manager install is unavailable, Steward falls back to the Net-SNMP upstream installer and prompts for elevation when needed.
-To manage Windows endpoints over WinRM from Linux or macOS, install PowerShell 7 (`pwsh`) on the Steward host.
 
 ### PM2
 
 ```bash
 npm i -g pm2
-npm ci
+./scripts/install-prod.sh
 npm run build
 pm2 start ecosystem.config.cjs
 pm2 save

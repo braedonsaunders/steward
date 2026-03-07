@@ -344,6 +344,74 @@ module.exports = {
     };
   },
 
+  match(device, context) {
+    const services = device.services || [];
+    if (!hasSshPort(services) || looksWindows(device)) {
+      return [];
+    }
+
+    const type = String(device.type || "").toLowerCase();
+    const text = [
+      device.name,
+      device.hostname,
+      device.os,
+      device.role,
+      device.vendor,
+    ].filter(Boolean).join(" ").toLowerCase();
+    const serverLike = ["server", "nas", "container-host", "hypervisor", "vm-host"].includes(type)
+      || /(ubuntu|debian|rocky|almalinux|centos|fedora|linux|server|proxmox|synology|truenas)/.test(text);
+    if (!serverLike) {
+      return [];
+    }
+
+    let confidence = 0.48;
+    if (type === "server" || type === "container-host" || type === "vm-host" || type === "hypervisor") confidence += 0.22;
+    if (/(ubuntu|debian|rocky|almalinux|centos|fedora|linux)/.test(text)) confidence += 0.18;
+    if (device.protocols.includes("ssh")) confidence += 0.08;
+
+    return [{
+      profileId: "steward.linux-server",
+      name: "Linux Server",
+      kind: "primary",
+      confidence: Math.min(0.96, confidence),
+      summary: "Linux host managed over SSH for health, service, and hardening workflows.",
+      evidence: {
+        type: device.type,
+        protocols: device.protocols,
+      },
+      requiredAccessMethods: ["ssh"],
+      requiredCredentialProtocols: ["ssh"],
+      defaultWorkloads: [
+        {
+          workloadKey: "host-availability",
+          displayName: "Host availability",
+          criticality: "high",
+          category: "platform",
+          summary: "Keep the host reachable and responsive over its management surface.",
+        },
+        {
+          workloadKey: "system-services",
+          displayName: "Core system services",
+          criticality: "high",
+          category: "platform",
+          summary: "Track important services and restart or escalate when they drift.",
+        },
+      ],
+      defaultAssurances: [
+        {
+          assuranceKey: "host-availability",
+          workloadKey: "host-availability",
+          displayName: "SSH reachability",
+          criticality: "high",
+          checkIntervalSec: 60,
+          monitorType: "ssh_reachability",
+          requiredProtocols: ["ssh"],
+          rationale: "Steward needs a dependable management path before deeper automation is safe.",
+        },
+      ],
+    }];
+  },
+
   capabilities(device, context) {
     const config = context.getConfig();
     if (config.enabled === false) {
@@ -443,6 +511,73 @@ module.exports = {
         },
       },
     };
+  },
+
+  match(device, context) {
+    const services = device.services || [];
+    if (!hasWinrmPort(services)) {
+      return [];
+    }
+
+    const type = String(device.type || "").toLowerCase();
+    const text = [
+      device.name,
+      device.hostname,
+      device.os,
+      device.role,
+      device.vendor,
+    ].filter(Boolean).join(" ").toLowerCase();
+    const serverLike = type === "server" || /windows server|domain controller|active directory|hyper-v/.test(text);
+    if (!serverLike) {
+      return [];
+    }
+
+    let confidence = 0.52;
+    if (type === "server") confidence += 0.22;
+    if (/windows server|active directory|domain controller/.test(text)) confidence += 0.18;
+    if (device.protocols.includes("winrm")) confidence += 0.08;
+
+    return [{
+      profileId: "steward.windows-server",
+      name: "Windows Server",
+      kind: "primary",
+      confidence: Math.min(0.96, confidence),
+      summary: "Windows server managed over WinRM for service, patch, and event-log workflows.",
+      evidence: {
+        type: device.type,
+        protocols: device.protocols,
+      },
+      requiredAccessMethods: ["winrm"],
+      requiredCredentialProtocols: ["winrm"],
+      defaultWorkloads: [
+        {
+          workloadKey: "server-availability",
+          displayName: "Server availability",
+          criticality: "high",
+          category: "platform",
+          summary: "Keep the Windows server reachable and healthy.",
+        },
+        {
+          workloadKey: "windows-services",
+          displayName: "Critical Windows services",
+          criticality: "high",
+          category: "platform",
+          summary: "Track service drift and failure for important Windows roles.",
+        },
+      ],
+      defaultAssurances: [
+        {
+          assuranceKey: "winrm-reachability",
+          workloadKey: "server-availability",
+          displayName: "WinRM reachability",
+          criticality: "high",
+          checkIntervalSec: 60,
+          monitorType: "winrm_reachability",
+          requiredProtocols: ["winrm"],
+          rationale: "Steward needs verified WinRM reachability before it can manage this server safely.",
+        },
+      ],
+    }];
   },
 
   capabilities(device, context) {
@@ -591,6 +726,65 @@ module.exports = {
     };
   },
 
+  match(device, context) {
+    const services = device.services || [];
+    const windowsLike = looksWindows(device) || hasRdpPort(services) || hasWinrmPort(services);
+    if (!windowsLike) {
+      return [];
+    }
+
+    const workstationLike = isWorkstationTarget(device, services);
+    if (!workstationLike) {
+      return [];
+    }
+
+    let confidence = 0.46;
+    if (String(device.type || "").toLowerCase() === "workstation") confidence += 0.24;
+    if (hasWinrmPort(services)) confidence += 0.12;
+    if (hasRdpPort(services)) confidence += 0.08;
+
+    const requiredAccessMethods = hasWinrmPort(services) ? ["winrm"] : ["rdp"];
+    const requiredCredentialProtocols = hasWinrmPort(services) ? ["winrm"] : [];
+
+    return [{
+      profileId: "steward.windows-workstation",
+      name: "Windows Workstation",
+      kind: "primary",
+      confidence: Math.min(0.94, confidence),
+      summary: "Windows desktop or laptop with workstation-oriented health and exposure checks.",
+      evidence: {
+        type: device.type,
+        rdpObserved: hasRdpPort(services),
+        winrmObserved: hasWinrmPort(services),
+      },
+      requiredAccessMethods,
+      requiredCredentialProtocols,
+      defaultWorkloads: [
+        {
+          workloadKey: "desktop-availability",
+          displayName: "Desktop availability",
+          criticality: "medium",
+          category: "platform",
+          summary: "Keep the workstation reachable and surface health drift clearly.",
+        },
+      ],
+      defaultAssurances: [
+        {
+          assuranceKey: "desktop-reachability",
+          workloadKey: "desktop-availability",
+          displayName: hasWinrmPort(services) ? "WinRM reachability" : "RDP exposure check",
+          criticality: hasWinrmPort(services) ? "medium" : "low",
+          checkIntervalSec: 120,
+          monitorType: hasWinrmPort(services) ? "winrm_reachability" : "rdp_exposure",
+          requiredProtocols: requiredAccessMethods,
+          rationale: hasWinrmPort(services)
+            ? "Validated workstation management depends on WinRM reachability."
+            : "RDP is an exposure surface that Steward should monitor even when deep management is unavailable.",
+        },
+      ],
+    }];
+  },
+
   capabilities(device, context) {
     const config = context.getConfig();
     if (config.enabled === false) {
@@ -723,6 +917,55 @@ module.exports = {
     };
   },
 
+  match(device, context) {
+    const matched = hasUniFiHint(device) || hasUniFiPort(device.services || []);
+    if (!matched) {
+      return [];
+    }
+
+    let confidence = 0.54;
+    if (hasUniFiHint(device)) confidence += 0.24;
+    if (hasUniFiPort(device.services || [])) confidence += 0.12;
+    if (String(device.type || "").toLowerCase() === "access-point" || String(device.type || "").toLowerCase() === "router") {
+      confidence += 0.06;
+    }
+
+    return [{
+      profileId: "steward.ubiquiti-unifi",
+      name: "Ubiquiti / UniFi",
+      kind: "primary",
+      confidence: Math.min(0.98, confidence),
+      summary: "UniFi-managed network gear or controller with HTTP management workflows.",
+      evidence: {
+        type: device.type,
+        protocols: device.protocols,
+      },
+      requiredAccessMethods: ["http-api"],
+      requiredCredentialProtocols: ["http-api"],
+      defaultWorkloads: [
+        {
+          workloadKey: "controller-availability",
+          displayName: "Controller and API availability",
+          criticality: "high",
+          category: "network",
+          summary: "Keep the UniFi control surface reachable and trustworthy.",
+        },
+      ],
+      defaultAssurances: [
+        {
+          assuranceKey: "controller-http-reachability",
+          workloadKey: "controller-availability",
+          displayName: "Controller HTTP reachability",
+          criticality: "high",
+          checkIntervalSec: 60,
+          monitorType: "http_reachability",
+          requiredProtocols: ["http-api"],
+          rationale: "Most UniFi management and diagnostics flow through the controller API surface.",
+        },
+      ],
+    }];
+  },
+
   capabilities(device, context) {
     const config = context.getConfig();
     if (config.enabled === false) {
@@ -791,6 +1034,257 @@ module.exports = {
         ],
         verificationSteps: [],
         rollbackSteps: [],
+      },
+    ];
+  },
+};
+`;
+
+const GENERIC_MQTT_DEVICE_ADAPTER_SOURCE = `
+function hasMqttPort(services) {
+  return services.some((svc) => Number(svc.port) === 1883 || Number(svc.port) === 8883 || /mqtt/i.test(String(svc.name || "")));
+}
+
+module.exports = {
+  match(device, context) {
+    if (!hasMqttPort(device.services || []) && !(Array.isArray(device.protocols) && device.protocols.includes("mqtt"))) {
+      return [];
+    }
+
+    let confidence = 0.34;
+    if (hasMqttPort(device.services || [])) confidence += 0.22;
+    if (Array.isArray(device.protocols) && device.protocols.includes("mqtt")) confidence += 0.12;
+
+    return [{
+      profileId: "steward.generic-mqtt-device",
+      name: "Generic MQTT Device",
+      kind: "fallback",
+      confidence: Math.min(0.82, confidence),
+      summary: "Generic profile for devices exposing MQTT telemetry or command topics.",
+      evidence: {
+        protocols: device.protocols,
+      },
+      requiredAccessMethods: ["mqtt"],
+      requiredCredentialProtocols: ["mqtt"],
+      defaultWorkloads: [
+        {
+          workloadKey: "mqtt-availability",
+          displayName: "MQTT availability",
+          criticality: "medium",
+          category: "telemetry",
+          summary: "Keep the MQTT management path alive and track topic freshness.",
+        },
+      ],
+      defaultAssurances: [
+        {
+          assuranceKey: "mqtt-reachability",
+          workloadKey: "mqtt-availability",
+          displayName: "MQTT reachability",
+          criticality: "medium",
+          checkIntervalSec: 90,
+          monitorType: "mqtt_reachability",
+          requiredProtocols: ["mqtt"],
+          rationale: "Steward can only reason about this class of device if the MQTT surface remains reachable.",
+        },
+      ],
+    }];
+  },
+};
+`;
+
+const GENERIC_PRINTER_ADAPTER_SOURCE = `
+function hasPrintingSurface(services) {
+  return services.some((svc) =>
+    [515, 631, 9100].includes(Number(svc.port)) || /printer|ipp|jetdirect|lpd/i.test(String(svc.name || "")));
+}
+
+module.exports = {
+  match(device, context) {
+    const printerLike = String(device.type || "").toLowerCase() === "printer" || hasPrintingSurface(device.services || []);
+    if (!printerLike) {
+      return [];
+    }
+
+    let confidence = 0.42;
+    if (String(device.type || "").toLowerCase() === "printer") confidence += 0.22;
+    if (hasPrintingSurface(device.services || [])) confidence += 0.14;
+
+    return [{
+      profileId: "steward.generic-printer",
+      name: "Generic Printer",
+      kind: "fallback",
+      confidence: Math.min(0.88, confidence),
+      summary: "Generic network printer profile for availability, queue, and supply monitoring.",
+      evidence: {
+        type: device.type,
+      },
+      requiredAccessMethods: ["printing"],
+      requiredCredentialProtocols: [],
+      defaultWorkloads: [
+        {
+          workloadKey: "printer-availability",
+          displayName: "Printer availability",
+          criticality: "medium",
+          category: "perimeter",
+          summary: "Keep the printer reachable and visible as a dependable shared device.",
+        },
+      ],
+      defaultAssurances: [
+        {
+          assuranceKey: "printer-reachability",
+          workloadKey: "printer-availability",
+          displayName: "Printer reachability",
+          criticality: "medium",
+          checkIntervalSec: 120,
+          monitorType: "printer_reachability",
+          requiredProtocols: ["printing"],
+          rationale: "Steward should detect printer disappearance or queue surface drift quickly.",
+        },
+      ],
+    }];
+  },
+};
+`;
+
+const BAMBU_PRINTER_ADAPTER_SOURCE = `
+function hasMqttPort(services) {
+  return services.some((svc) => Number(svc.port) === 1883 || Number(svc.port) === 8883 || /mqtt/i.test(String(svc.name || "")));
+}
+
+function hasHttpPort(services) {
+  return services.some((svc) => [80, 443, 8080, 8443].includes(Number(svc.port)) || /http|https|web/i.test(String(svc.name || "")));
+}
+
+function hasPrintingSurface(services) {
+  return services.some((svc) =>
+    [515, 631, 9100].includes(Number(svc.port)) || /printer|ipp|jetdirect|lpd/i.test(String(svc.name || "")));
+}
+
+function identityText(device) {
+  const fingerprint = typeof device.metadata?.fingerprint === "object" && device.metadata.fingerprint !== null
+    ? device.metadata.fingerprint
+    : {};
+  const browser = typeof device.metadata?.browserObservation === "object" && device.metadata.browserObservation !== null
+    ? device.metadata.browserObservation
+    : {};
+  const browserTitles = Array.isArray(browser.endpoints)
+    ? browser.endpoints
+      .filter((value) => value && typeof value === "object")
+      .map((value) => String(value.title || ""))
+      .filter((value) => value.trim().length > 0)
+    : [];
+  return [
+    device.name,
+    device.hostname,
+    device.vendor,
+    device.os,
+    device.role,
+    String(fingerprint.inferredProduct || ""),
+    ...browserTitles,
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function hasBambuHint(device) {
+  return /(bambu|bbl technologies|x1 carbon|x1c|p1s|p1p|a1 mini|a1 |a1$|h2d|\\bbbl\\b)/i.test(identityText(device));
+}
+
+module.exports = {
+  match(device, context) {
+    const services = device.services || [];
+    const mqtt = hasMqttPort(services);
+    const http = hasHttpPort(services);
+    const printing = hasPrintingSurface(services);
+    const bambu = hasBambuHint(device);
+
+    if (!bambu && !(mqtt && printing)) {
+      return [];
+    }
+
+    let confidence = 0.38;
+    if (bambu) confidence += 0.38;
+    if (mqtt) confidence += 0.14;
+    if (http) confidence += 0.06;
+    if (printing) confidence += 0.08;
+    if (String(device.type || "").toLowerCase() === "printer") confidence += 0.06;
+
+    return [{
+      profileId: "steward.bambu-printer",
+      name: "Bambu Printer",
+      kind: "primary",
+      confidence: Math.min(0.99, confidence),
+      summary: "Bambu Lab printer with native MQTT telemetry and printer-specific responsibilities.",
+      evidence: {
+        mqtt,
+        http,
+        printing,
+        bambu,
+      },
+      requiredAccessMethods: mqtt ? ["mqtt"] : ["printing"],
+      requiredCredentialProtocols: mqtt ? ["mqtt"] : [],
+      defaultWorkloads: [
+        {
+          workloadKey: "printer-availability",
+          displayName: "Printer availability",
+          criticality: "high",
+          category: "perimeter",
+          summary: "Keep the printer reachable and ready for jobs.",
+        },
+        {
+          workloadKey: "print-telemetry",
+          displayName: "Print telemetry and job state",
+          criticality: "medium",
+          category: "telemetry",
+          summary: "Track job state, telemetry freshness, and unusual drift from normal behavior.",
+        },
+        {
+          workloadKey: "firmware-posture",
+          displayName: "Firmware posture",
+          criticality: "low",
+          category: "platform",
+          summary: "Watch firmware version and update posture for known issues and lifecycle drift.",
+        },
+      ],
+      defaultAssurances: [
+        {
+          assuranceKey: "bambu-mqtt-reachability",
+          workloadKey: "print-telemetry",
+          displayName: "MQTT reachability",
+          criticality: "high",
+          checkIntervalSec: 60,
+          monitorType: "mqtt_reachability",
+          requiredProtocols: ["mqtt"],
+          rationale: "Bambu printers expose their richest live state through MQTT and Steward should keep that path healthy.",
+        },
+        {
+          assuranceKey: "printer-http-reachability",
+          workloadKey: "printer-availability",
+          displayName: "Printer web reachability",
+          criticality: "medium",
+          checkIntervalSec: 120,
+          monitorType: "http_reachability",
+          requiredProtocols: http ? ["http-api"] : [],
+          rationale: "A secondary HTTP reachability check helps Steward detect management surface drift early.",
+        },
+      ],
+    }];
+  },
+
+  capabilities(device, context) {
+    const matches = this.match(device, context) || [];
+    if (!Array.isArray(matches) || matches.length === 0) {
+      return [];
+    }
+
+    return [
+      {
+        id: "capability.bambu-printer",
+        title: "Bambu Printer Operations",
+        protocol: "mqtt",
+        actions: [
+          "Subscribe to printer telemetry",
+          "Track job state and printer availability",
+          "Stage firmware and maintenance posture checks",
+        ],
       },
     ];
   },
@@ -1257,7 +1751,7 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
       version: "1.0.0",
       author: "Steward",
       entry: "index.js",
-      provides: ["enrichment", "protocol", "playbooks"],
+      provides: ["enrichment", "protocol", "playbooks", "profile"],
       docsUrl: "https://steward.local/docs/adapters/docker-ops",
       configSchema: [
         {
@@ -1448,7 +1942,7 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
       version: "1.0.0",
       author: "Steward",
       entry: "index.js",
-      provides: ["enrichment", "protocol", "playbooks"],
+      provides: ["enrichment", "protocol", "playbooks", "profile"],
       docsUrl: "https://steward.local/docs/adapters/linux-server",
       configSchema: [
         { key: "enabled", label: "Enabled", type: "boolean", default: true },
@@ -1526,7 +2020,7 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
       version: "1.1.0",
       author: "Steward",
       entry: "index.js",
-      provides: ["enrichment", "protocol", "playbooks"],
+      provides: ["enrichment", "protocol", "playbooks", "profile"],
       docsUrl: "https://steward.local/docs/adapters/windows-server",
       configSchema: [
         { key: "enabled", label: "Enabled", type: "boolean", default: true },
@@ -1640,7 +2134,7 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
       version: "1.0.1",
       author: "Steward",
       entry: "index.js",
-      provides: ["enrichment", "protocol", "playbooks"],
+      provides: ["enrichment", "protocol", "playbooks", "profile"],
       docsUrl: "https://steward.local/docs/adapters/windows-workstation",
       configSchema: [
         { key: "enabled", label: "Enabled", type: "boolean", default: true },
@@ -1756,7 +2250,7 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
       version: "1.0.0",
       author: "Steward",
       entry: "index.js",
-      provides: ["enrichment", "protocol", "playbooks"],
+      provides: ["enrichment", "protocol", "playbooks", "profile"],
       docsUrl: "https://steward.local/docs/adapters/ubiquiti-unifi",
       configSchema: [
         { key: "enabled", label: "Enabled", type: "boolean", default: true },
@@ -1834,5 +2328,71 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
       },
     },
     entrySource: UBIQUITI_UNIFI_ADAPTER_SOURCE,
+  },
+  {
+    dirName: "steward-generic-mqtt-device",
+    manifest: {
+      id: "steward.generic-mqtt-device",
+      name: "Generic MQTT Device",
+      description: "Fallback profile for devices that expose MQTT telemetry or commands but do not yet match a richer product profile.",
+      version: "1.0.0",
+      author: "Steward",
+      entry: "index.js",
+      provides: ["profile"],
+      docsUrl: "https://steward.local/docs/adapters/generic-mqtt-device",
+      configSchema: [
+        { key: "enabled", label: "Enabled", type: "boolean", default: true },
+      ],
+      defaultConfig: {
+        enabled: true,
+      },
+      toolSkills: [],
+      defaultToolConfig: {},
+    },
+    entrySource: GENERIC_MQTT_DEVICE_ADAPTER_SOURCE,
+  },
+  {
+    dirName: "steward-generic-printer",
+    manifest: {
+      id: "steward.generic-printer",
+      name: "Generic Printer",
+      description: "Fallback profile for shared printers and print appliances when no richer vendor profile has matched yet.",
+      version: "1.0.0",
+      author: "Steward",
+      entry: "index.js",
+      provides: ["profile"],
+      docsUrl: "https://steward.local/docs/adapters/generic-printer",
+      configSchema: [
+        { key: "enabled", label: "Enabled", type: "boolean", default: true },
+      ],
+      defaultConfig: {
+        enabled: true,
+      },
+      toolSkills: [],
+      defaultToolConfig: {},
+    },
+    entrySource: GENERIC_PRINTER_ADAPTER_SOURCE,
+  },
+  {
+    dirName: "steward-bambu-printer",
+    manifest: {
+      id: "steward.bambu-printer",
+      name: "Bambu Printer",
+      description: "First-party Bambu Lab printer profile with native MQTT and printer workload modeling.",
+      version: "1.0.0",
+      author: "Steward",
+      entry: "index.js",
+      provides: ["profile", "protocol"],
+      docsUrl: "https://steward.local/docs/adapters/bambu-printer",
+      configSchema: [
+        { key: "enabled", label: "Enabled", type: "boolean", default: true },
+      ],
+      defaultConfig: {
+        enabled: true,
+      },
+      toolSkills: [],
+      defaultToolConfig: {},
+    },
+    entrySource: BAMBU_PRINTER_ADAPTER_SOURCE,
   },
 ];

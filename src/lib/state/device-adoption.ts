@@ -18,3 +18,17 @@ export const getDeviceAdoptionStatus = (device: Device): DeviceAdoptionStatus =>
   }
   return "discovered";
 };
+
+export const getDeviceAttachedChatBlockReason = (device: Device): string | null => {
+  if (getDeviceAdoptionStatus(device) !== "adopted") {
+    return "Adopt this device before using attached chat controls.";
+  }
+
+  const adoption = getAdoptionRecord(device);
+  const runStatus = typeof adoption.runStatus === "string" ? adoption.runStatus.trim().toLowerCase() : "";
+  if (runStatus !== "completed") {
+    return `Finish onboarding for ${device.name} first so Steward has a committed responsibility contract, management profile, and access plan.`;
+  }
+
+  return null;
+};

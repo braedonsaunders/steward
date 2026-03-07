@@ -10,7 +10,8 @@ export type AdapterCapability =
   | "discovery"
   | "playbooks"
   | "enrichment"
-  | "protocol";
+  | "protocol"
+  | "profile";
 
 export type AdapterConfigFieldType =
   | "string"
@@ -126,6 +127,42 @@ export interface AdapterRuntimeContext {
   log: (level: "debug" | "info" | "warn" | "error", message: string, details?: Record<string, unknown>) => void;
 }
 
+export interface AdapterProfileMatchDraftWorkload {
+  workloadKey: string;
+  displayName: string;
+  criticality: "low" | "medium" | "high";
+  category?: string;
+  summary?: string;
+  evidence?: Record<string, unknown>;
+}
+
+export interface AdapterProfileMatchDraftAssurance {
+  assuranceKey: string;
+  workloadKey?: string;
+  displayName: string;
+  criticality: "low" | "medium" | "high";
+  desiredState?: "running" | "stopped";
+  checkIntervalSec?: number;
+  monitorType?: string;
+  requiredProtocols?: string[];
+  rationale?: string;
+  config?: Record<string, unknown>;
+}
+
+export interface AdapterProfileMatch {
+  profileId: string;
+  name?: string;
+  adapterId?: string;
+  kind?: "primary" | "fallback" | "supporting";
+  confidence: number;
+  summary: string;
+  evidence?: Record<string, unknown>;
+  requiredAccessMethods?: string[];
+  requiredCredentialProtocols?: string[];
+  defaultWorkloads?: AdapterProfileMatchDraftWorkload[];
+  defaultAssurances?: AdapterProfileMatchDraftAssurance[];
+}
+
 export interface StewardAdapter {
   /** Called once when the adapter is loaded. */
   activate?: (context: AdapterRuntimeContext) => Promise<void> | void;
@@ -151,6 +188,11 @@ export interface StewardAdapter {
   ) => Promise<DiscoveryCandidate> | DiscoveryCandidate;
   /** Additional management capabilities for the protocol negotiator. */
   capabilities?: (device: Device, context: AdapterRuntimeContext) => ManagementCapability[];
+  /** Deterministic device profile matching for onboarding and management selection. */
+  match?: (
+    device: Device,
+    context: AdapterRuntimeContext,
+  ) => Promise<AdapterProfileMatch | AdapterProfileMatch[] | null | undefined> | AdapterProfileMatch | AdapterProfileMatch[] | null | undefined;
 }
 
 // ---------------------------------------------------------------------------

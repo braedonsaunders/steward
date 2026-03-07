@@ -10,13 +10,13 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { AdoptionRun, DeviceAdapterBinding, DeviceCredential } from "@/lib/state/types";
+import type { AdoptionRun, DeviceCredential, DeviceProfileBinding } from "@/lib/state/types";
 import { cn } from "@/lib/utils";
 
 interface AdoptionSnapshot {
   run: AdoptionRun | null;
   credentials: Array<Omit<DeviceCredential, "vaultSecretRef">>;
-  bindings: DeviceAdapterBinding[];
+  profiles: DeviceProfileBinding[];
 }
 
 const CREDENTIAL_TYPE_OPTIONS = [

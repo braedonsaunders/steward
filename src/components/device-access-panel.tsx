@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Loader2, Puzzle, RefreshCw, Shield } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Loader2, Puzzle, RefreshCw, Shield, Waypoints } from "lucide-react";
 import { withClientApiToken } from "@/lib/auth/client-token";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,13 +10,19 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { AccessSurface, AdoptionRun, DeviceCredential } from "@/lib/state/types";
+import type {
+  AccessMethod,
+  AdoptionRun,
+  DeviceCredential,
+  DeviceProfileBinding,
+} from "@/lib/state/types";
 import { cn } from "@/lib/utils";
 
 interface AdoptionSnapshot {
   run: AdoptionRun | null;
   credentials: Array<Omit<DeviceCredential, "vaultSecretRef">>;
-  accessSurfaces: AccessSurface[];
+  accessMethods: AccessMethod[];
+  profiles: DeviceProfileBinding[];
 }
 
 const CREDENTIAL_TYPE_OPTIONS = [
@@ -34,6 +40,18 @@ const CREDENTIAL_TYPE_OPTIONS = [
 
 type DeviceAccessSection = "all" | "adapters" | "credentials";
 
+function profileStatusVariant(status: DeviceProfileBinding["status"]): "default" | "secondary" | "outline" {
+  if (status === "active" || status === "verified") return "default";
+  if (status === "selected") return "secondary";
+  return "outline";
+}
+
+function accessStatusVariant(status: AccessMethod["status"]): "default" | "secondary" | "outline" {
+  if (status === "validated") return "default";
+  if (status === "credentialed") return "secondary";
+  return "outline";
+}
+
 export function DeviceAccessPanel({
   deviceId,
   className,
@@ -47,7 +65,7 @@ export function DeviceAccessPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [credentialValidating, setCredentialValidating] = useState<Record<string, boolean>>({});
-  const [selectingSurface, setSelectingSurface] = useState<string | null>(null);
+  const [selectingProfileId, setSelectingProfileId] = useState<string | null>(null);
 
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [editingCredentialId, setEditingCredentialId] = useState<string | null>(null);
@@ -77,21 +95,6 @@ export function DeviceAccessPanel({
   useEffect(() => {
     void refresh();
   }, [refresh]);
-
-  const dedupedSurfaces = useMemo(() => {
-    const byKey = new Map<string, AccessSurface>();
-    for (const surface of snapshot?.accessSurfaces ?? []) {
-      const key = `${surface.adapterId}:${surface.protocol}`;
-      const existing = byKey.get(key);
-      if (!existing || (surface.selected && !existing.selected) || surface.score > existing.score) {
-        byKey.set(key, surface);
-      }
-    }
-    return Array.from(byKey.values()).sort((a, b) => {
-      if (a.selected !== b.selected) return a.selected ? -1 : 1;
-      return b.score - a.score;
-    });
-  }, [snapshot?.accessSurfaces]);
 
   const openCreateDialog = () => {
     setEditingCredentialId(null);
@@ -182,7 +185,7 @@ export function DeviceAccessPanel({
       const res = await fetch(`/api/devices/${deviceId}/credentials/${credentialId}/validate`, withClientApiToken({ method: "POST" }));
       const data = (await res.json()) as { error?: string };
       if (!res.ok) {
-          throw new Error(data.error ?? "Failed to mark credential as validated");
+        throw new Error(data.error ?? "Failed to mark credential as validated");
       }
       await refresh();
     } catch (err) {
@@ -192,36 +195,36 @@ export function DeviceAccessPanel({
     }
   };
 
-  const selectSurface = async (surface: AccessSurface) => {
-    setSelectingSurface(surface.id);
+  const selectProfile = async (profileId: string) => {
+    setSelectingProfileId(profileId);
     try {
       const res = await fetch(`/api/devices/${deviceId}/adapters/bind`, withClientApiToken({
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ adapterId: surface.adapterId, protocol: surface.protocol }),
+        body: JSON.stringify({ profileId }),
       }));
       const data = (await res.json()) as { error?: string };
       if (!res.ok) {
-        throw new Error(data.error ?? "Failed to select access surface");
+        throw new Error(data.error ?? "Failed to select management profile");
       }
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to select access surface");
+      setError(err instanceof Error ? err.message : "Failed to select management profile");
     } finally {
-      setSelectingSurface(null);
+      setSelectingProfileId(null);
     }
   };
 
-  const adapterCard = (
+  const profileCard = (
     <Card className="flex h-full min-h-0 min-w-0 flex-col bg-card/85">
       <CardHeader>
         <div className="flex items-center gap-2">
           <Puzzle className="size-4 text-muted-foreground" />
-          <CardTitle className="text-base">Adapters</CardTitle>
+          <CardTitle className="text-base">Management Profiles</CardTitle>
           <div className="ml-auto flex items-center gap-2">
-            {dedupedSurfaces.length > 0 ? (
+            {(snapshot?.profiles.length ?? 0) > 0 ? (
               <Badge variant="secondary" className="tabular-nums">
-                {dedupedSurfaces.length}
+                {snapshot?.profiles.length}
               </Badge>
             ) : null}
             <Button size="sm" variant="ghost" onClick={() => void refresh()} disabled={loading}>
@@ -230,33 +233,101 @@ export function DeviceAccessPanel({
             </Button>
           </div>
         </div>
-        <CardDescription>Candidate and selected adapter bindings Steward can use for this device</CardDescription>
+        <CardDescription>First-party or fallback profiles Steward can credibly use to manage this device</CardDescription>
       </CardHeader>
       <CardContent className="min-h-0 flex-1">
-        {dedupedSurfaces.length === 0 ? (
+        {(snapshot?.profiles.length ?? 0) === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 py-8 text-center">
             <Puzzle className="size-8 text-muted-foreground/40" />
-            <p className="text-sm text-muted-foreground">No adapters proposed for this device</p>
+            <p className="text-sm text-muted-foreground">No management profiles matched this device yet</p>
           </div>
         ) : (
           <ul className="h-full space-y-2 overflow-auto pr-1">
-            {dedupedSurfaces.map((surface) => (
-              <li key={surface.id} className="flex items-center justify-between gap-3 rounded-md border bg-background/75 p-3 text-xs">
-                <div className="min-w-0 flex-1">
-                  <p className="font-medium">{surface.adapterId}</p>
-                  <p className="text-muted-foreground">
-                    {surface.protocol} · {(surface.score * 100).toFixed(0)}% fit
-                  </p>
+            {snapshot!.profiles.map((profile) => {
+              const selected = ["selected", "verified", "active"].includes(profile.status);
+              return (
+                <li key={profile.id} className="rounded-md border bg-background/75 p-3 text-xs">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <div className="flex items-center gap-2">
+                        <p className="font-medium">{profile.name}</p>
+                        <Badge variant="outline">{profile.kind}</Badge>
+                        <Badge variant={profileStatusVariant(profile.status)}>{profile.status}</Badge>
+                      </div>
+                      <p className="text-muted-foreground">
+                        {(profile.confidence * 100).toFixed(0)}% confidence
+                      </p>
+                      <p className="text-muted-foreground">{profile.summary}</p>
+                      {(profile.requiredAccessMethods.length > 0 || profile.requiredCredentialProtocols.length > 0) ? (
+                        <p className="text-[10px] text-muted-foreground">
+                          Access: {profile.requiredAccessMethods.join(", ") || "none"}
+                          {" · "}
+                          Credentials: {profile.requiredCredentialProtocols.join(", ") || "none"}
+                        </p>
+                      ) : null}
+                    </div>
+                    <Button
+                      size="sm"
+                      variant={selected ? "secondary" : "outline"}
+                      className="h-6 shrink-0 px-2 text-[10px]"
+                      disabled={selected || selectingProfileId === profile.profileId}
+                      onClick={() => void selectProfile(profile.profileId)}
+                    >
+                      {selected ? (profile.status === "active" ? "Active" : "Selected") : selectingProfileId === profile.profileId ? "Selecting..." : "Select"}
+                    </Button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+
+  const accessMethodsCard = (
+    <Card className="flex h-full min-h-0 min-w-0 flex-col bg-card/85">
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <Waypoints className="size-4 text-muted-foreground" />
+          <CardTitle className="text-base">Access Methods</CardTitle>
+          <div className="ml-auto flex items-center gap-2">
+            {(snapshot?.accessMethods.length ?? 0) > 0 ? (
+              <Badge variant="secondary" className="tabular-nums">
+                {snapshot?.accessMethods.length}
+              </Badge>
+            ) : null}
+          </div>
+        </div>
+        <CardDescription>Observed or accepted management surfaces Steward can reach on this device</CardDescription>
+      </CardHeader>
+      <CardContent className="min-h-0 flex-1">
+        {(snapshot?.accessMethods.length ?? 0) === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center gap-2 py-8 text-center">
+            <Waypoints className="size-8 text-muted-foreground/40" />
+            <p className="text-sm text-muted-foreground">No management surfaces observed yet</p>
+          </div>
+        ) : (
+          <ul className="h-full space-y-2 overflow-auto pr-1">
+            {snapshot!.accessMethods.map((method) => (
+              <li key={method.id} className="rounded-md border bg-background/75 p-3 text-xs">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <p className="font-medium">{method.title}</p>
+                      {method.selected ? <Badge variant="secondary">Selected</Badge> : null}
+                      <Badge variant={accessStatusVariant(method.status)}>{method.status}</Badge>
+                    </div>
+                    <p className="text-muted-foreground">
+                      {method.protocol}
+                      {method.port ? ` · :${method.port}` : ""}
+                      {method.secure ? " · secure" : ""}
+                    </p>
+                    {method.summary ? (
+                      <p className="text-muted-foreground">{method.summary}</p>
+                    ) : null}
+                  </div>
                 </div>
-                <Button
-                  size="sm"
-                  variant={surface.selected ? "secondary" : "outline"}
-                  className="h-6 shrink-0 px-2 text-[10px]"
-                  disabled={surface.selected || selectingSurface === surface.id}
-                  onClick={() => void selectSurface(surface)}
-                >
-                  {surface.selected ? "Selected" : selectingSurface === surface.id ? "Selecting..." : "Select"}
-                </Button>
               </li>
             ))}
           </ul>
@@ -286,7 +357,7 @@ export function DeviceAccessPanel({
             <Button size="sm" variant="outline" onClick={openCreateDialog}>Add Credential</Button>
           </div>
         </div>
-        <CardDescription>Stored device credentials and their latest access status</CardDescription>
+        <CardDescription>Stored device credentials and their latest access state</CardDescription>
       </CardHeader>
       <CardContent className="min-h-0 flex-1">
         {(snapshot?.credentials ?? []).length === 0 ? (
@@ -355,13 +426,14 @@ export function DeviceAccessPanel({
       ) : null}
 
       {section === "all" ? (
-        <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-2">
-          {adapterCard}
+        <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-3">
+          {profileCard}
+          {accessMethodsCard}
           {credentialsCard}
         </div>
       ) : (
         <div className="min-h-0 flex-1">
-          {section === "adapters" ? adapterCard : credentialsCard}
+          {section === "adapters" ? profileCard : credentialsCard}
         </div>
       )}
 

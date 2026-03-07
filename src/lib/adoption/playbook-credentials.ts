@@ -16,6 +16,7 @@ const CREDENTIAL_GATED_PROTOCOLS = new Set([
   "http-api",
   "docker",
   "kubernetes",
+  "mqtt",
 ]);
 
 export function getMissingCredentialProtocolsForPlaybook(

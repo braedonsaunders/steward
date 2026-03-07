@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { isAuthorized } from "@/lib/auth/guard";
 import { startDeviceAdoption } from "@/lib/adoption/orchestrator";
+import { getDeviceNameValidationError, normalizeDeviceName } from "@/lib/devices/naming";
 import { getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
 import { stateStore } from "@/lib/state/store";
 import { DEVICE_TYPE_VALUES } from "@/lib/state/types";
@@ -88,7 +89,16 @@ export async function PATCH(
         { status: 403 },
       );
     }
-    device.name = payload.data.name;
+    const normalizedName = normalizeDeviceName(payload.data.name);
+    const nameValidationError = getDeviceNameValidationError(normalizedName);
+    if (nameValidationError) {
+      return NextResponse.json(
+        { error: `Invalid device name '${normalizedName}'. ${nameValidationError}` },
+        { status: 400 },
+      );
+    }
+
+    device.name = normalizedName;
     const identity =
       typeof device.metadata.identity === "object" && device.metadata.identity !== null
         ? (device.metadata.identity as Record<string, unknown>)
@@ -102,7 +112,7 @@ export async function PATCH(
         nameSetBy: "user",
       },
     };
-    updates.name = payload.data.name;
+    updates.name = normalizedName;
   }
 
   if (payload.data.autonomyTier !== undefined) {

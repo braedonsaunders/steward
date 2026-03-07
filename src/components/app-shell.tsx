@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger, SheetTitle } from "@/components/ui/sheet";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { ChatRuntimeProvider } from "@/lib/hooks/use-chat-runtime";
 import { StewardProvider, useSteward } from "@/lib/hooks/use-steward";
 import { navItemVariants, pageVariants, quickSpring, staggerContainerVariants } from "@/lib/motion";
 
@@ -296,7 +297,7 @@ function ShellInner({ children }: { children: React.ReactNode }) {
     <div className="flex h-dvh flex-col overflow-hidden md:flex-row">
       {/* Desktop sidebar */}
       <motion.aside
-        className="relative z-20 hidden h-full w-[220px] shrink-0 border-r border-sidebar-border bg-sidebar md:block"
+        className="relative z-20 hidden h-full w-[var(--steward-sidebar-width)] shrink-0 border-r border-sidebar-border bg-sidebar md:block"
         initial={reduceMotion ? undefined : { x: -18, opacity: 0 }}
         animate={reduceMotion ? undefined : { x: 0, opacity: 1 }}
         transition={{ ...quickSpring, delay: 0.04 }}
@@ -319,7 +320,7 @@ function ShellInner({ children }: { children: React.ReactNode }) {
           </SheetTrigger>
           <span className="steward-sidebar-font text-sm font-semibold">Steward</span>
         </motion.div>
-        <SheetContent side="left" className="w-[220px] bg-sidebar p-0">
+        <SheetContent side="left" className="w-[var(--steward-sidebar-width)] bg-sidebar p-0">
           <SheetTitle className="sr-only">Navigation</SheetTitle>
           <SidebarContent onNavigate={() => setOpen(false)} />
         </SheetContent>
@@ -373,7 +374,9 @@ function ShellInner({ children }: { children: React.ReactNode }) {
 export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <StewardProvider>
-      <ShellInner>{children}</ShellInner>
+      <ChatRuntimeProvider>
+        <ShellInner>{children}</ShellInner>
+      </ChatRuntimeProvider>
     </StewardProvider>
   );
 }
