@@ -1,4 +1,5 @@
 import { stateStore } from "@/lib/state/store";
+import { getHttpApiCredentialAuth } from "@/lib/credentials/http-api";
 import type {
   Assurance,
   AssuranceRun,
@@ -26,6 +27,13 @@ export interface DeviceWidgetContext {
     scope: {
       level?: string;
       operations: string[];
+    };
+    auth?: {
+      mode: string;
+      headerName?: string;
+      queryParamName?: string;
+      pathPrefix?: string;
+      appliedBySteward: boolean;
     };
   }>;
   baseline: DeviceBaseline | null;
@@ -66,21 +74,36 @@ export async function buildDeviceWidgetContext(deviceId: string): Promise<Device
   return {
     generatedAt: new Date().toISOString(),
     device,
-    credentials: credentials.map((credential) => ({
-      protocol: credential.protocol,
-      adapterId: credential.adapterId,
-      status: credential.status,
-      accountLabel: credential.accountLabel,
-      lastValidatedAt: credential.lastValidatedAt,
-      updatedAt: credential.updatedAt,
-      scope: {
-        level: typeof credential.scopeJson.level === "string" ? credential.scopeJson.level : undefined,
-        operations: Array.isArray(credential.scopeJson.operations)
-          ? credential.scopeJson.operations
-            .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-          : [],
-      },
-    })),
+    credentials: credentials.map((credential) => {
+      const auth = credential.protocol.toLowerCase() === "http-api"
+        ? getHttpApiCredentialAuth(credential.scopeJson)
+        : null;
+
+      return {
+        protocol: credential.protocol,
+        adapterId: credential.adapterId,
+        status: credential.status,
+        accountLabel: credential.accountLabel,
+        lastValidatedAt: credential.lastValidatedAt,
+        updatedAt: credential.updatedAt,
+        scope: {
+          level: typeof credential.scopeJson.level === "string" ? credential.scopeJson.level : undefined,
+          operations: Array.isArray(credential.scopeJson.operations)
+            ? credential.scopeJson.operations
+              .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+            : [],
+        },
+        auth: auth
+          ? {
+            mode: auth.mode,
+            headerName: auth.headerName,
+            queryParamName: auth.queryParamName,
+            pathPrefix: auth.pathPrefix,
+            appliedBySteward: true,
+          }
+          : undefined,
+      };
+    }),
     baseline: state.baselines.find((item) => item.deviceId === deviceId) ?? null,
     workloads,
     assurances,

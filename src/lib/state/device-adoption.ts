@@ -27,7 +27,7 @@ export const getDeviceAttachedChatBlockReason = (device: Device): string | null 
   const adoption = getAdoptionRecord(device);
   const runStatus = typeof adoption.runStatus === "string" ? adoption.runStatus.trim().toLowerCase() : "";
   if (runStatus !== "completed") {
-    return `Finish onboarding for ${device.name} first so Steward has a committed responsibility contract, management profile, and access plan.`;
+    return `Finish onboarding for ${device.name} first so Steward has a committed responsibility contract, adapter selection, and access plan.`;
   }
 
   return null;

@@ -200,7 +200,7 @@ export async function resolvePowerShellRuntime(forceRefresh = false): Promise<Po
 
 export function powerShellInstallHint(platform: NodeJS.Platform = process.platform): string {
   if (platform === "darwin") {
-    return "Install PowerShell 7 (`pwsh`) on the Steward node. macOS WinRM requires HTTPS with Basic authentication.";
+    return "Install PowerShell 7 (`pwsh`) on the Steward node if you need WinRM. Prefer Windows OpenSSH when available; macOS WinRM requires HTTPS with Basic authentication.";
   }
   if (platform === "win32") {
     return "Install Windows PowerShell or PowerShell 7 on the Steward node.";

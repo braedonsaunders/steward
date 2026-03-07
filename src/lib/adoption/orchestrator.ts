@@ -95,6 +95,16 @@ function readStringArray(value: unknown): string[] {
     .filter((item) => item.length > 0);
 }
 
+function parseJsonRecord(value: string | null | undefined): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 function readDraft(run: AdoptionRun | null): OnboardingDraft | null {
   if (!run) return null;
   const raw = run.profileJson.onboardingDraft;
@@ -290,6 +300,33 @@ function mergeAssuranceDrafts(...sets: OnboardingDraftAssurance[][]): Onboarding
     }
   }
   return Array.from(merged.values());
+}
+
+function resolveCompletionWorkloadDrafts(
+  inputWorkloads: OnboardingDraftWorkload[] | undefined,
+  fallbackWorkloads: OnboardingDraftWorkload[],
+): OnboardingDraftWorkload[] {
+  return inputWorkloads === undefined
+    ? mergeWorkloadDrafts(fallbackWorkloads)
+    : mergeWorkloadDrafts(inputWorkloads);
+}
+
+function resolveCompletionAssuranceDrafts(args: {
+  inputAssurances: OnboardingDraftAssurance[] | undefined;
+  inputWorkloadsProvided: boolean;
+  fallbackAssurances: OnboardingDraftAssurance[];
+}): OnboardingDraftAssurance[] {
+  if (args.inputAssurances !== undefined) {
+    return mergeAssuranceDrafts(args.inputAssurances);
+  }
+  if (args.inputWorkloadsProvided) {
+    return [];
+  }
+  return mergeAssuranceDrafts(args.fallbackAssurances);
+}
+
+function canCompleteOnboardingDraft(selectedProfileIds: string[]): boolean {
+  return selectedProfileIds.length > 0;
 }
 
 function assureDraftCoverage(
@@ -771,7 +808,7 @@ async function syncDeviceAdoptionState(
       residualUnknowns: existingDraft?.residualUnknowns ?? [],
       dismissedWorkloadKeys,
       dismissedAssuranceKeys,
-      completionReady: selectedProfileIds.length > 0 && draftWorkloads.length > 0,
+      completionReady: canCompleteOnboardingDraft(selectedProfileIds),
     };
 
   const stage = buildRunStage({
@@ -885,12 +922,14 @@ function commitOnboardingContract(args: {
     const selectedProfileIds = new Set(args.draft.selectedProfileIds);
     const selectedAccessKeys = new Set(args.draft.selectedAccessMethodKeys);
     const workloadIdByKey = new Map<string, string>();
+    const desiredWorkloadKeys = new Set(args.draft.workloads.map((workload) => workload.workloadKey.toLowerCase()));
+    const desiredAssuranceKeys = new Set(args.draft.assurances.map((assurance) => assurance.assuranceKey.toLowerCase()));
 
     const existingWorkloads = db.prepare(`
-      SELECT id, workloadKey
+      SELECT id, workloadKey, source
       FROM workloads
       WHERE deviceId = ?
-    `).all(args.device.id) as Array<{ id: string; workloadKey: string }>;
+    `).all(args.device.id) as Array<{ id: string; workloadKey: string; source: string }>;
     for (const row of existingWorkloads) {
       workloadIdByKey.set(String(row.workloadKey).toLowerCase(), String(row.id));
     }
@@ -913,6 +952,42 @@ function commitOnboardingContract(args: {
         @monitorType, @requiredProtocols, @rationale, @configJson, @serviceKey, @policyJson, @createdAt, @updatedAt
       )
     `);
+    const deleteAssurance = db.prepare(`
+      DELETE FROM assurances
+      WHERE id = ?
+    `);
+    const deleteWorkload = db.prepare(`
+      DELETE FROM workloads
+      WHERE id = ?
+    `);
+
+    const existingAssurances = db.prepare(`
+      SELECT id, assuranceKey, configJson
+      FROM assurances
+      WHERE deviceId = ?
+    `).all(args.device.id) as Array<{ id: string; assuranceKey: string; configJson: string | null }>;
+    for (const assurance of existingAssurances) {
+      const assuranceKey = String(assurance.assuranceKey).toLowerCase();
+      const configJson = parseJsonRecord(assurance.configJson);
+      if (
+        !desiredAssuranceKeys.has(assuranceKey)
+        && isRecord(configJson)
+        && configJson.committedFrom === "onboarding"
+      ) {
+        deleteAssurance.run(assurance.id);
+      }
+    }
+
+    for (const workload of existingWorkloads) {
+      const workloadKey = String(workload.workloadKey).toLowerCase();
+      if (
+        !desiredWorkloadKeys.has(workloadKey)
+        && String(workload.source) === "onboarding_conversation"
+      ) {
+        deleteWorkload.run(workload.id);
+        workloadIdByKey.delete(workloadKey);
+      }
+    }
 
     for (const workload of args.draft.workloads) {
       const lookupKey = workload.workloadKey.toLowerCase();
@@ -936,12 +1011,12 @@ function commitOnboardingContract(args: {
       });
     }
 
-    const existingAssurances = db.prepare(`
+    const retainedAssurances = db.prepare(`
       SELECT id, assuranceKey
       FROM assurances
       WHERE deviceId = ?
     `).all(args.device.id) as Array<{ id: string; assuranceKey: string }>;
-    const assuranceIdByKey = new Map(existingAssurances.map((row) => [String(row.assuranceKey).toLowerCase(), String(row.id)]));
+    const assuranceIdByKey = new Map(retainedAssurances.map((row) => [String(row.assuranceKey).toLowerCase(), String(row.id)]));
 
     for (const assurance of args.draft.assurances) {
       const assuranceId = assuranceIdByKey.get(assurance.assuranceKey.toLowerCase()) ?? `assurance-${randomUUID()}`;
@@ -1175,14 +1250,15 @@ export async function completeDeviceOnboarding(input: CompleteDeviceOnboardingIn
     accessMethods,
   );
 
-  const workloads = mergeWorkloadDrafts(input.workloads ?? [], fallbackDraft.workloads);
-  if (workloads.length === 0) {
-    throw new Error("Onboarding cannot complete without at least one committed workload.");
-  }
+  const workloads = resolveCompletionWorkloadDrafts(input.workloads, fallbackDraft.workloads);
 
   const assurances = assureDraftCoverage(
     workloads,
-    mergeAssuranceDrafts(input.assurances ?? [], fallbackDraft.assurances),
+    resolveCompletionAssuranceDrafts({
+      inputAssurances: input.assurances,
+      inputWorkloadsProvided: input.workloads !== undefined,
+      fallbackAssurances: fallbackDraft.assurances,
+    }),
   );
 
   const summary = input.summary?.trim() || fallbackDraft.summary || `Steward completed onboarding for ${device.name}.`;

@@ -1,0 +1,36 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1600" y2="900" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#081220"/>
+      <stop offset="1" stop-color="#15354F"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="900" rx="32" fill="url(#bg)"/>
+  <rect x="72" y="72" width="1456" height="756" rx="28" fill="#0A1626" stroke="#31516E"/>
+  <rect x="112" y="112" width="334" height="676" rx="24" fill="#0E2034"/>
+  <rect x="476" y="112" width="1012" height="676" rx="24" fill="#0E1E31"/>
+  <text x="146" y="168" fill="#EDF6FF" font-size="34" font-family="Arial, Helvetica, sans-serif" font-weight="700">Conversation placeholder</text>
+  <text x="146" y="208" fill="#9FC3E1" font-size="20" font-family="Arial, Helvetica, sans-serif">Replace with the real chat workspace and evidence panel.</text>
+  <rect x="146" y="252" width="266" height="72" rx="18" fill="#14324C"/>
+  <rect x="146" y="344" width="266" height="72" rx="18" fill="#11283E"/>
+  <rect x="146" y="436" width="266" height="72" rx="18" fill="#11283E"/>
+  <text x="176" y="296" fill="#F8FBFF" font-size="22" font-family="Arial, Helvetica, sans-serif">Why was the NAS slow?</text>
+  <text x="176" y="388" fill="#B9D2E8" font-size="22" font-family="Arial, Helvetica, sans-serif">Show recent changes</text>
+  <text x="176" y="480" fill="#B9D2E8" font-size="22" font-family="Arial, Helvetica, sans-serif">What depends on switch-03?</text>
+  <rect x="516" y="154" width="932" height="132" rx="22" fill="#163550"/>
+  <rect x="516" y="320" width="932" height="192" rx="22" fill="#11283E"/>
+  <rect x="516" y="548" width="932" height="170" rx="22" fill="#11283E"/>
+  <text x="552" y="202" fill="#F7FAFF" font-size="28" font-family="Arial, Helvetica, sans-serif" font-weight="700">User</text>
+  <text x="552" y="242" fill="#F7FAFF" font-size="26" font-family="Arial, Helvetica, sans-serif">Why was the file server slow yesterday?</text>
+  <text x="552" y="368" fill="#F7FAFF" font-size="28" font-family="Arial, Helvetica, sans-serif" font-weight="700">Steward</text>
+  <text x="552" y="410" fill="#B7D1E8" font-size="22" font-family="Arial, Helvetica, sans-serif">Between 2:15 PM and 3:40 PM, disk I/O on nas-01 was saturated.</text>
+  <text x="552" y="444" fill="#B7D1E8" font-size="22" font-family="Arial, Helvetica, sans-serif">Root cause: backup verification from vm-host-02 over a 1 Gbps link.</text>
+  <text x="552" y="478" fill="#B7D1E8" font-size="22" font-family="Arial, Helvetica, sans-serif">Recommendation: move the verification window or add link capacity.</text>
+  <text x="552" y="596" fill="#F7FAFF" font-size="28" font-family="Arial, Helvetica, sans-serif" font-weight="700">Evidence</text>
+  <rect x="552" y="624" width="254" height="56" rx="16" fill="#173754"/>
+  <rect x="824" y="624" width="254" height="56" rx="16" fill="#173754"/>
+  <rect x="1096" y="624" width="254" height="56" rx="16" fill="#173754"/>
+  <text x="584" y="660" fill="#F8FBFF" font-size="20" font-family="Arial, Helvetica, sans-serif">nas-01 metrics</text>
+  <text x="856" y="660" fill="#F8FBFF" font-size="20" font-family="Arial, Helvetica, sans-serif">Backup job timeline</text>
+  <text x="1128" y="660" fill="#F8FBFF" font-size="20" font-family="Arial, Helvetica, sans-serif">Shift window</text>
+</svg>

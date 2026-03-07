@@ -99,6 +99,23 @@ const OperationSchema = z.object({
       expectRegex: z.string().optional(),
       successStrategy: z.enum(["auto", "transport", "response", "expectation"]).optional(),
       insecureSkipVerify: z.boolean().optional(),
+      sessionId: z.string().min(1).optional(),
+      sessionHolder: z.string().min(1).optional(),
+      leaseTtlMs: z.number().int().min(10_000).max(24 * 60 * 60 * 1000).optional(),
+      keepSessionOpen: z.boolean().optional(),
+      arbitrationMode: z.enum(["shared", "exclusive", "single-connection"]).optional(),
+      singleConnectionHint: z.boolean().optional(),
+    }),
+    z.object({
+      protocol: z.literal("local-tool"),
+      toolId: z.string().min(1),
+      command: z.string().min(1),
+      argv: z.array(z.string()).optional(),
+      cwd: z.string().min(1).optional(),
+      timeoutMs: z.number().int().min(1_000).max(15 * 60 * 1000).optional(),
+      installIfMissing: z.boolean().optional(),
+      healthCheckBeforeRun: z.boolean().optional(),
+      approvalReason: z.string().min(1).optional(),
     }),
     z.object({
       protocol: z.literal("winrm"),
@@ -375,6 +392,10 @@ const ADAPTER_ALIASES: Record<string, string[]> = {
 };
 
 function adapterMatchesDevice(operation: OperationSpec, device: Device): boolean {
+  if (operation.brokerRequest?.protocol === "local-tool" || operation.adapterId.startsWith("local-tool")) {
+    return true;
+  }
+
   const aliases = ADAPTER_ALIASES[operation.adapterId] ?? [operation.adapterId];
   if (aliases.some((alias) => device.protocols.includes(alias))) {
     return true;

@@ -73,6 +73,11 @@ export interface AdapterToolSkill {
     expectedSemanticTarget?: string;
     commandTemplate?: string;
     commandTemplates?: Partial<Record<OperationKind, string>>;
+    localToolId?: string;
+    localToolCommand?: string;
+    localToolArgs?: string[];
+    localToolCwd?: string;
+    localToolInstallIfMissing?: boolean;
   };
   /** Optional relative path to Markdown guidance (e.g. skills/my-tool.md) */
   skillMdPath?: string;

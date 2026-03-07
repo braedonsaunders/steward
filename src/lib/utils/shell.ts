@@ -71,10 +71,11 @@ export const runCommand = (
   file: string,
   args: string[],
   timeoutMs = 15_000,
+  cwd?: string,
 ): Promise<ShellResult> => {
   const env = buildShellEnv(process.env);
   return new Promise((resolve) => {
-    execFile(file, args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, env }, (error, stdout, stderr) => {
+    execFile(file, args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, env, cwd }, (error, stdout, stderr) => {
       if (!error) {
         resolve({
           ok: true,

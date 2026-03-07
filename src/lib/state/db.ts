@@ -264,6 +264,89 @@ function createSchema(database: Database.Database): void {
       updatedAt   TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS local_tools (
+      id               TEXT PRIMARY KEY,
+      manifestJson     TEXT NOT NULL DEFAULT '{}',
+      enabled          INTEGER NOT NULL DEFAULT 1,
+      status           TEXT NOT NULL DEFAULT 'not_installed',
+      healthStatus     TEXT NOT NULL DEFAULT 'unknown',
+      installDir       TEXT,
+      binPathsJson     TEXT NOT NULL DEFAULT '{}',
+      installedVersion TEXT,
+      lastInstalledAt  TEXT,
+      lastCheckedAt    TEXT,
+      lastRunAt        TEXT,
+      approvedAt       TEXT,
+      error            TEXT,
+      createdAt        TEXT NOT NULL,
+      updatedAt        TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS local_tool_approvals (
+      id           TEXT PRIMARY KEY,
+      toolId       TEXT NOT NULL REFERENCES local_tools(id) ON DELETE CASCADE,
+      action       TEXT NOT NULL,
+      status       TEXT NOT NULL,
+      requestedBy  TEXT NOT NULL,
+      requestedAt  TEXT NOT NULL,
+      expiresAt    TEXT,
+      reason       TEXT NOT NULL,
+      requestJson  TEXT NOT NULL DEFAULT '{}',
+      approvedBy   TEXT,
+      approvedAt   TEXT,
+      deniedBy     TEXT,
+      deniedAt     TEXT,
+      denialReason TEXT,
+      decisionJson TEXT NOT NULL DEFAULT '{}'
+    );
+
+    CREATE TABLE IF NOT EXISTS protocol_sessions (
+      id                 TEXT PRIMARY KEY,
+      deviceId           TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+      protocol           TEXT NOT NULL,
+      adapterId          TEXT,
+      desiredState       TEXT NOT NULL DEFAULT 'idle',
+      status             TEXT NOT NULL DEFAULT 'idle',
+      arbitrationMode    TEXT NOT NULL DEFAULT 'shared',
+      singleConnectionHint INTEGER NOT NULL DEFAULT 0,
+      keepaliveAllowed   INTEGER NOT NULL DEFAULT 0,
+      summary            TEXT,
+      configJson         TEXT NOT NULL DEFAULT '{}',
+      activeLeaseId      TEXT,
+      lastConnectedAt    TEXT,
+      lastDisconnectedAt TEXT,
+      lastMessageAt      TEXT,
+      lastError          TEXT,
+      createdAt          TEXT NOT NULL,
+      updatedAt          TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS protocol_session_leases (
+      id           TEXT PRIMARY KEY,
+      sessionId    TEXT NOT NULL REFERENCES protocol_sessions(id) ON DELETE CASCADE,
+      holder       TEXT NOT NULL,
+      purpose      TEXT NOT NULL,
+      mode         TEXT NOT NULL,
+      status       TEXT NOT NULL,
+      exclusive    INTEGER NOT NULL DEFAULT 0,
+      requestedAt  TEXT NOT NULL,
+      grantedAt    TEXT,
+      releasedAt   TEXT,
+      expiresAt    TEXT NOT NULL,
+      metadataJson TEXT NOT NULL DEFAULT '{}'
+    );
+
+    CREATE TABLE IF NOT EXISTS protocol_session_messages (
+      id           TEXT PRIMARY KEY,
+      sessionId    TEXT NOT NULL REFERENCES protocol_sessions(id) ON DELETE CASCADE,
+      deviceId     TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+      direction    TEXT NOT NULL,
+      channel      TEXT NOT NULL,
+      payload      TEXT NOT NULL DEFAULT '',
+      metadataJson TEXT NOT NULL DEFAULT '{}',
+      observedAt   TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS chat_sessions (
       id        TEXT PRIMARY KEY,
       title     TEXT NOT NULL,
@@ -593,6 +676,24 @@ function createSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_chat_messages_sessionId ON chat_messages(sessionId);
     CREATE INDEX IF NOT EXISTS idx_chat_messages_createdAt ON chat_messages(createdAt);
     CREATE INDEX IF NOT EXISTS idx_adapters_source ON adapters(source);
+    CREATE INDEX IF NOT EXISTS idx_local_tools_status ON local_tools(status);
+    CREATE INDEX IF NOT EXISTS idx_local_tools_updatedAt ON local_tools(updatedAt);
+    CREATE INDEX IF NOT EXISTS idx_local_tool_approvals_tool_status
+      ON local_tool_approvals(toolId, status, requestedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_local_tool_approvals_status_expires
+      ON local_tool_approvals(status, expiresAt);
+    CREATE INDEX IF NOT EXISTS idx_protocol_sessions_device_protocol
+      ON protocol_sessions(deviceId, protocol);
+    CREATE INDEX IF NOT EXISTS idx_protocol_sessions_status
+      ON protocol_sessions(status, updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_protocol_session_leases_session_status
+      ON protocol_session_leases(sessionId, status, expiresAt);
+    CREATE INDEX IF NOT EXISTS idx_protocol_session_leases_holder
+      ON protocol_session_leases(holder, status, expiresAt);
+    CREATE INDEX IF NOT EXISTS idx_protocol_session_messages_session_observed
+      ON protocol_session_messages(sessionId, observedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_protocol_session_messages_device_observed
+      ON protocol_session_messages(deviceId, observedAt DESC);
     CREATE INDEX IF NOT EXISTS idx_discovery_observations_ip ON discovery_observations(ip);
     CREATE INDEX IF NOT EXISTS idx_discovery_observations_observedAt ON discovery_observations(observedAt);
     CREATE INDEX IF NOT EXISTS idx_discovery_observations_expiresAt ON discovery_observations(expiresAt);

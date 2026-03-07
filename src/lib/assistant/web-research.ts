@@ -333,11 +333,15 @@ async function fetchJson(
       json = null;
     }
 
+    const fallbackError = truncate(stripHtml(text), 240);
+    const error = response.ok ? undefined : (describeJsonError(json) ?? (fallbackError || undefined));
+
     return {
       ok: response.ok,
       status: response.status,
       finalUrl: response.url,
       json,
+      error,
     };
   } catch (error) {
     return {
@@ -350,6 +354,54 @@ async function fetchJson(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function describeJsonError(json: unknown): string | undefined {
+  if (!json || typeof json !== "object") {
+    return undefined;
+  }
+
+  const messageParts: string[] = [];
+  const record = json as Record<string, unknown>;
+
+  if (typeof record.error === "string" && record.error.trim()) {
+    messageParts.push(record.error.trim());
+  }
+  if (typeof record.message === "string" && record.message.trim()) {
+    messageParts.push(record.message.trim());
+  }
+
+  const nestedError = typeof record.error === "object" && record.error
+    ? record.error as Record<string, unknown>
+    : null;
+
+  if (nestedError) {
+    const detail = typeof nestedError.detail === "string" ? nestedError.detail.trim() : "";
+    if (detail) {
+      messageParts.push(detail);
+    }
+
+    const meta = typeof nestedError.meta === "object" && nestedError.meta
+      ? nestedError.meta as Record<string, unknown>
+      : null;
+    const errors = Array.isArray(meta?.errors) ? meta.errors : [];
+    if (errors.length > 0) {
+      const first = errors[0];
+      if (first && typeof first === "object") {
+        const firstRecord = first as Record<string, unknown>;
+        const loc = Array.isArray(firstRecord.loc)
+          ? firstRecord.loc.filter((part): part is string => typeof part === "string").join(".")
+          : "";
+        const msg = typeof firstRecord.msg === "string" ? firstRecord.msg.trim() : "";
+        if (loc || msg) {
+          messageParts.push([loc, msg].filter(Boolean).join(": "));
+        }
+      }
+    }
+  }
+
+  const unique = Array.from(new Set(messageParts.filter(Boolean)));
+  return unique.length > 0 ? unique.join(" | ") : undefined;
 }
 
 function toHit(raw: { title: string; url: string; snippet?: string }, position: number): WebResearchHit | null {
@@ -384,16 +436,18 @@ async function searchBraveApi(
   maxResults: number,
   timeoutMs: number,
   apiKey: string,
-): Promise<{ ok: boolean; status: number; error?: string; results: WebResearchHit[] }> {
-  const offset = Math.max(0, (page - 1) * maxResults);
+): Promise<{ ok: boolean; status: number; error?: string; results: WebResearchHit[]; hasMoreResults: boolean }> {
+  const pageSize = Math.max(1, Math.min(maxResults, 20));
+  const offset = Math.max(0, Math.min(9, page - 1));
   const url = new URL(BRAVE_API_SEARCH_URL);
   url.searchParams.set("q", query);
-  url.searchParams.set("count", String(maxResults));
+  url.searchParams.set("count", String(pageSize));
   url.searchParams.set("offset", String(offset));
 
   const response = await fetchJson(url.toString(), timeoutMs, {
     method: "GET",
     headers: {
+      Accept: "application/json",
       "X-Subscription-Token": apiKey,
     },
   });
@@ -404,10 +458,12 @@ async function searchBraveApi(
       status: response.status,
       error: response.error,
       results: [],
+      hasMoreResults: false,
     };
   }
 
   const payload = response.json as {
+    query?: { more_results_available?: boolean };
     web?: { results?: Array<{ title?: string; url?: string; description?: string }> };
   };
   const items = payload.web?.results ?? [];
@@ -429,7 +485,12 @@ async function searchBraveApi(
     }
   }
 
-  return { ok: true, status: response.status, results: hits };
+  return {
+    ok: true,
+    status: response.status,
+    results: hits,
+    hasMoreResults: Boolean(payload.query?.more_results_available),
+  };
 }
 
 async function searchSerperApi(
@@ -798,6 +859,14 @@ export async function runWebResearch(
   }
 
   if (results.length === 0) {
+    const noResultWarnings = [...warnings];
+    const selectedOnly = fallbackStrategy === "selected_only";
+    if (selectedOnly) {
+      noResultWarnings.push(`Fallback is disabled by runtime setting 'selected_only'; only '${provider}' was queried.`);
+    } else if (providersToTry.length <= 1) {
+      noResultWarnings.push("No fallback providers were available with the current key and provider configuration.");
+    }
+
     return {
       ok: false,
       engine: selectedEngine,
@@ -808,10 +877,12 @@ export async function runWebResearch(
       readEndIndex: 0,
       hasMoreResultsToRead: false,
       nextReadFromResult: null,
-      summary: "Search completed but no usable public-web results were parsed across available providers.",
+      summary: selectedOnly
+        ? `Search via '${provider}' completed but returned no usable public-web results, and fallback is disabled by runtime settings.`
+        : "Search completed but no usable public-web results were parsed across available providers.",
       results: [],
       consultedPages: [],
-      warnings: warnings.length > 0 ? warnings : ["No usable public search results."],
+      warnings: noResultWarnings.length > 0 ? noResultWarnings : ["No usable public search results."],
     };
   }
 
@@ -907,6 +978,7 @@ async function searchWithProvider(
   while (searchedPages < searchPages && results.length < maxResults) {
     let pageResults: WebResearchHit[] = [];
     let pageFailure: { status: number; error?: string } | null = null;
+    let shouldStopAfterPage = false;
 
     if (provider === "brave_scrape") {
       const searchResponse = await fetchText(searchUrl, timeoutMs);
@@ -934,6 +1006,7 @@ async function searchWithProvider(
       } else {
         pageResults = response.results;
         page += 1;
+        shouldStopAfterPage = !response.hasMoreResults;
       }
     } else if (provider === "serper") {
       const response = await searchSerperApi(query, page, maxResults, timeoutMs, apiKeys.serper ?? "");
@@ -986,6 +1059,10 @@ async function searchWithProvider(
         ...parsed,
         position: results.length + 1,
       });
+    }
+
+    if (shouldStopAfterPage) {
+      break;
     }
   }
 

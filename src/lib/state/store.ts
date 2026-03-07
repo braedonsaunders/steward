@@ -43,10 +43,15 @@ import type {
   GraphEdge,
   GraphNode,
   Incident,
+  LocalToolApproval,
+  LocalToolRecord,
   MaintenanceWindow,
   OAuthState,
   PlaybookRun,
   PolicyRule,
+  ProtocolSessionLease,
+  ProtocolSessionMessage,
+  ProtocolSessionRecord,
   ProviderConfig,
   Recommendation,
   RuntimeSettings,
@@ -69,6 +74,13 @@ const WEB_RESEARCH_FALLBACK_STRATEGY_VALUES: RuntimeSettings["webResearchFallbac
   "prefer_non_key",
   "key_only",
   "selected_only",
+];
+
+const LOCAL_TOOL_APPROVAL_POLICY_VALUES: RuntimeSettings["localToolInstallPolicy"][] = [
+  "require_approval",
+  "allow_safe",
+  "allow_all",
+  "deny",
 ];
 
 /* ---------- Row <-> Domain helpers ---------- */
@@ -479,6 +491,99 @@ function assuranceRunFromRow(row: Record<string, unknown>): AssuranceRun {
   };
 }
 
+function localToolRecordFromRow(row: Record<string, unknown>): LocalToolRecord {
+  return {
+    id: String(row.id),
+    manifest: JSON.parse(String(row.manifestJson ?? "{}")) as LocalToolRecord["manifest"],
+    enabled: Number(row.enabled ?? 0) > 0,
+    status: row.status as LocalToolRecord["status"],
+    healthStatus: row.healthStatus as LocalToolRecord["healthStatus"],
+    installDir: row.installDir ? String(row.installDir) : undefined,
+    binPaths: JSON.parse(String(row.binPathsJson ?? "{}")) as Record<string, string>,
+    installedVersion: row.installedVersion ? String(row.installedVersion) : undefined,
+    lastInstalledAt: row.lastInstalledAt ? String(row.lastInstalledAt) : undefined,
+    lastCheckedAt: row.lastCheckedAt ? String(row.lastCheckedAt) : undefined,
+    lastRunAt: row.lastRunAt ? String(row.lastRunAt) : undefined,
+    approvedAt: row.approvedAt ? String(row.approvedAt) : undefined,
+    error: row.error ? String(row.error) : undefined,
+    createdAt: String(row.createdAt),
+    updatedAt: String(row.updatedAt),
+  };
+}
+
+function localToolApprovalFromRow(row: Record<string, unknown>): LocalToolApproval {
+  return {
+    id: String(row.id),
+    toolId: String(row.toolId),
+    action: row.action as LocalToolApproval["action"],
+    status: row.status as LocalToolApproval["status"],
+    requestedBy: row.requestedBy as LocalToolApproval["requestedBy"],
+    requestedAt: String(row.requestedAt),
+    expiresAt: row.expiresAt ? String(row.expiresAt) : undefined,
+    reason: String(row.reason ?? ""),
+    requestJson: JSON.parse(String(row.requestJson ?? "{}")) as Record<string, unknown>,
+    approvedBy: row.approvedBy ? String(row.approvedBy) : undefined,
+    approvedAt: row.approvedAt ? String(row.approvedAt) : undefined,
+    deniedBy: row.deniedBy ? String(row.deniedBy) : undefined,
+    deniedAt: row.deniedAt ? String(row.deniedAt) : undefined,
+    denialReason: row.denialReason ? String(row.denialReason) : undefined,
+    decisionJson: JSON.parse(String(row.decisionJson ?? "{}")) as Record<string, unknown>,
+  };
+}
+
+function protocolSessionRecordFromRow(row: Record<string, unknown>): ProtocolSessionRecord {
+  return {
+    id: String(row.id),
+    deviceId: String(row.deviceId),
+    protocol: row.protocol as ProtocolSessionRecord["protocol"],
+    adapterId: row.adapterId ? String(row.adapterId) : undefined,
+    desiredState: row.desiredState as ProtocolSessionRecord["desiredState"],
+    status: row.status as ProtocolSessionRecord["status"],
+    arbitrationMode: row.arbitrationMode as ProtocolSessionRecord["arbitrationMode"],
+    singleConnectionHint: Number(row.singleConnectionHint ?? 0) > 0,
+    keepaliveAllowed: Number(row.keepaliveAllowed ?? 0) > 0,
+    summary: row.summary ? String(row.summary) : undefined,
+    configJson: JSON.parse(String(row.configJson ?? "{}")) as Record<string, unknown>,
+    activeLeaseId: row.activeLeaseId ? String(row.activeLeaseId) : undefined,
+    lastConnectedAt: row.lastConnectedAt ? String(row.lastConnectedAt) : undefined,
+    lastDisconnectedAt: row.lastDisconnectedAt ? String(row.lastDisconnectedAt) : undefined,
+    lastMessageAt: row.lastMessageAt ? String(row.lastMessageAt) : undefined,
+    lastError: row.lastError ? String(row.lastError) : undefined,
+    createdAt: String(row.createdAt),
+    updatedAt: String(row.updatedAt),
+  };
+}
+
+function protocolSessionLeaseFromRow(row: Record<string, unknown>): ProtocolSessionLease {
+  return {
+    id: String(row.id),
+    sessionId: String(row.sessionId),
+    holder: String(row.holder),
+    purpose: String(row.purpose),
+    mode: row.mode as ProtocolSessionLease["mode"],
+    status: row.status as ProtocolSessionLease["status"],
+    exclusive: Number(row.exclusive ?? 0) > 0,
+    requestedAt: String(row.requestedAt),
+    grantedAt: row.grantedAt ? String(row.grantedAt) : undefined,
+    releasedAt: row.releasedAt ? String(row.releasedAt) : undefined,
+    expiresAt: String(row.expiresAt),
+    metadataJson: JSON.parse(String(row.metadataJson ?? "{}")) as Record<string, unknown>,
+  };
+}
+
+function protocolSessionMessageFromRow(row: Record<string, unknown>): ProtocolSessionMessage {
+  return {
+    id: String(row.id),
+    sessionId: String(row.sessionId),
+    deviceId: String(row.deviceId),
+    direction: row.direction as ProtocolSessionMessage["direction"],
+    channel: String(row.channel),
+    payload: String(row.payload ?? ""),
+    metadataJson: JSON.parse(String(row.metadataJson ?? "{}")) as Record<string, unknown>,
+    observedAt: String(row.observedAt),
+  };
+}
+
 function slugifyKey(value: string): string {
   return value
     .toLowerCase()
@@ -829,6 +934,46 @@ class StateStore {
             .filter((value) => value.length > 0),
         ),
       ),
+      localToolInstallPolicy: LOCAL_TOOL_APPROVAL_POLICY_VALUES.includes(
+        raw.localToolInstallPolicy as RuntimeSettings["localToolInstallPolicy"],
+      )
+        ? raw.localToolInstallPolicy as RuntimeSettings["localToolInstallPolicy"]
+        : defaults.localToolInstallPolicy,
+      localToolExecutionPolicy: LOCAL_TOOL_APPROVAL_POLICY_VALUES.includes(
+        raw.localToolExecutionPolicy as RuntimeSettings["localToolExecutionPolicy"],
+      )
+        ? raw.localToolExecutionPolicy as RuntimeSettings["localToolExecutionPolicy"]
+        : defaults.localToolExecutionPolicy,
+      localToolApprovalTtlMs: asPositiveInt(raw.localToolApprovalTtlMs, defaults.localToolApprovalTtlMs),
+      localToolHealthCheckIntervalMs: asPositiveInt(
+        raw.localToolHealthCheckIntervalMs,
+        defaults.localToolHealthCheckIntervalMs,
+      ),
+      localToolAutoInstallBuiltins: asBool(raw.localToolAutoInstallBuiltins, defaults.localToolAutoInstallBuiltins),
+      protocolSessionSweepIntervalMs: asPositiveInt(
+        raw.protocolSessionSweepIntervalMs,
+        defaults.protocolSessionSweepIntervalMs,
+      ),
+      protocolSessionDefaultLeaseTtlMs: asPositiveInt(
+        raw.protocolSessionDefaultLeaseTtlMs,
+        defaults.protocolSessionDefaultLeaseTtlMs,
+      ),
+      protocolSessionMaxLeaseTtlMs: asPositiveInt(
+        raw.protocolSessionMaxLeaseTtlMs,
+        defaults.protocolSessionMaxLeaseTtlMs,
+      ),
+      protocolSessionMessageRetentionLimit: Math.max(
+        10,
+        asPositiveInt(raw.protocolSessionMessageRetentionLimit, defaults.protocolSessionMessageRetentionLimit),
+      ),
+      protocolSessionReconnectBaseMs: asPositiveInt(
+        raw.protocolSessionReconnectBaseMs,
+        defaults.protocolSessionReconnectBaseMs,
+      ),
+      protocolSessionReconnectMaxMs: asPositiveInt(
+        raw.protocolSessionReconnectMaxMs,
+        defaults.protocolSessionReconnectMaxMs,
+      ),
     };
   }
 
@@ -1064,6 +1209,17 @@ class StateStore {
       securityScannerAlertsEnabled: map.get("runtime.securityScannerAlertsEnabled"),
       serviceContractScannerAlertsEnabled: map.get("runtime.serviceContractScannerAlertsEnabled"),
       ignoredIncidentTypes: map.get("runtime.ignoredIncidentTypes"),
+      localToolInstallPolicy: map.get("runtime.localToolInstallPolicy"),
+      localToolExecutionPolicy: map.get("runtime.localToolExecutionPolicy"),
+      localToolApprovalTtlMs: map.get("runtime.localToolApprovalTtlMs"),
+      localToolHealthCheckIntervalMs: map.get("runtime.localToolHealthCheckIntervalMs"),
+      localToolAutoInstallBuiltins: map.get("runtime.localToolAutoInstallBuiltins"),
+      protocolSessionSweepIntervalMs: map.get("runtime.protocolSessionSweepIntervalMs"),
+      protocolSessionDefaultLeaseTtlMs: map.get("runtime.protocolSessionDefaultLeaseTtlMs"),
+      protocolSessionMaxLeaseTtlMs: map.get("runtime.protocolSessionMaxLeaseTtlMs"),
+      protocolSessionMessageRetentionLimit: map.get("runtime.protocolSessionMessageRetentionLimit"),
+      protocolSessionReconnectBaseMs: map.get("runtime.protocolSessionReconnectBaseMs"),
+      protocolSessionReconnectMaxMs: map.get("runtime.protocolSessionReconnectMaxMs"),
     });
   }
 
@@ -1137,6 +1293,10 @@ class StateStore {
       const maintenanceWindows = (db.prepare("SELECT * FROM maintenance_windows").all() as Record<string, unknown>[]).map(maintenanceWindowFromRow);
       const playbookRuns = (db.prepare("SELECT * FROM playbook_runs ORDER BY createdAt DESC").all() as Record<string, unknown>[]).map(playbookRunFromRow);
       const dailyDigests = (db.prepare("SELECT * FROM daily_digests ORDER BY generatedAt DESC").all() as Record<string, unknown>[]).map(dailyDigestFromRow);
+      const localTools = (db.prepare("SELECT * FROM local_tools ORDER BY id ASC").all() as Record<string, unknown>[]).map(localToolRecordFromRow);
+      const localToolApprovals = (db.prepare("SELECT * FROM local_tool_approvals ORDER BY requestedAt DESC").all() as Record<string, unknown>[]).map(localToolApprovalFromRow);
+      const protocolSessions = (db.prepare("SELECT * FROM protocol_sessions ORDER BY updatedAt DESC").all() as Record<string, unknown>[]).map(protocolSessionRecordFromRow);
+      const protocolSessionLeases = (db.prepare("SELECT * FROM protocol_session_leases ORDER BY requestedAt DESC").all() as Record<string, unknown>[]).map(protocolSessionLeaseFromRow);
 
       return {
         version: this.getVersion(db),
@@ -1157,6 +1317,10 @@ class StateStore {
         maintenanceWindows,
         playbookRuns,
         dailyDigests,
+        localTools,
+        localToolApprovals,
+        protocolSessions,
+        protocolSessionLeases,
       };
     });
 
@@ -1227,6 +1391,17 @@ class StateStore {
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.securityScannerAlertsEnabled', ?)").run(state.runtimeSettings.securityScannerAlertsEnabled ? "true" : "false");
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.serviceContractScannerAlertsEnabled', ?)").run(state.runtimeSettings.serviceContractScannerAlertsEnabled ? "true" : "false");
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.ignoredIncidentTypes', ?)").run(JSON.stringify(state.runtimeSettings.ignoredIncidentTypes));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.localToolInstallPolicy', ?)").run(state.runtimeSettings.localToolInstallPolicy);
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.localToolExecutionPolicy', ?)").run(state.runtimeSettings.localToolExecutionPolicy);
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.localToolApprovalTtlMs', ?)").run(String(state.runtimeSettings.localToolApprovalTtlMs));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.localToolHealthCheckIntervalMs', ?)").run(String(state.runtimeSettings.localToolHealthCheckIntervalMs));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.localToolAutoInstallBuiltins', ?)").run(String(state.runtimeSettings.localToolAutoInstallBuiltins));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.protocolSessionSweepIntervalMs', ?)").run(String(state.runtimeSettings.protocolSessionSweepIntervalMs));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.protocolSessionDefaultLeaseTtlMs', ?)").run(String(state.runtimeSettings.protocolSessionDefaultLeaseTtlMs));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.protocolSessionMaxLeaseTtlMs', ?)").run(String(state.runtimeSettings.protocolSessionMaxLeaseTtlMs));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.protocolSessionMessageRetentionLimit', ?)").run(String(state.runtimeSettings.protocolSessionMessageRetentionLimit));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.protocolSessionReconnectBaseMs', ?)").run(String(state.runtimeSettings.protocolSessionReconnectBaseMs));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.protocolSessionReconnectMaxMs', ?)").run(String(state.runtimeSettings.protocolSessionReconnectMaxMs));
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('system.nodeIdentity', ?)").run(state.systemSettings.nodeIdentity);
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('system.timezone', ?)").run(state.systemSettings.timezone);
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('system.digestScheduleEnabled', ?)").run(String(state.systemSettings.digestScheduleEnabled));
@@ -1475,6 +1650,133 @@ class StateStore {
         insertDigest.run({
           id, generatedAt, periodStart, periodEnd,
           content: JSON.stringify(content),
+        });
+      }
+
+      // Local tools
+      db.prepare("DELETE FROM local_tool_approvals").run();
+      db.prepare("DELETE FROM local_tools").run();
+      const insertLocalTool = db.prepare(`
+        INSERT INTO local_tools (
+          id, manifestJson, enabled, status, healthStatus, installDir, binPathsJson, installedVersion,
+          lastInstalledAt, lastCheckedAt, lastRunAt, approvedAt, error, createdAt, updatedAt
+        )
+        VALUES (
+          @id, @manifestJson, @enabled, @status, @healthStatus, @installDir, @binPathsJson, @installedVersion,
+          @lastInstalledAt, @lastCheckedAt, @lastRunAt, @approvedAt, @error, @createdAt, @updatedAt
+        )
+      `);
+      for (const tool of state.localTools) {
+        insertLocalTool.run({
+          id: tool.id,
+          manifestJson: JSON.stringify(tool.manifest),
+          enabled: tool.enabled ? 1 : 0,
+          status: tool.status,
+          healthStatus: tool.healthStatus,
+          installDir: tool.installDir ?? null,
+          binPathsJson: JSON.stringify(tool.binPaths ?? {}),
+          installedVersion: tool.installedVersion ?? null,
+          lastInstalledAt: tool.lastInstalledAt ?? null,
+          lastCheckedAt: tool.lastCheckedAt ?? null,
+          lastRunAt: tool.lastRunAt ?? null,
+          approvedAt: tool.approvedAt ?? null,
+          error: tool.error ?? null,
+          createdAt: tool.createdAt,
+          updatedAt: tool.updatedAt,
+        });
+      }
+      const insertLocalToolApproval = db.prepare(`
+        INSERT INTO local_tool_approvals (
+          id, toolId, action, status, requestedBy, requestedAt, expiresAt, reason,
+          requestJson, approvedBy, approvedAt, deniedBy, deniedAt, denialReason, decisionJson
+        )
+        VALUES (
+          @id, @toolId, @action, @status, @requestedBy, @requestedAt, @expiresAt, @reason,
+          @requestJson, @approvedBy, @approvedAt, @deniedBy, @deniedAt, @denialReason, @decisionJson
+        )
+      `);
+      for (const approval of state.localToolApprovals) {
+        insertLocalToolApproval.run({
+          id: approval.id,
+          toolId: approval.toolId,
+          action: approval.action,
+          status: approval.status,
+          requestedBy: approval.requestedBy,
+          requestedAt: approval.requestedAt,
+          expiresAt: approval.expiresAt ?? null,
+          reason: approval.reason,
+          requestJson: JSON.stringify(approval.requestJson ?? {}),
+          approvedBy: approval.approvedBy ?? null,
+          approvedAt: approval.approvedAt ?? null,
+          deniedBy: approval.deniedBy ?? null,
+          deniedAt: approval.deniedAt ?? null,
+          denialReason: approval.denialReason ?? null,
+          decisionJson: JSON.stringify(approval.decisionJson ?? {}),
+        });
+      }
+
+      // Protocol sessions
+      db.prepare("DELETE FROM protocol_session_messages").run();
+      db.prepare("DELETE FROM protocol_session_leases").run();
+      db.prepare("DELETE FROM protocol_sessions").run();
+      const insertProtocolSession = db.prepare(`
+        INSERT INTO protocol_sessions (
+          id, deviceId, protocol, adapterId, desiredState, status, arbitrationMode, singleConnectionHint,
+          keepaliveAllowed, summary, configJson, activeLeaseId, lastConnectedAt, lastDisconnectedAt,
+          lastMessageAt, lastError, createdAt, updatedAt
+        )
+        VALUES (
+          @id, @deviceId, @protocol, @adapterId, @desiredState, @status, @arbitrationMode, @singleConnectionHint,
+          @keepaliveAllowed, @summary, @configJson, @activeLeaseId, @lastConnectedAt, @lastDisconnectedAt,
+          @lastMessageAt, @lastError, @createdAt, @updatedAt
+        )
+      `);
+      for (const session of state.protocolSessions) {
+        insertProtocolSession.run({
+          id: session.id,
+          deviceId: session.deviceId,
+          protocol: session.protocol,
+          adapterId: session.adapterId ?? null,
+          desiredState: session.desiredState,
+          status: session.status,
+          arbitrationMode: session.arbitrationMode,
+          singleConnectionHint: session.singleConnectionHint ? 1 : 0,
+          keepaliveAllowed: session.keepaliveAllowed ? 1 : 0,
+          summary: session.summary ?? null,
+          configJson: JSON.stringify(session.configJson ?? {}),
+          activeLeaseId: session.activeLeaseId ?? null,
+          lastConnectedAt: session.lastConnectedAt ?? null,
+          lastDisconnectedAt: session.lastDisconnectedAt ?? null,
+          lastMessageAt: session.lastMessageAt ?? null,
+          lastError: session.lastError ?? null,
+          createdAt: session.createdAt,
+          updatedAt: session.updatedAt,
+        });
+      }
+      const insertProtocolSessionLease = db.prepare(`
+        INSERT INTO protocol_session_leases (
+          id, sessionId, holder, purpose, mode, status, exclusive, requestedAt, grantedAt,
+          releasedAt, expiresAt, metadataJson
+        )
+        VALUES (
+          @id, @sessionId, @holder, @purpose, @mode, @status, @exclusive, @requestedAt, @grantedAt,
+          @releasedAt, @expiresAt, @metadataJson
+        )
+      `);
+      for (const lease of state.protocolSessionLeases) {
+        insertProtocolSessionLease.run({
+          id: lease.id,
+          sessionId: lease.sessionId,
+          holder: lease.holder,
+          purpose: lease.purpose,
+          mode: lease.mode,
+          status: lease.status,
+          exclusive: lease.exclusive ? 1 : 0,
+          requestedAt: lease.requestedAt,
+          grantedAt: lease.grantedAt ?? null,
+          releasedAt: lease.releasedAt ?? null,
+          expiresAt: lease.expiresAt,
+          metadataJson: JSON.stringify(lease.metadataJson ?? {}),
         });
       }
       });
@@ -1817,6 +2119,17 @@ class StateStore {
         put.run("runtime.securityScannerAlertsEnabled", String(normalized.securityScannerAlertsEnabled));
         put.run("runtime.serviceContractScannerAlertsEnabled", String(normalized.serviceContractScannerAlertsEnabled));
         put.run("runtime.ignoredIncidentTypes", JSON.stringify(normalized.ignoredIncidentTypes));
+        put.run("runtime.localToolInstallPolicy", normalized.localToolInstallPolicy);
+        put.run("runtime.localToolExecutionPolicy", normalized.localToolExecutionPolicy);
+        put.run("runtime.localToolApprovalTtlMs", String(normalized.localToolApprovalTtlMs));
+        put.run("runtime.localToolHealthCheckIntervalMs", String(normalized.localToolHealthCheckIntervalMs));
+        put.run("runtime.localToolAutoInstallBuiltins", String(normalized.localToolAutoInstallBuiltins));
+        put.run("runtime.protocolSessionSweepIntervalMs", String(normalized.protocolSessionSweepIntervalMs));
+        put.run("runtime.protocolSessionDefaultLeaseTtlMs", String(normalized.protocolSessionDefaultLeaseTtlMs));
+        put.run("runtime.protocolSessionMaxLeaseTtlMs", String(normalized.protocolSessionMaxLeaseTtlMs));
+        put.run("runtime.protocolSessionMessageRetentionLimit", String(normalized.protocolSessionMessageRetentionLimit));
+        put.run("runtime.protocolSessionReconnectBaseMs", String(normalized.protocolSessionReconnectBaseMs));
+        put.run("runtime.protocolSessionReconnectMaxMs", String(normalized.protocolSessionReconnectMaxMs));
         this.appendSettingsHistory(
           db,
           "runtime",
@@ -2297,6 +2610,338 @@ class StateStore {
       return (db.prepare(
         "SELECT * FROM playbook_runs WHERE status = 'pending_approval' AND (expiresAt IS NULL OR expiresAt > ?) ORDER BY createdAt ASC",
       ).all(now) as Record<string, unknown>[]).map(playbookRunFromRow);
+    });
+  }
+
+  /* ---------- Local Tools ---------- */
+
+  getLocalTools(): LocalToolRecord[] {
+    return this.withDbRecovery("StateStore.getLocalTools", (db) => {
+      return (db.prepare("SELECT * FROM local_tools ORDER BY id ASC").all() as Record<string, unknown>[]).map(localToolRecordFromRow);
+    });
+  }
+
+  getLocalToolById(id: string): LocalToolRecord | undefined {
+    return this.withDbRecovery("StateStore.getLocalToolById", (db) => {
+      const row = db.prepare("SELECT * FROM local_tools WHERE id = ? LIMIT 1").get(id) as Record<string, unknown> | undefined;
+      return row ? localToolRecordFromRow(row) : undefined;
+    });
+  }
+
+  upsertLocalTool(tool: LocalToolRecord): LocalToolRecord {
+    return this.withDbRecovery("StateStore.upsertLocalTool", (db) => {
+      db.prepare(`
+        INSERT OR REPLACE INTO local_tools (
+          id, manifestJson, enabled, status, healthStatus, installDir, binPathsJson, installedVersion,
+          lastInstalledAt, lastCheckedAt, lastRunAt, approvedAt, error, createdAt, updatedAt
+        )
+        VALUES (
+          @id, @manifestJson, @enabled, @status, @healthStatus, @installDir, @binPathsJson, @installedVersion,
+          @lastInstalledAt, @lastCheckedAt, @lastRunAt, @approvedAt, @error, @createdAt, @updatedAt
+        )
+      `).run({
+        id: tool.id,
+        manifestJson: JSON.stringify(tool.manifest),
+        enabled: tool.enabled ? 1 : 0,
+        status: tool.status,
+        healthStatus: tool.healthStatus,
+        installDir: tool.installDir ?? null,
+        binPathsJson: JSON.stringify(tool.binPaths ?? {}),
+        installedVersion: tool.installedVersion ?? null,
+        lastInstalledAt: tool.lastInstalledAt ?? null,
+        lastCheckedAt: tool.lastCheckedAt ?? null,
+        lastRunAt: tool.lastRunAt ?? null,
+        approvedAt: tool.approvedAt ?? null,
+        error: tool.error ?? null,
+        createdAt: tool.createdAt,
+        updatedAt: tool.updatedAt,
+      });
+      return tool;
+    });
+  }
+
+  getLocalToolApprovals(filter?: { toolId?: string; status?: LocalToolApproval["status"] }): LocalToolApproval[] {
+    return this.withDbRecovery("StateStore.getLocalToolApprovals", (db) => {
+      let query = "SELECT * FROM local_tool_approvals";
+      const conditions: string[] = [];
+      const params: Record<string, unknown> = {};
+
+      if (filter?.toolId) {
+        conditions.push("toolId = @toolId");
+        params.toolId = filter.toolId;
+      }
+      if (filter?.status) {
+        conditions.push("status = @status");
+        params.status = filter.status;
+      }
+
+      if (conditions.length > 0) {
+        query += ` WHERE ${conditions.join(" AND ")}`;
+      }
+      query += " ORDER BY requestedAt DESC";
+
+      return (db.prepare(query).all(params) as Record<string, unknown>[]).map(localToolApprovalFromRow);
+    });
+  }
+
+  getLocalToolApprovalById(id: string): LocalToolApproval | undefined {
+    return this.withDbRecovery("StateStore.getLocalToolApprovalById", (db) => {
+      const row = db.prepare("SELECT * FROM local_tool_approvals WHERE id = ? LIMIT 1").get(id) as Record<string, unknown> | undefined;
+      return row ? localToolApprovalFromRow(row) : undefined;
+    });
+  }
+
+  upsertLocalToolApproval(approval: LocalToolApproval): LocalToolApproval {
+    return this.withDbRecovery("StateStore.upsertLocalToolApproval", (db) => {
+      db.prepare(`
+        INSERT OR REPLACE INTO local_tool_approvals (
+          id, toolId, action, status, requestedBy, requestedAt, expiresAt, reason,
+          requestJson, approvedBy, approvedAt, deniedBy, deniedAt, denialReason, decisionJson
+        )
+        VALUES (
+          @id, @toolId, @action, @status, @requestedBy, @requestedAt, @expiresAt, @reason,
+          @requestJson, @approvedBy, @approvedAt, @deniedBy, @deniedAt, @denialReason, @decisionJson
+        )
+      `).run({
+        id: approval.id,
+        toolId: approval.toolId,
+        action: approval.action,
+        status: approval.status,
+        requestedBy: approval.requestedBy,
+        requestedAt: approval.requestedAt,
+        expiresAt: approval.expiresAt ?? null,
+        reason: approval.reason,
+        requestJson: JSON.stringify(approval.requestJson ?? {}),
+        approvedBy: approval.approvedBy ?? null,
+        approvedAt: approval.approvedAt ?? null,
+        deniedBy: approval.deniedBy ?? null,
+        deniedAt: approval.deniedAt ?? null,
+        denialReason: approval.denialReason ?? null,
+        decisionJson: JSON.stringify(approval.decisionJson ?? {}),
+      });
+      return approval;
+    });
+  }
+
+  getPendingLocalToolApprovals(): LocalToolApproval[] {
+    return this.withDbRecovery("StateStore.getPendingLocalToolApprovals", (db) => {
+      const now = new Date().toISOString();
+      return (db.prepare(`
+        SELECT * FROM local_tool_approvals
+        WHERE status = 'pending'
+          AND (expiresAt IS NULL OR expiresAt > ?)
+        ORDER BY requestedAt ASC
+      `).all(now) as Record<string, unknown>[]).map(localToolApprovalFromRow);
+    });
+  }
+
+  /* ---------- Protocol Sessions ---------- */
+
+  getProtocolSessions(filter?: {
+    deviceId?: string;
+    protocol?: ProtocolSessionRecord["protocol"];
+    status?: ProtocolSessionRecord["status"];
+  }): ProtocolSessionRecord[] {
+    return this.withDbRecovery("StateStore.getProtocolSessions", (db) => {
+      let query = "SELECT * FROM protocol_sessions";
+      const conditions: string[] = [];
+      const params: Record<string, unknown> = {};
+
+      if (filter?.deviceId) {
+        conditions.push("deviceId = @deviceId");
+        params.deviceId = filter.deviceId;
+      }
+      if (filter?.protocol) {
+        conditions.push("protocol = @protocol");
+        params.protocol = filter.protocol;
+      }
+      if (filter?.status) {
+        conditions.push("status = @status");
+        params.status = filter.status;
+      }
+      if (conditions.length > 0) {
+        query += ` WHERE ${conditions.join(" AND ")}`;
+      }
+      query += " ORDER BY updatedAt DESC";
+
+      return (db.prepare(query).all(params) as Record<string, unknown>[]).map(protocolSessionRecordFromRow);
+    });
+  }
+
+  getProtocolSessionById(id: string): ProtocolSessionRecord | undefined {
+    return this.withDbRecovery("StateStore.getProtocolSessionById", (db) => {
+      const row = db.prepare("SELECT * FROM protocol_sessions WHERE id = ? LIMIT 1").get(id) as Record<string, unknown> | undefined;
+      return row ? protocolSessionRecordFromRow(row) : undefined;
+    });
+  }
+
+  upsertProtocolSession(session: ProtocolSessionRecord): ProtocolSessionRecord {
+    return this.withDbRecovery("StateStore.upsertProtocolSession", (db) => {
+      db.prepare(`
+        INSERT OR REPLACE INTO protocol_sessions (
+          id, deviceId, protocol, adapterId, desiredState, status, arbitrationMode, singleConnectionHint,
+          keepaliveAllowed, summary, configJson, activeLeaseId, lastConnectedAt, lastDisconnectedAt,
+          lastMessageAt, lastError, createdAt, updatedAt
+        )
+        VALUES (
+          @id, @deviceId, @protocol, @adapterId, @desiredState, @status, @arbitrationMode, @singleConnectionHint,
+          @keepaliveAllowed, @summary, @configJson, @activeLeaseId, @lastConnectedAt, @lastDisconnectedAt,
+          @lastMessageAt, @lastError, @createdAt, @updatedAt
+        )
+      `).run({
+        id: session.id,
+        deviceId: session.deviceId,
+        protocol: session.protocol,
+        adapterId: session.adapterId ?? null,
+        desiredState: session.desiredState,
+        status: session.status,
+        arbitrationMode: session.arbitrationMode,
+        singleConnectionHint: session.singleConnectionHint ? 1 : 0,
+        keepaliveAllowed: session.keepaliveAllowed ? 1 : 0,
+        summary: session.summary ?? null,
+        configJson: JSON.stringify(session.configJson ?? {}),
+        activeLeaseId: session.activeLeaseId ?? null,
+        lastConnectedAt: session.lastConnectedAt ?? null,
+        lastDisconnectedAt: session.lastDisconnectedAt ?? null,
+        lastMessageAt: session.lastMessageAt ?? null,
+        lastError: session.lastError ?? null,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      });
+      return session;
+    });
+  }
+
+  deleteProtocolSession(id: string): boolean {
+    return this.withDbRecovery("StateStore.deleteProtocolSession", (db) => {
+      const result = db.prepare("DELETE FROM protocol_sessions WHERE id = ?").run(id);
+      return result.changes > 0;
+    });
+  }
+
+  getProtocolSessionLeases(filter?: {
+    sessionId?: string;
+    holder?: string;
+    status?: ProtocolSessionLease["status"];
+  }): ProtocolSessionLease[] {
+    return this.withDbRecovery("StateStore.getProtocolSessionLeases", (db) => {
+      let query = "SELECT * FROM protocol_session_leases";
+      const conditions: string[] = [];
+      const params: Record<string, unknown> = {};
+
+      if (filter?.sessionId) {
+        conditions.push("sessionId = @sessionId");
+        params.sessionId = filter.sessionId;
+      }
+      if (filter?.holder) {
+        conditions.push("holder = @holder");
+        params.holder = filter.holder;
+      }
+      if (filter?.status) {
+        conditions.push("status = @status");
+        params.status = filter.status;
+      }
+      if (conditions.length > 0) {
+        query += ` WHERE ${conditions.join(" AND ")}`;
+      }
+      query += " ORDER BY requestedAt DESC";
+
+      return (db.prepare(query).all(params) as Record<string, unknown>[]).map(protocolSessionLeaseFromRow);
+    });
+  }
+
+  getProtocolSessionLeaseById(id: string): ProtocolSessionLease | undefined {
+    return this.withDbRecovery("StateStore.getProtocolSessionLeaseById", (db) => {
+      const row = db.prepare("SELECT * FROM protocol_session_leases WHERE id = ? LIMIT 1").get(id) as Record<string, unknown> | undefined;
+      return row ? protocolSessionLeaseFromRow(row) : undefined;
+    });
+  }
+
+  upsertProtocolSessionLease(lease: ProtocolSessionLease): ProtocolSessionLease {
+    return this.withDbRecovery("StateStore.upsertProtocolSessionLease", (db) => {
+      db.prepare(`
+        INSERT OR REPLACE INTO protocol_session_leases (
+          id, sessionId, holder, purpose, mode, status, exclusive, requestedAt, grantedAt,
+          releasedAt, expiresAt, metadataJson
+        )
+        VALUES (
+          @id, @sessionId, @holder, @purpose, @mode, @status, @exclusive, @requestedAt, @grantedAt,
+          @releasedAt, @expiresAt, @metadataJson
+        )
+      `).run({
+        id: lease.id,
+        sessionId: lease.sessionId,
+        holder: lease.holder,
+        purpose: lease.purpose,
+        mode: lease.mode,
+        status: lease.status,
+        exclusive: lease.exclusive ? 1 : 0,
+        requestedAt: lease.requestedAt,
+        grantedAt: lease.grantedAt ?? null,
+        releasedAt: lease.releasedAt ?? null,
+        expiresAt: lease.expiresAt,
+        metadataJson: JSON.stringify(lease.metadataJson ?? {}),
+      });
+      return lease;
+    });
+  }
+
+  deleteProtocolSessionLease(id: string): boolean {
+    return this.withDbRecovery("StateStore.deleteProtocolSessionLease", (db) => {
+      const result = db.prepare("DELETE FROM protocol_session_leases WHERE id = ?").run(id);
+      return result.changes > 0;
+    });
+  }
+
+  getProtocolSessionMessages(sessionId: string, limit = 100): ProtocolSessionMessage[] {
+    return this.withDbRecovery("StateStore.getProtocolSessionMessages", (db) => {
+      return (db.prepare(`
+        SELECT * FROM protocol_session_messages
+        WHERE sessionId = ?
+        ORDER BY observedAt DESC
+        LIMIT ?
+      `).all(sessionId, Math.max(1, Math.min(2_000, limit))) as Record<string, unknown>[]).map(protocolSessionMessageFromRow);
+    });
+  }
+
+  addProtocolSessionMessage(message: ProtocolSessionMessage): ProtocolSessionMessage {
+    return this.withDbRecovery("StateStore.addProtocolSessionMessage", (db) => {
+      db.prepare(`
+        INSERT INTO protocol_session_messages (
+          id, sessionId, deviceId, direction, channel, payload, metadataJson, observedAt
+        )
+        VALUES (
+          @id, @sessionId, @deviceId, @direction, @channel, @payload, @metadataJson, @observedAt
+        )
+      `).run({
+        id: message.id,
+        sessionId: message.sessionId,
+        deviceId: message.deviceId,
+        direction: message.direction,
+        channel: message.channel,
+        payload: message.payload,
+        metadataJson: JSON.stringify(message.metadataJson ?? {}),
+        observedAt: message.observedAt,
+      });
+      return message;
+    });
+  }
+
+  pruneProtocolSessionMessages(sessionId: string, keepLimit: number): number {
+    return this.withDbRecovery("StateStore.pruneProtocolSessionMessages", (db) => {
+      const safeLimit = Math.max(0, Math.floor(keepLimit));
+      const result = db.prepare(`
+        DELETE FROM protocol_session_messages
+        WHERE sessionId = @sessionId
+          AND id NOT IN (
+            SELECT id
+            FROM protocol_session_messages
+            WHERE sessionId = @sessionId
+            ORDER BY observedAt DESC
+            LIMIT @safeLimit
+          )
+      `).run({ sessionId, safeLimit });
+      return result.changes;
     });
   }
 

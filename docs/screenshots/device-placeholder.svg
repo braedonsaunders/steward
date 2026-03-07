@@ -1,0 +1,34 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1600" y2="900" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#091321"/>
+      <stop offset="1" stop-color="#15364C"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="900" rx="32" fill="url(#bg)"/>
+  <rect x="72" y="72" width="1456" height="756" rx="28" fill="#0A1726" stroke="#31516E"/>
+  <text x="120" y="156" fill="#F2F8FF" font-size="42" font-family="Arial, Helvetica, sans-serif" font-weight="700">Device detail placeholder</text>
+  <text x="120" y="202" fill="#9EC3E1" font-size="22" font-family="Arial, Helvetica, sans-serif">Replace with a real adopted device page showing health, credentials, and controls.</text>
+  <rect x="120" y="248" width="560" height="174" rx="24" fill="#123149"/>
+  <rect x="708" y="248" width="320" height="174" rx="24" fill="#123149"/>
+  <rect x="1056" y="248" width="354" height="174" rx="24" fill="#123149"/>
+  <text x="156" y="300" fill="#A4C7E4" font-size="20" font-family="Arial, Helvetica, sans-serif">Device</text>
+  <text x="156" y="348" fill="#F8FBFF" font-size="38" font-family="Arial, Helvetica, sans-serif" font-weight="700">nas-01 / Synology DiskStation</text>
+  <text x="156" y="384" fill="#B7D0E8" font-size="22" font-family="Arial, Helvetica, sans-serif">192.168.1.40  |  Storage  |  Adopted  |  Tier 2 autonomy</text>
+  <text x="744" y="300" fill="#A4C7E4" font-size="20" font-family="Arial, Helvetica, sans-serif">Health</text>
+  <text x="744" y="348" fill="#F8FBFF" font-size="38" font-family="Arial, Helvetica, sans-serif" font-weight="700">Warning</text>
+  <text x="1092" y="300" fill="#A4C7E4" font-size="20" font-family="Arial, Helvetica, sans-serif">Management surface</text>
+  <text x="1092" y="348" fill="#F8FBFF" font-size="38" font-family="Arial, Helvetica, sans-serif" font-weight="700">SSH  HTTP  SMART</text>
+  <rect x="120" y="456" width="630" height="300" rx="24" fill="#11283E"/>
+  <rect x="778" y="456" width="632" height="138" rx="24" fill="#11283E"/>
+  <rect x="778" y="618" width="632" height="138" rx="24" fill="#11283E"/>
+  <text x="156" y="504" fill="#F7FBFF" font-size="28" font-family="Arial, Helvetica, sans-serif" font-weight="700">Recent findings</text>
+  <rect x="156" y="536" width="558" height="68" rx="18" fill="#173754"/>
+  <rect x="156" y="620" width="558" height="68" rx="18" fill="#173754"/>
+  <text x="188" y="578" fill="#F8FBFF" font-size="22" font-family="Arial, Helvetica, sans-serif">Volume utilization trending above baseline.</text>
+  <text x="188" y="662" fill="#F8FBFF" font-size="22" font-family="Arial, Helvetica, sans-serif">TLS certificate expires in 9 days.</text>
+  <text x="814" y="504" fill="#F7FBFF" font-size="28" font-family="Arial, Helvetica, sans-serif" font-weight="700">Credentials and protocol checks</text>
+  <text x="814" y="552" fill="#B7D0E8" font-size="22" font-family="Arial, Helvetica, sans-serif">Validated SSH credential last verified 6 minutes ago.</text>
+  <text x="814" y="666" fill="#F7FBFF" font-size="28" font-family="Arial, Helvetica, sans-serif" font-weight="700">Actions</text>
+  <text x="814" y="714" fill="#B7D0E8" font-size="22" font-family="Arial, Helvetica, sans-serif">Run health check, restart package, renew cert, review approvals.</text>
+</svg>

@@ -194,11 +194,18 @@ export default function DeviceDetailPage() {
   } = useSteward();
   const [activeTab, setActiveTab] = useState("overview");
   const [startingOnboarding, setStartingOnboarding] = useState(false);
-  const [chatSessionRefreshToken, setChatSessionRefreshToken] = useState(0);
+  const [chatSessionRefreshToken, setChatSessionRefreshToken] = useState<number | undefined>(undefined);
   const [preferredChatSessionId, setPreferredChatSessionId] = useState<string | undefined>(undefined);
   const [hasOnboardingSession, setHasOnboardingSession] = useState<boolean | null>(null);
   const [pendingOnboardingReveal, setPendingOnboardingReveal] = useState(false);
   const chatPanelRef = useRef<HTMLDivElement | null>(null);
+  const previousDeviceContextRef = useRef<{
+    deviceId: string | null;
+    adoptionStatus: string | null;
+  }>({
+    deviceId: null,
+    adoptionStatus: null,
+  });
 
   const device = useMemo(
     () => devices.find((d) => d.id === deviceId),
@@ -237,6 +244,24 @@ export default function DeviceDetailPage() {
   }, [activeTab]);
 
   useEffect(() => {
+    const previousContext = previousDeviceContextRef.current;
+    if (
+      deviceId &&
+      previousContext.deviceId === deviceId &&
+      previousContext.adoptionStatus !== null &&
+      adoptionStatus === "adopted" &&
+      previousContext.adoptionStatus !== "adopted"
+    ) {
+      setHasOnboardingSession(false);
+    }
+
+    previousDeviceContextRef.current = {
+      deviceId: deviceId ?? null,
+      adoptionStatus: adoptionStatus ?? null,
+    };
+  }, [adoptionStatus, deviceId]);
+
+  useEffect(() => {
     if (!pendingOnboardingReveal || activeTab !== "steward") {
       return;
     }
@@ -263,7 +288,7 @@ export default function DeviceDetailPage() {
       try {
         const response = await fetch(
           `/api/devices/${deviceId}/onboarding/session`,
-          withClientApiToken(),
+          withClientApiToken({ cache: "no-store" }),
         );
         const data = (await response.json()) as { session?: { id?: string } | null };
         if (!cancelled) {
@@ -358,7 +383,7 @@ export default function DeviceDetailPage() {
           setPendingOnboardingReveal(true);
         });
       }
-      setChatSessionRefreshToken((prev) => prev + 1);
+      setChatSessionRefreshToken((prev) => (prev ?? 0) + 1);
     } finally {
       setStartingOnboarding(false);
     }
@@ -473,11 +498,6 @@ export default function DeviceDetailPage() {
                   {adoptionStatus === "adopted" ? "Adopted" : adoptionStatus === "ignored" ? "Ignored" : "Discovered"}
                 </Badge>
               </div>
-              {deviceDescription && (
-                <p className="max-w-3xl text-xs leading-5 text-muted-foreground">
-                  {deviceDescription}
-                </p>
-              )}
             </div>
             <div className="flex items-start gap-2 sm:flex-col sm:items-end sm:text-right">
               <div className="text-xs text-muted-foreground">
@@ -493,7 +513,7 @@ export default function DeviceDetailPage() {
                 <div>
                   <p className="text-sm font-medium text-amber-900 dark:text-amber-100">Onboarding pending</p>
                   <p className="text-xs text-amber-800/90 dark:text-amber-200/90">
-                    This device is adopted. Start onboarding from Chat so it can commit workloads, assurances, management profile, and access.
+                    This device is adopted. Start onboarding from Chat so it can commit adapter selection, access, and any workloads or assurances Steward should own.
                   </p>
                 </div>
                 <Button size="sm" onClick={() => void startOnboardingFromNudge()} disabled={startingOnboarding}>
@@ -515,8 +535,8 @@ export default function DeviceDetailPage() {
             <TabsTrigger className="h-8 px-3 text-xs sm:h-9 sm:text-sm" value="settings">Settings</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="overview" className="mt-3 min-h-0 flex-1 overflow-hidden">
-            <AnimatedTabPanel active className="overflow-hidden">
+          <TabsContent value="overview" forceMount className="mt-3 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
+            <AnimatedTabPanel active={activeTab === "overview"} persistent className="overflow-hidden">
               <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[1.5fr_1fr]">
             <Card className="relative overflow-hidden border-primary/25 bg-gradient-to-br from-primary/10 via-card to-secondary/10">
               <div className="pointer-events-none absolute inset-0">
@@ -764,24 +784,24 @@ export default function DeviceDetailPage() {
             </AnimatedTabPanel>
           </TabsContent>
 
-        <TabsContent value="workloads" className="mt-3 min-h-0 flex-1 overflow-hidden">
-          <AnimatedTabPanel active className="overflow-hidden">
+        <TabsContent value="workloads" forceMount className="mt-3 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
+          <AnimatedTabPanel active={activeTab === "workloads"} persistent className="overflow-hidden">
             <div className="h-full min-h-0 overflow-hidden">
-              <DeviceWorkloadsPanel deviceId={device.id} className="h-full" />
+              <DeviceWorkloadsPanel deviceId={device.id} active={activeTab === "workloads"} className="h-full" />
             </div>
           </AnimatedTabPanel>
         </TabsContent>
 
-        <TabsContent value="access" className="mt-3 min-h-0 flex-1 overflow-hidden">
-          <AnimatedTabPanel active className="overflow-auto">
+        <TabsContent value="access" forceMount className="mt-3 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
+          <AnimatedTabPanel active={activeTab === "access"} persistent className="overflow-auto">
             <div className="h-full min-h-0 overflow-auto">
-              <DeviceAccessPanel deviceId={device.id} className="h-full" />
+              <DeviceAccessPanel deviceId={device.id} active={activeTab === "access"} className="h-full" />
             </div>
           </AnimatedTabPanel>
         </TabsContent>
 
-        <TabsContent value="widgets" className="mt-3 min-h-0 flex-1 overflow-hidden">
-          <AnimatedTabPanel active className="overflow-hidden">
+        <TabsContent value="widgets" forceMount className="mt-3 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
+          <AnimatedTabPanel active={activeTab === "widgets"} persistent className="overflow-hidden">
             <div className="h-full min-h-0 overflow-hidden">
               <DeviceWidgetsPanel deviceId={device.id} active={activeTab === "widgets"} className="h-full" />
             </div>
@@ -805,8 +825,8 @@ export default function DeviceDetailPage() {
           </AnimatedTabPanel>
         </TabsContent>
 
-        <TabsContent value="activity" className="mt-3 min-h-0 flex-1 overflow-hidden">
-          <AnimatedTabPanel active className="overflow-hidden">
+        <TabsContent value="activity" forceMount className="mt-3 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
+          <AnimatedTabPanel active={activeTab === "activity"} persistent className="overflow-hidden">
             <div className="grid h-full min-h-0 gap-4 xl:grid-cols-2">
               <Card className="flex h-full min-h-0 flex-col min-w-0 bg-card/85">
                 <CardHeader>
@@ -915,8 +935,8 @@ export default function DeviceDetailPage() {
           </AnimatedTabPanel>
         </TabsContent>
 
-        <TabsContent value="settings" className="mt-3 min-h-0 flex-1 overflow-hidden">
-          <AnimatedTabPanel active className="overflow-auto">
+        <TabsContent value="settings" forceMount className="mt-3 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
+          <AnimatedTabPanel active={activeTab === "settings"} persistent className="overflow-auto">
             <div className="h-full min-h-0 overflow-auto">
               <DeviceSettingsPanel deviceId={device.id} />
             </div>

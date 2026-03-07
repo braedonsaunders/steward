@@ -202,6 +202,17 @@ export const defaultRuntimeSettings = (): RuntimeSettings => ({
   securityScannerAlertsEnabled: true,
   serviceContractScannerAlertsEnabled: true,
   ignoredIncidentTypes: [],
+  localToolInstallPolicy: "require_approval",
+  localToolExecutionPolicy: "require_approval",
+  localToolApprovalTtlMs: 60 * 60 * 1000,
+  localToolHealthCheckIntervalMs: 6 * 60 * 60 * 1000,
+  localToolAutoInstallBuiltins: false,
+  protocolSessionSweepIntervalMs: 15_000,
+  protocolSessionDefaultLeaseTtlMs: 5 * 60 * 1000,
+  protocolSessionMaxLeaseTtlMs: 24 * 60 * 60 * 1000,
+  protocolSessionMessageRetentionLimit: 250,
+  protocolSessionReconnectBaseMs: 1_000,
+  protocolSessionReconnectMaxMs: 60_000,
 });
 
 function resolvedLocalTimezone(): string {
@@ -281,6 +292,10 @@ export const defaultState = (): StewardState => ({
   maintenanceWindows: [],
   playbookRuns: [],
   dailyDigests: [],
+  localTools: [],
+  localToolApprovals: [],
+  protocolSessions: [],
+  protocolSessionLeases: [],
 });
 
 export const providerPriority: LLMProvider[] = [
@@ -425,6 +440,17 @@ export function ensureDefaults(db: Database.Database): void {
     ensureMeta.run("runtime.securityScannerAlertsEnabled", String(runtimeDefaults.securityScannerAlertsEnabled));
     ensureMeta.run("runtime.serviceContractScannerAlertsEnabled", String(runtimeDefaults.serviceContractScannerAlertsEnabled));
     ensureMeta.run("runtime.ignoredIncidentTypes", JSON.stringify(runtimeDefaults.ignoredIncidentTypes));
+    ensureMeta.run("runtime.localToolInstallPolicy", runtimeDefaults.localToolInstallPolicy);
+    ensureMeta.run("runtime.localToolExecutionPolicy", runtimeDefaults.localToolExecutionPolicy);
+    ensureMeta.run("runtime.localToolApprovalTtlMs", String(runtimeDefaults.localToolApprovalTtlMs));
+    ensureMeta.run("runtime.localToolHealthCheckIntervalMs", String(runtimeDefaults.localToolHealthCheckIntervalMs));
+    ensureMeta.run("runtime.localToolAutoInstallBuiltins", String(runtimeDefaults.localToolAutoInstallBuiltins));
+    ensureMeta.run("runtime.protocolSessionSweepIntervalMs", String(runtimeDefaults.protocolSessionSweepIntervalMs));
+    ensureMeta.run("runtime.protocolSessionDefaultLeaseTtlMs", String(runtimeDefaults.protocolSessionDefaultLeaseTtlMs));
+    ensureMeta.run("runtime.protocolSessionMaxLeaseTtlMs", String(runtimeDefaults.protocolSessionMaxLeaseTtlMs));
+    ensureMeta.run("runtime.protocolSessionMessageRetentionLimit", String(runtimeDefaults.protocolSessionMessageRetentionLimit));
+    ensureMeta.run("runtime.protocolSessionReconnectBaseMs", String(runtimeDefaults.protocolSessionReconnectBaseMs));
+    ensureMeta.run("runtime.protocolSessionReconnectMaxMs", String(runtimeDefaults.protocolSessionReconnectMaxMs));
 
     // System settings domain
     const systemDefaults = defaultSystemSettings();

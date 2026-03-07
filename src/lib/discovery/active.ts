@@ -48,8 +48,8 @@ const COMMON_TCP_SERVICES: Array<{ port: number; name: string; secure: boolean }
   { port: 8443, name: "https-alt", secure: true },
   { port: 9000, name: "http-admin", secure: false },
   { port: 9100, name: "jetdirect", secure: false },
-  { port: 5000, name: "nas-web", secure: false },
-  { port: 5001, name: "nas-web-ssl", secure: true },
+  { port: 5000, name: "web-console", secure: false },
+  { port: 5001, name: "web-console-ssl", secure: true },
 ];
 
 const serviceFromNmap = (

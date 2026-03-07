@@ -9,6 +9,7 @@ import {
   ArrowDown,
   Bot,
   CheckCircle2,
+  ChevronDown,
   Edit3,
   Globe,
   Loader2,
@@ -645,8 +646,7 @@ const MarkdownMessageContent = memo(function MarkdownMessageContent({ content }:
   );
 });
 
-const ChatToolInputPills = memo(function ChatToolInputPills({ inputPreview }: { inputPreview?: string }) {
-  const pills = useMemo(() => extractToolInputPills(inputPreview), [inputPreview]);
+const ChatToolInputPills = memo(function ChatToolInputPills({ pills }: { pills: ToolInputPill[] }) {
   if (pills.length === 0) {
     return null;
   }
@@ -680,8 +680,34 @@ const ChatToolEventCard = memo(function ChatToolEventCard({
   const normalizedOutput = normalizeToolOutput(event.outputPreview);
   const browserPreview = parseBrowserToolPreview(event);
   const deviceSettingsPreview = parseDeviceSettingsToolPreview(event);
+  const inputPills = useMemo(() => extractToolInputPills(event.inputPreview), [event.inputPreview]);
   const browserScreenshotStep = browserPreview?.stepResults.find((step) => step.screenshotBase64 || step.path);
   const browserScreenshotSrc = browserStepScreenshotSrc(browserScreenshotStep);
+  const standardCard = !browserPreview && !deviceSettingsPreview;
+  const hasLongSummary = Boolean(
+    (event.error && (event.error.length > 140 || event.error.includes("\n")))
+    || (event.summary && (event.summary.length > 140 || event.summary.includes("\n"))),
+  );
+  const hasExpandableDetails = standardCard && (inputPills.length > 0 || Boolean(normalizedOutput) || hasLongSummary);
+  const [expanded, setExpanded] = useState(false);
+  const detailSummary = useMemo(() => {
+    const parts: string[] = [];
+
+    if (inputPills.length > 0) {
+      parts.push(`${inputPills.length} input${inputPills.length === 1 ? "" : "s"}`);
+    }
+
+    if (normalizedOutput) {
+      parts.push(event.kind === "terminal" ? "terminal output" : "output");
+    }
+
+    if (running && parts.length === 0) {
+      parts.push("live");
+    }
+
+    return parts.join(" · ");
+  }, [event.kind, inputPills.length, normalizedOutput, running]);
+  const showDetails = !standardCard || expanded;
   const accentClasses = event.status === "failed"
     ? "border-rose-500/25 bg-[radial-gradient(circle_at_top_left,rgba(244,63,94,0.14),transparent_60%)]"
     : running
@@ -696,7 +722,7 @@ const ChatToolEventCard = memo(function ChatToolEventCard({
       exit={{ opacity: 0, y: -6, scale: 0.985 }}
       transition={{ duration: 0.18, ease: "easeOut" }}
       className={cn(
-        "relative overflow-hidden rounded-2xl border bg-card/90 p-3 shadow-[0_14px_35px_-24px_rgba(15,23,42,0.45)] backdrop-blur",
+        "relative overflow-hidden rounded-2xl border bg-card/90 px-3 py-2.5 shadow-[0_14px_35px_-24px_rgba(15,23,42,0.45)] backdrop-blur",
         accentClasses,
       )}
     >
@@ -720,136 +746,184 @@ const ChatToolEventCard = memo(function ChatToolEventCard({
       <div className="relative flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <div className="flex h-9 w-9 items-center justify-center rounded-2xl border border-white/10 bg-background/80 shadow-inner">
+            <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-background/80 shadow-inner">
               <ToolKindIcon kind={event.kind} className="h-4 w-4" />
             </div>
             <div className="min-w-0">
-              <p className="truncate text-[13px] font-semibold text-foreground">{event.label}</p>
-              <p className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
+              <p className="truncate text-[12px] font-semibold text-foreground">{event.label}</p>
+              <p className="text-[9px] uppercase tracking-[0.22em] text-muted-foreground">
                 {toolKindLabel(event.kind)}
               </p>
             </div>
           </div>
-          {(event.summary || event.error) && (
-            <p className="mt-2 text-[12px] leading-5 text-muted-foreground">
-              {event.error ?? event.summary}
-            </p>
+
+          {(event.summary || event.error || detailSummary) && (
+            <div className="mt-1.5 space-y-1">
+              {(event.summary || event.error) ? (
+                <p
+                  className={cn(
+                    "text-[12px] leading-5",
+                    event.error ? "text-rose-700 dark:text-rose-300" : "text-muted-foreground",
+                    standardCard && !expanded && "line-clamp-2",
+                  )}
+                >
+                  {event.error ?? event.summary}
+                </p>
+              ) : null}
+              {standardCard && !expanded && detailSummary ? (
+                <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                  {detailSummary}
+                </p>
+              ) : null}
+            </div>
           )}
         </div>
 
-        <div
-          className={cn(
-            "inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em]",
-            event.status === "failed"
-              ? "bg-rose-500/12 text-rose-600 dark:text-rose-300"
-              : running
-                ? "bg-sky-500/12 text-sky-600 dark:text-sky-300"
-                : "bg-emerald-500/12 text-emerald-600 dark:text-emerald-300",
-          )}
-        >
-          <ToolStatusIcon status={event.status} className={cn("h-3 w-3", running && "animate-pulse")} />
-          {event.status === "failed" ? "Failed" : running ? "Running" : "Complete"}
+        <div className="flex shrink-0 flex-col items-end gap-1.5 sm:flex-row sm:items-center">
+          <div
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em]",
+              event.status === "failed"
+                ? "bg-rose-500/12 text-rose-600 dark:text-rose-300"
+                : running
+                  ? "bg-sky-500/12 text-sky-600 dark:text-sky-300"
+                  : "bg-emerald-500/12 text-emerald-600 dark:text-emerald-300",
+            )}
+          >
+            <ToolStatusIcon status={event.status} className={cn("h-3 w-3", running && "animate-pulse")} />
+            {event.status === "failed" ? "Failed" : running ? "Running" : "Complete"}
+          </div>
+
+          {hasExpandableDetails ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              aria-expanded={expanded}
+              aria-label={expanded ? `Collapse ${event.label} details` : `Expand ${event.label} details`}
+              className="h-7 rounded-full px-2 text-[10px] uppercase tracking-[0.14em]"
+              onClick={() => setExpanded((current) => !current)}
+            >
+              <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-180")} />
+              {expanded ? "Hide" : "Details"}
+            </Button>
+          ) : null}
         </div>
       </div>
 
-      <ChatToolInputPills inputPreview={event.inputPreview} />
+      <AnimatePresence initial={false}>
+        {showDetails ? (
+          <motion.div
+            key="details"
+            initial={standardCard ? { height: 0, opacity: 0 } : false}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.18, ease: "easeOut" }}
+            className="overflow-hidden"
+          >
+            <div className="space-y-3 pt-3">
+              <ChatToolInputPills pills={inputPills} />
 
-      {browserPreview && (
-        <div className="mt-3 space-y-2 rounded-2xl border border-border/60 bg-background/70 p-3">
-          <div className="flex flex-wrap items-center gap-2 text-[11px]">
-            {browserPreview.title ? <Badge variant="outline">{browserPreview.title}</Badge> : null}
-            <Badge variant="secondary">{browserPreview.stepsExecuted} step{browserPreview.stepsExecuted === 1 ? "" : "s"}</Badge>
-            {browserPreview.finalUrl ? <span className="truncate text-muted-foreground">{browserPreview.finalUrl}</span> : null}
-          </div>
-
-          {browserScreenshotSrc ? (
-            <div className="overflow-hidden rounded-xl border border-border/70 bg-muted/20">
-              <img
-                src={browserScreenshotSrc}
-                alt="Browser snapshot"
-                className="mx-auto h-auto max-h-[34rem] w-full object-contain"
-              />
-            </div>
-          ) : null}
-
-          {browserPreview.contentPreview ? (
-            <p className="line-clamp-4 text-[12px] leading-5 text-muted-foreground">{browserPreview.contentPreview}</p>
-          ) : null}
-
-          {browserPreview.stepResults.length > 0 ? (
-            <div className="space-y-1.5">
-              {browserPreview.stepResults.map((step, index) => (
-                <div key={`${step.action}-${index}`} className="flex items-start justify-between gap-2 rounded-md border border-border/60 bg-background/80 px-2 py-1.5 text-[11px]">
-                  <div className="min-w-0">
-                    <p className="truncate font-medium">{step.label ?? step.action}</p>
-                    <p className="truncate text-muted-foreground">{step.selector ?? step.url ?? step.text ?? step.result ?? ""}</p>
+              {browserPreview && (
+                <div className="space-y-2 rounded-2xl border border-border/60 bg-background/70 p-3">
+                  <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                    {browserPreview.title ? <Badge variant="outline">{browserPreview.title}</Badge> : null}
+                    <Badge variant="secondary">{browserPreview.stepsExecuted} step{browserPreview.stepsExecuted === 1 ? "" : "s"}</Badge>
+                    {browserPreview.finalUrl ? <span className="truncate text-muted-foreground">{browserPreview.finalUrl}</span> : null}
                   </div>
-                  <Badge variant={step.ok ? "secondary" : "outline"}>{step.ok ? "ok" : "failed"}</Badge>
+
+                  {browserScreenshotSrc ? (
+                    <div className="overflow-hidden rounded-xl border border-border/70 bg-muted/20">
+                      <img
+                        src={browserScreenshotSrc}
+                        alt="Browser snapshot"
+                        className="mx-auto h-auto max-h-[34rem] w-full object-contain"
+                      />
+                    </div>
+                  ) : null}
+
+                  {browserPreview.contentPreview ? (
+                    <p className="line-clamp-4 text-[12px] leading-5 text-muted-foreground">{browserPreview.contentPreview}</p>
+                  ) : null}
+
+                  {browserPreview.stepResults.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {browserPreview.stepResults.map((step, index) => (
+                        <div key={`${step.action}-${index}`} className="flex items-start justify-between gap-2 rounded-md border border-border/60 bg-background/80 px-2 py-1.5 text-[11px]">
+                          <div className="min-w-0">
+                            <p className="truncate font-medium">{step.label ?? step.action}</p>
+                            <p className="truncate text-muted-foreground">{step.selector ?? step.url ?? step.text ?? step.result ?? ""}</p>
+                          </div>
+                          <Badge variant={step.ok ? "secondary" : "outline"}>{step.ok ? "ok" : "failed"}</Badge>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {browserPreview.diagnostics && (
+                    <div className="grid gap-2 text-[11px] sm:grid-cols-3">
+                      <div className="rounded-md border border-border/60 bg-background/80 px-2 py-1.5">
+                        <p className="font-medium">Console</p>
+                        <p className="text-muted-foreground">{browserPreview.diagnostics.consoleErrors.length} issue{browserPreview.diagnostics.consoleErrors.length === 1 ? "" : "s"}</p>
+                      </div>
+                      <div className="rounded-md border border-border/60 bg-background/80 px-2 py-1.5">
+                        <p className="font-medium">Requests</p>
+                        <p className="text-muted-foreground">{browserPreview.diagnostics.requestFailures.length} failed</p>
+                      </div>
+                      <div className="rounded-md border border-border/60 bg-background/80 px-2 py-1.5">
+                        <p className="font-medium">Page Errors</p>
+                        <p className="text-muted-foreground">{browserPreview.diagnostics.pageErrors.length}</p>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              ))}
-            </div>
-          ) : null}
+              )}
 
-          {browserPreview.diagnostics && (
-            <div className="grid gap-2 text-[11px] sm:grid-cols-3">
-              <div className="rounded-md border border-border/60 bg-background/80 px-2 py-1.5">
-                <p className="font-medium">Console</p>
-                <p className="text-muted-foreground">{browserPreview.diagnostics.consoleErrors.length} issue{browserPreview.diagnostics.consoleErrors.length === 1 ? "" : "s"}</p>
-              </div>
-              <div className="rounded-md border border-border/60 bg-background/80 px-2 py-1.5">
-                <p className="font-medium">Requests</p>
-                <p className="text-muted-foreground">{browserPreview.diagnostics.requestFailures.length} failed</p>
-              </div>
-              <div className="rounded-md border border-border/60 bg-background/80 px-2 py-1.5">
-                <p className="font-medium">Page Errors</p>
-                <p className="text-muted-foreground">{browserPreview.diagnostics.pageErrors.length}</p>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+              {deviceSettingsPreview && (
+                <div className="space-y-2 rounded-2xl border border-border/60 bg-background/70 p-3 text-[12px]">
+                  <div className="flex flex-wrap gap-1.5">
+                    {deviceSettingsPreview.changedFields.length > 0
+                      ? deviceSettingsPreview.changedFields.map((field) => (
+                        <Badge key={field} variant="secondary">{field}</Badge>
+                      ))
+                      : <Badge variant="outline">no changes</Badge>}
+                  </div>
+                  {(deviceSettingsPreview.previousName || deviceSettingsPreview.nextName) && (
+                    <div className="rounded-md border border-border/60 bg-background/80 px-2 py-1.5">
+                      <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Name</p>
+                      <p className="font-medium text-foreground">
+                        {deviceSettingsPreview.previousName ?? "-"} -&gt; {deviceSettingsPreview.nextName ?? "-"}
+                      </p>
+                      {deviceSettingsPreview.inferredName ? (
+                        <p className="text-[11px] text-muted-foreground">Auto-inferred from known identity</p>
+                      ) : null}
+                    </div>
+                  )}
+                  {(deviceSettingsPreview.previousType || deviceSettingsPreview.nextType) && (
+                    <div className="rounded-md border border-border/60 bg-background/80 px-2 py-1.5">
+                      <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Category</p>
+                      <p className="font-medium text-foreground">
+                        {deviceSettingsPreview.previousType ?? "-"} -&gt; {deviceSettingsPreview.nextType ?? "-"}
+                      </p>
+                      {deviceSettingsPreview.inferredType ? (
+                        <p className="text-[11px] text-muted-foreground">Auto-inferred from known identity</p>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
+              )}
 
-      {deviceSettingsPreview && (
-        <div className="mt-3 space-y-2 rounded-2xl border border-border/60 bg-background/70 p-3 text-[12px]">
-          <div className="flex flex-wrap gap-1.5">
-            {deviceSettingsPreview.changedFields.length > 0
-              ? deviceSettingsPreview.changedFields.map((field) => (
-                <Badge key={field} variant="secondary">{field}</Badge>
-              ))
-              : <Badge variant="outline">no changes</Badge>}
-          </div>
-          {(deviceSettingsPreview.previousName || deviceSettingsPreview.nextName) && (
-            <div className="rounded-md border border-border/60 bg-background/80 px-2 py-1.5">
-              <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Name</p>
-              <p className="font-medium text-foreground">
-                {deviceSettingsPreview.previousName ?? "-"} -&gt; {deviceSettingsPreview.nextName ?? "-"}
-              </p>
-              {deviceSettingsPreview.inferredName ? (
-                <p className="text-[11px] text-muted-foreground">Auto-inferred from known identity</p>
-              ) : null}
-            </div>
-          )}
-          {(deviceSettingsPreview.previousType || deviceSettingsPreview.nextType) && (
-            <div className="rounded-md border border-border/60 bg-background/80 px-2 py-1.5">
-              <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Category</p>
-              <p className="font-medium text-foreground">
-                {deviceSettingsPreview.previousType ?? "-"} -&gt; {deviceSettingsPreview.nextType ?? "-"}
-              </p>
-              {deviceSettingsPreview.inferredType ? (
-                <p className="text-[11px] text-muted-foreground">Auto-inferred from known identity</p>
-              ) : null}
-            </div>
-          )}
-        </div>
-      )}
+              {normalizedOutput && event.kind === "terminal" && (
+                <ExpandableToolOutputPanel title="Inline Terminal" value={normalizedOutput} terminal />
+              )}
 
-      {normalizedOutput && event.kind === "terminal" && (
-        <ExpandableToolOutputPanel title="Inline Terminal" value={normalizedOutput} terminal />
-      )}
-
-      {normalizedOutput && event.kind !== "terminal" && (
-        <ExpandableToolOutputPanel title="Tool Output" value={normalizedOutput} />
-      )}
+              {normalizedOutput && event.kind !== "terminal" && (
+                <ExpandableToolOutputPanel title="Tool Output" value={normalizedOutput} />
+              )}
+            </div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
     </motion.div>
   );
 });
@@ -1158,6 +1232,19 @@ export function ChatWorkspace({
     if (!visibleSessions.some((session) => session.id === pendingPreferredSessionId)) return;
     pendingPreferredSessionIdRef.current = null;
   }, [visibleSessions]);
+
+  useEffect(() => {
+    if (!deviceScoped) return;
+    if (activeSessionId) return;
+    if (sessionsLoading) return;
+    if (preferredSessionId) return;
+    if (visibleSessions.length === 0) return;
+
+    const initialSessionTimer = window.setTimeout(() => {
+      selectSession(visibleSessions[0]?.id ?? null);
+    }, 0);
+    return () => window.clearTimeout(initialSessionTimer);
+  }, [activeSessionId, deviceScoped, preferredSessionId, selectSession, sessionsLoading, visibleSessions]);
 
   useEffect(() => {
     if (activeSessionId) return;

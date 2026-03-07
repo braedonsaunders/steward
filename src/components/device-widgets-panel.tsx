@@ -158,6 +158,38 @@ function buildWidgetDocument(args: {
             });
         };
 
+        const normalizeHttpResponse = (result) => {
+          const details = result && typeof result === "object" && result.details && typeof result.details === "object"
+            ? result.details
+            : null;
+          const responseBody = details && typeof details.responseBody === "string"
+            ? details.responseBody
+            : "";
+          const responseJson = details && Object.prototype.hasOwnProperty.call(details, "responseJson")
+            ? details.responseJson
+            : (() => {
+              if (!responseBody) {
+                return null;
+              }
+              const trimmed = responseBody.trim();
+              if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) {
+                return null;
+              }
+              try {
+                return JSON.parse(trimmed);
+              } catch {
+                return null;
+              }
+            })();
+
+          return {
+            body: responseBody,
+            json: responseJson,
+            statusCode: details && typeof details.statusCode === "number" ? details.statusCode : null,
+            url: details && typeof details.url === "string" ? details.url : "",
+          };
+        };
+
         const toMqttOperation = (request) => {
           const source = request && typeof request === "object" ? request : {};
           const {
@@ -286,6 +318,12 @@ function buildWidgetDocument(args: {
           },
           getMqttMessages(result) {
             return normalizeMqttMessages(result);
+          },
+          getHttpResponse(result) {
+            return normalizeHttpResponse(result);
+          },
+          getHttpJson(result) {
+            return normalizeHttpResponse(result).json;
           },
           setLayout(options) {
             const nextMode = options && options.mode === "scroll" ? "scroll" : "content";
@@ -906,7 +944,7 @@ export function DeviceWidgetsPanel({ deviceId, active = false, className }: Devi
   }, [deviceId, loadContext]);
 
   useEffect(() => {
-    if (!active && hasLoaded) {
+    if (!active || hasLoaded) {
       return;
     }
     void loadWidgets();

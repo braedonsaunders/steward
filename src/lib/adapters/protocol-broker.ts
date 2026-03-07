@@ -11,10 +11,15 @@ import {
 } from "@/lib/adapters/winrm";
 import { requestText } from "@/lib/network/http-client";
 import {
-  executeRenderedMqttRequest,
   renderMqttBrokerRequest,
 } from "@/lib/network/mqtt-client";
 import { markCredentialValidatedFromUse } from "@/lib/adoption/credentials";
+import {
+  applyPathSegmentCredentialToPath,
+  getHttpApiCredentialAuth,
+} from "@/lib/credentials/http-api";
+import { localToolRuntime } from "@/lib/local-tools/runtime";
+import { protocolSessionManager } from "@/lib/protocol-sessions/manager";
 import { vault } from "@/lib/security/vault";
 import { stateStore } from "@/lib/state/store";
 import { runCommand } from "@/lib/utils/shell";
@@ -94,12 +99,29 @@ function getCredentialForBroker(
   deviceId: string,
   protocols: string[],
   allowProvidedCredentials?: boolean,
+  adapterId?: string,
 ): { credential?: DeviceCredential; availableStatuses: string[] } {
   const candidates = stateStore.getDeviceCredentials(deviceId)
     .filter((credential) => protocols.includes(credential.protocol.toLowerCase()));
 
   const priority = ["validated", "provided", "invalid", "pending"] as const;
+  const adapterPreference = (credential: DeviceCredential): number => {
+    const credentialAdapter = credential.adapterId?.trim() ?? "";
+    const targetAdapter = adapterId?.trim() ?? "";
+    if (!targetAdapter) {
+      return credentialAdapter.length === 0 ? 0 : 1;
+    }
+    if (credentialAdapter === targetAdapter) {
+      return 0;
+    }
+    return credentialAdapter.length === 0 ? 1 : 2;
+  };
   const sorted = [...candidates].sort((a, b) => {
+    const aAdapterRank = adapterPreference(a);
+    const bAdapterRank = adapterPreference(b);
+    if (aAdapterRank !== bAdapterRank) {
+      return aAdapterRank - bAdapterRank;
+    }
     const aPriority = priority.indexOf(a.status as (typeof priority)[number]);
     const bPriority = priority.indexOf(b.status as (typeof priority)[number]);
     if (aPriority !== bPriority) {
@@ -188,6 +210,171 @@ function encodePowerShellScript(script: string): string {
   return Buffer.from(script, "utf16le").toString("base64");
 }
 
+function deviceHasObservedSsh(device: Device): boolean {
+  return device.protocols.includes("ssh")
+    || device.services.some((service) =>
+      service.transport === "tcp"
+      && (service.port === 22 || service.port === 2222 || /ssh/i.test(service.name)),
+    );
+}
+
+function preferredSshPort(device: Device): number | undefined {
+  const preferredPorts = [22, 2222, 2200];
+  const candidates = device.services
+    .filter((service) =>
+      service.transport === "tcp"
+      && (preferredPorts.includes(service.port) || /ssh/i.test(service.name)),
+    )
+    .sort((a, b) => {
+      const aRank = preferredPorts.indexOf(a.port);
+      const bRank = preferredPorts.indexOf(b.port);
+      if (aRank !== bRank) {
+        return (aRank === -1 ? 999 : aRank) - (bRank === -1 ? 999 : bRank);
+      }
+      return a.port - b.port;
+    });
+  return candidates[0]?.port;
+}
+
+function buildWindowsPowerShellSshArgv(command: string): string[] {
+  return [
+    "powershell.exe",
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-EncodedCommand",
+    encodePowerShellScript(command),
+  ];
+}
+
+function shouldUseWindowsSshFallback(device: Device): boolean {
+  return process.platform === "darwin" && deviceHasObservedSsh(device);
+}
+
+function selectCredentialForWindowsSshFallback(
+  deviceId: string,
+  allowProvidedCredentials: boolean | undefined,
+): {
+  credential?: DeviceCredential;
+  availableStatuses: string[];
+  sourceProtocol?: "ssh" | "winrm";
+} {
+  const sshSelection = getCredentialForBroker(deviceId, ["ssh"], allowProvidedCredentials, "ssh");
+  if (sshSelection.credential) {
+    return {
+      credential: sshSelection.credential,
+      availableStatuses: sshSelection.availableStatuses,
+      sourceProtocol: "ssh",
+    };
+  }
+
+  const winrmSelection = getCredentialForBroker(deviceId, ["winrm"], allowProvidedCredentials, "winrm");
+  if (winrmSelection.credential) {
+    return {
+      credential: winrmSelection.credential,
+      availableStatuses: [
+        ...sshSelection.availableStatuses,
+        ...winrmSelection.availableStatuses,
+      ],
+      sourceProtocol: "winrm",
+    };
+  }
+
+  return {
+    availableStatuses: [
+      ...sshSelection.availableStatuses,
+      ...winrmSelection.availableStatuses,
+    ],
+  };
+}
+
+async function runSshCommandWithCredential(input: {
+  operation: OperationSpec;
+  device: Device;
+  context: BrokerExecutionContext;
+  credential: DeviceCredential;
+  accountLabel: string;
+  secret: string;
+  host: string;
+  argv: string[];
+  port?: number;
+  validationMethod: string;
+  validationDetails: Record<string, unknown>;
+}): Promise<BrokerExecutionResult> {
+  const result = process.platform === "win32"
+    ? formatCommandOutput(await runCommand(
+      "plink",
+      [
+        "-batch",
+        "-ssh",
+        "-l",
+        input.accountLabel,
+        ...(input.port && input.port !== 22 ? ["-P", String(input.port)] : []),
+        input.host,
+        "-pw",
+        input.secret,
+        ...input.argv,
+      ],
+      input.operation.timeoutMs,
+    ))
+    : formatCommandOutput(await runCommand(
+      "sshpass",
+      [
+        "-p",
+        input.secret,
+        "ssh",
+        "-l",
+        input.accountLabel,
+        ...(input.port && input.port !== 22 ? ["-p", String(input.port)] : []),
+        "-o",
+        "StrictHostKeyChecking=no",
+        input.host,
+        ...input.argv,
+      ],
+      input.operation.timeoutMs,
+    ));
+
+  if (result.ok) {
+    await markCredentialValidatedFromUse({
+      deviceId: input.device.id,
+      credentialId: input.credential.id,
+      actor: input.context.actor,
+      method: input.validationMethod,
+      details: input.validationDetails,
+    });
+  }
+
+  return result;
+}
+
+function redactSensitiveHttpValue(value: string, secret?: string): string {
+  if (!secret || !value) {
+    return value;
+  }
+
+  let redacted = value.replaceAll(secret, "[redacted]");
+  const encodedSecret = encodeURIComponent(secret);
+  if (encodedSecret !== secret) {
+    redacted = redacted.replaceAll(encodedSecret, "[redacted]");
+  }
+  return redacted;
+}
+
+function parseHttpResponseJson(body: string): unknown {
+  const trimmed = body.trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+  if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+}
+
 async function executeSshBroker(
   operation: OperationSpec,
   device: Device,
@@ -210,6 +397,7 @@ async function executeSshBroker(
     device.id,
     ["ssh"],
     context.allowProvidedCredentials,
+    operation.adapterId,
   );
   if (!credential) {
     logCredentialAccess(
@@ -270,7 +458,6 @@ async function executeSshBroker(
   }
 
   const remoteArgv = broker.argv.map((arg) => interpolateOperationValue(arg, device.ip, params));
-  const host = `${accountLabel}@${device.ip}`;
 
   logCredentialAccess(context, operation, device, "ssh", "granted", {
     accountLabel,
@@ -278,56 +465,19 @@ async function executeSshBroker(
     credentialStatus: credential.status,
   }, credential.id);
 
-  if (process.platform === "win32") {
-    const result = formatCommandOutput(await runCommand(
-      "plink",
-      [
-        "-batch",
-        "-ssh",
-        ...(broker.port && broker.port !== 22 ? ["-P", String(broker.port)] : []),
-        host,
-        "-pw",
-        secret,
-        ...remoteArgv,
-      ],
-      operation.timeoutMs,
-    ));
-    if (result.ok) {
-      await markCredentialValidatedFromUse({
-        deviceId: device.id,
-        credentialId: credential.id,
-        actor: context.actor,
-        method: "ssh.command",
-        details: { adapterId: operation.adapterId, operationId: operation.id },
-      });
-    }
-    return result;
-  }
-
-  const result = formatCommandOutput(await runCommand(
-    "sshpass",
-    [
-      "-p",
-      secret,
-      "ssh",
-      ...(broker.port && broker.port !== 22 ? ["-p", String(broker.port)] : []),
-      "-o",
-      "StrictHostKeyChecking=no",
-      host,
-      ...remoteArgv,
-    ],
-    operation.timeoutMs,
-  ));
-  if (result.ok) {
-    await markCredentialValidatedFromUse({
-      deviceId: device.id,
-      credentialId: credential.id,
-      actor: context.actor,
-      method: "ssh.command",
-      details: { adapterId: operation.adapterId, operationId: operation.id },
-    });
-  }
-  return result;
+  return runSshCommandWithCredential({
+    operation,
+    device,
+    context,
+    credential,
+    accountLabel,
+    secret,
+    host: device.ip,
+    argv: remoteArgv,
+    port: broker.port,
+    validationMethod: "ssh.command",
+    validationDetails: { adapterId: operation.adapterId, operationId: operation.id },
+  });
 }
 
 async function executeWinrmBroker(
@@ -348,10 +498,136 @@ async function executeWinrmBroker(
     });
   }
 
+  if (shouldUseWindowsSshFallback(device)) {
+    const sshPort = preferredSshPort(device);
+    const { credential, availableStatuses, sourceProtocol } = selectCredentialForWindowsSshFallback(
+      device.id,
+      context.allowProvidedCredentials,
+    );
+
+    if (!credential || !sourceProtocol) {
+      logCredentialAccess(
+        context,
+        operation,
+        device,
+        "ssh",
+        availableStatuses.length > 0 ? "credential_unusable" : "no_stored_credential",
+        {
+          allowedStatuses: ["pending", "provided", "validated", "invalid"],
+          availableStatuses,
+          fallbackFromProtocol: "winrm",
+        },
+      );
+      return brokerResult({
+        status: "failed",
+        phase: "not-started",
+        proof: "none",
+        summary: "Windows remoting over SSH requires stored credentials",
+        output: "This macOS Steward host prefers PowerShell over SSH for Windows targets that expose SSH. Store an SSH credential, or reuse the same username/password via the existing Windows credential.",
+        details: {
+          fallbackFromProtocol: "winrm",
+          availableStatuses,
+        },
+      });
+    }
+
+    const secret = await vault.getSecret(credential.vaultSecretRef);
+    if (!secret || secret.trim().length === 0) {
+      logCredentialAccess(context, operation, device, "ssh", "missing_secret", {
+        accountLabel: credential.accountLabel ?? null,
+        credentialStatus: credential.status,
+        sourceCredentialProtocol: sourceProtocol,
+        fallbackFromProtocol: "winrm",
+      }, credential.id);
+      return brokerResult({
+        status: "failed",
+        phase: "not-started",
+        proof: "none",
+        summary: "SSH fallback secret missing",
+        output: `Stored ${sourceProtocol.toUpperCase()} credential is missing a usable secret for SSH transport.`,
+        details: {
+          credentialId: credential.id,
+          sourceCredentialProtocol: sourceProtocol,
+        },
+      });
+    }
+
+    const accountLabel = credential.accountLabel?.trim() ?? "";
+    if (accountLabel.length === 0) {
+      logCredentialAccess(context, operation, device, "ssh", "credential_unusable", {
+        credentialStatus: credential.status,
+        sourceCredentialProtocol: sourceProtocol,
+        reason: "missing_account_label",
+        fallbackFromProtocol: "winrm",
+      }, credential.id);
+      return brokerResult({
+        status: "failed",
+        phase: "not-started",
+        proof: "none",
+        summary: "SSH fallback username is required",
+        output: `Stored ${sourceProtocol.toUpperCase()} credential is missing an accountLabel username required for SSH transport.`,
+        details: {
+          credentialId: credential.id,
+          sourceCredentialProtocol: sourceProtocol,
+        },
+      });
+    }
+
+    const targetHost = typeof broker.host === "string" && broker.host.trim().length > 0
+      ? broker.host.trim()
+      : device.ip;
+    const remoteArgv = buildWindowsPowerShellSshArgv(interpolateOperationValue(broker.command, targetHost, params));
+
+    logCredentialAccess(context, operation, device, "ssh", "granted", {
+      accountLabel,
+      argv: remoteArgv.slice(0, 5),
+      credentialStatus: credential.status,
+      sourceCredentialProtocol: sourceProtocol,
+      fallbackFromProtocol: "winrm",
+      host: targetHost,
+      port: sshPort ?? 22,
+    }, credential.id);
+
+    const sshResult = await runSshCommandWithCredential({
+      operation,
+      device,
+      context,
+      credential,
+      accountLabel,
+      secret,
+      host: targetHost,
+      argv: remoteArgv,
+      port: sshPort,
+      validationMethod: sourceProtocol === "ssh" ? "ssh.command" : "ssh.command.via_winrm_credential",
+      validationDetails: {
+        adapterId: operation.adapterId,
+        operationId: operation.id,
+        sourceCredentialProtocol: sourceProtocol,
+        fallbackFromProtocol: "winrm",
+        host: targetHost,
+        port: sshPort ?? 22,
+      },
+    });
+
+    return {
+      ...sshResult,
+      summary: sshResult.ok
+        ? "Windows PowerShell command completed successfully over SSH"
+        : "Windows PowerShell command over SSH failed",
+      details: {
+        ...sshResult.details,
+        fallbackFromProtocol: "winrm",
+        sourceCredentialProtocol: sourceProtocol,
+        sshPort: sshPort ?? 22,
+      },
+    };
+  }
+
   const { credential, availableStatuses } = getCredentialForBroker(
     device.id,
     ["winrm", "windows"],
     context.allowProvidedCredentials,
+    operation.adapterId,
   );
   if (!credential) {
     if (context.allowUnauthenticated) {
@@ -662,7 +938,7 @@ async function executeHttpBroker(
     });
   }
 
-  const path = interpolateOperationValue(broker.path, device.ip, params);
+  let path = interpolateOperationValue(broker.path, device.ip, params);
   const renderedQuery = broker.query
     ? Object.fromEntries(
       Object.entries(broker.query).map(([key, value]) => [
@@ -677,11 +953,14 @@ async function executeHttpBroker(
     )
     : {};
   const body = broker.body ? interpolateOperationValue(broker.body, device.ip, params) : undefined;
+  let credentialSecret: string | undefined;
+  let credentialApplied = false;
 
   const { credential, availableStatuses } = getCredentialForBroker(
     device.id,
     ["http-api"],
     context.allowProvidedCredentials,
+    operation.adapterId,
   );
   if (credential) {
     const secret = await vault.getSecret(credential.vaultSecretRef);
@@ -690,13 +969,58 @@ async function executeHttpBroker(
         accountLabel: credential.accountLabel ?? null,
         credentialStatus: credential.status,
       }, credential.id);
-    } else if (credential.accountLabel?.trim()) {
-      renderedHeaders.Authorization = `Basic ${Buffer.from(`${credential.accountLabel.trim()}:${secret}`).toString("base64")}`;
-      logCredentialAccess(context, operation, device, "http-api", "granted", {
-        authMode: "basic",
-        accountLabel: credential.accountLabel.trim(),
-        credentialStatus: credential.status,
-      }, credential.id);
+    } else {
+      credentialSecret = secret;
+      const auth = getHttpApiCredentialAuth(credential.scopeJson);
+      const accountLabel = credential.accountLabel?.trim() || undefined;
+      let unusableReason: string | undefined;
+
+      switch (auth.mode) {
+        case "basic":
+          if (!accountLabel) {
+            unusableReason = "missing_account_label";
+            break;
+          }
+          renderedHeaders.Authorization = `Basic ${Buffer.from(`${accountLabel}:${secret}`).toString("base64")}`;
+          credentialApplied = true;
+          break;
+        case "bearer":
+          renderedHeaders.Authorization = `Bearer ${secret}`;
+          credentialApplied = true;
+          break;
+        case "api-key":
+          renderedHeaders[auth.headerName ?? "X-API-Key"] = secret;
+          credentialApplied = true;
+          break;
+        case "query-param":
+          renderedQuery[auth.queryParamName ?? "api_key"] = secret;
+          credentialApplied = true;
+          break;
+        case "path-segment": {
+          const rendered = applyPathSegmentCredentialToPath(path, secret, auth.pathPrefix);
+          path = rendered.path;
+          credentialApplied = rendered.applied;
+          break;
+        }
+      }
+
+      if (credentialApplied) {
+        logCredentialAccess(context, operation, device, "http-api", "granted", {
+          authMode: auth.mode,
+          accountLabel: accountLabel ?? null,
+          credentialStatus: credential.status,
+          headerName: auth.headerName ?? null,
+          queryParamName: auth.queryParamName ?? null,
+          pathPrefix: auth.pathPrefix ?? null,
+        }, credential.id);
+      } else if (unusableReason) {
+        logCredentialAccess(context, operation, device, "http-api", "credential_unusable", {
+          authMode: auth.mode,
+          accountLabel: accountLabel ?? null,
+          credentialStatus: credential.status,
+          reason: unusableReason,
+        }, credential.id);
+      }
     }
   } else if (availableStatuses.length > 0) {
     logCredentialAccess(context, operation, device, "http-api", "credential_unusable", {
@@ -723,12 +1047,16 @@ async function executeHttpBroker(
       body,
       timeoutMs: operation.timeoutMs,
     });
+    const redactedUrl = redactSensitiveHttpValue(url.toString(), credentialSecret);
+    const redactedBody = redactSensitiveHttpValue(response.body, credentialSecret);
+    const redactedError = response.error ? redactSensitiveHttpValue(response.error, credentialSecret) : "";
+    const responseJson = parseHttpResponseJson(redactedBody);
 
     const outputLines = [
-      response.body,
-      response.error ? `[error] ${response.error}` : "",
+      redactedBody,
+      redactedError ? `[error] ${redactedError}` : "",
       `[status code: ${response.statusCode}]`,
-      `[url] ${url.toString()}`,
+      `[url] ${redactedUrl}`,
     ].filter((value) => value.trim().length > 0);
     const output = outputLines.join("\n").trim();
 
@@ -749,16 +1077,19 @@ async function executeHttpBroker(
       status: "succeeded",
       phase: broker.expectRegex ? "verified" : "responded",
       proof: broker.expectRegex ? "expectation" : "response",
-      summary: `${broker.method} ${url.toString()} returned ${response.statusCode}`,
+      summary: `${broker.method} ${redactedUrl} returned ${response.statusCode}`,
       output,
       details: {
         method: broker.method,
-        url: url.toString(),
+        url: redactedUrl,
         statusCode: response.statusCode,
         matchedExpectation: Boolean(broker.expectRegex),
+        responseBody: redactedBody,
+        responseJson,
+        authApplied: credentialApplied,
       },
     });
-    if (credential) {
+    if (credential && credentialApplied) {
       await markCredentialValidatedFromUse({
         deviceId: device.id,
         credentialId: credential.id,
@@ -767,7 +1098,7 @@ async function executeHttpBroker(
         details: {
           adapterId: operation.adapterId,
           operationId: operation.id,
-          url: url.toString(),
+          url: redactedUrl,
           statusCode: response.statusCode,
         },
       });
@@ -806,6 +1137,7 @@ async function executeMqttBroker(
     device.id,
     ["mqtt"],
     context.allowProvidedCredentials,
+    operation.adapterId,
   );
   let secret: string | undefined;
 
@@ -845,17 +1177,36 @@ async function executeMqttBroker(
     }, credential.id);
   }
 
-  const result = await executeRenderedMqttRequest(rendered);
+  const holder = broker.sessionHolder?.trim()
+    || `${context.actor}:${context.playbookRunId ?? operation.id}`;
+  const purpose = `${operation.adapterId}:${operation.kind}`;
+  const sessionExchange = await protocolSessionManager.exchangeMqtt({
+    device,
+    rendered,
+    credentialId: credential?.id,
+    sessionId: broker.sessionId,
+    adapterId: operation.adapterId,
+    holder,
+    purpose,
+    keepSessionOpen: broker.keepSessionOpen === true,
+    desiredState: broker.keepSessionOpen ? "active" : "idle",
+    arbitrationMode: broker.arbitrationMode,
+    singleConnectionHint: broker.singleConnectionHint,
+    leaseTtlMs: broker.leaseTtlMs,
+  });
+  const result = sessionExchange.result;
   if (result.ok && credential) {
     await markCredentialValidatedFromUse({
       deviceId: device.id,
       credentialId: credential.id,
       actor: context.actor,
-      method: "mqtt.exchange",
+      method: broker.keepSessionOpen ? "mqtt.session" : "mqtt.exchange",
       details: {
         adapterId: operation.adapterId,
         operationId: operation.id,
         url: rendered.url,
+        sessionId: sessionExchange.session.id,
+        leaseId: sessionExchange.lease.id,
         subscribeTopics: rendered.subscribeTopics,
         publishTopics: rendered.publishMessages.map((message) => message.topic),
       },
@@ -869,6 +1220,69 @@ async function executeMqttBroker(
     summary: result.summary,
     output: result.output,
     details: result.details,
+  });
+}
+
+async function executeLocalToolBroker(
+  operation: OperationSpec,
+  _device: Device,
+  _params: Record<string, string>,
+  context: BrokerExecutionContext,
+): Promise<BrokerExecutionResult> {
+  void _device;
+  void _params;
+  const broker = operation.brokerRequest;
+  if (!broker || broker.protocol !== "local-tool") {
+    return brokerResult({
+      handled: false,
+      status: "failed",
+      phase: "not-started",
+      proof: "none",
+      summary: "Local-tool broker not applicable",
+      output: "",
+    });
+  }
+
+  const result = await localToolRuntime.execute({
+    toolId: broker.toolId,
+    command: broker.command,
+    argv: broker.argv ?? [],
+    cwd: broker.cwd,
+    timeoutMs: broker.timeoutMs ?? operation.timeoutMs,
+    installIfMissing: broker.installIfMissing,
+    healthCheckBeforeRun: broker.healthCheckBeforeRun,
+    approvalReason: broker.approvalReason,
+  }, context.actor);
+
+  if (!("toolId" in result)) {
+    return brokerResult({
+      status: result.status === "blocked" ? "blocked" : "failed",
+      phase: result.status === "blocked" ? "blocked" : "executed",
+      proof: "process",
+      summary: result.summary,
+      output: result.error ?? result.summary,
+      details: {
+        toolId: broker.toolId,
+        approvalId: result.approval?.id ?? null,
+      },
+    });
+  }
+
+  const execution = result;
+  return brokerResult({
+    status: execution.ok ? "succeeded" : "failed",
+    phase: "executed",
+    proof: "process",
+    summary: execution.summary,
+    output: `${execution.stdout}${execution.stderr ? `\n[stderr] ${execution.stderr}` : ""}`.trim(),
+    details: {
+      toolId: execution.toolId,
+      command: execution.command,
+      argv: execution.argv,
+      code: execution.code,
+      binPath: execution.binPath ?? null,
+      durationMs: execution.durationMs,
+    },
   });
 }
 
@@ -1280,6 +1694,10 @@ export async function executeBrokerOperation(
 
   if (operation.brokerRequest.protocol === "mqtt") {
     return executeMqttBroker(operation, device, params, context);
+  }
+
+  if (operation.brokerRequest.protocol === "local-tool") {
+    return executeLocalToolBroker(operation, device, params, context);
   }
 
   if (operation.brokerRequest.protocol === "winrm") {

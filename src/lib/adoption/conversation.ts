@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { generateText } from "ai";
+import { buildHostnameResolutionSummary } from "@/lib/discovery/hostname-resolution";
 import { getDefaultProvider } from "@/lib/llm/config";
 import { buildLanguageModel } from "@/lib/llm/providers";
 import { stateStore } from "@/lib/state/store";
@@ -186,10 +187,18 @@ function summarizeObservation(observation: DiscoveryObservation): string {
       : typeof details.url === "string"
         ? details.url
         : undefined;
+    const statusCode = typeof details.statusCode === "number" ? details.statusCode : undefined;
+    const serverHeader = typeof details.serverHeader === "string" ? details.serverHeader : undefined;
     const vendorHints = Array.isArray(details.vendorHints)
       ? details.vendorHints.filter((value): value is string => typeof value === "string").slice(0, 2)
       : [];
-    const parts = [title, vendorHints.length > 0 ? vendorHints.join(", ") : "", url].filter(Boolean);
+    const parts = [
+      statusCode ? `HTTP ${statusCode}` : "",
+      serverHeader ? `Server ${serverHeader}` : "",
+      title,
+      vendorHints.length > 0 ? vendorHints.join(", ") : "",
+      url,
+    ].filter(Boolean);
     return parts.length > 0 ? `Browser ${parts.join(" | ")}` : "Browser observation";
   }
 
@@ -211,8 +220,15 @@ function summarizeObservation(observation: DiscoveryObservation): string {
   }
 
   if (observation.evidenceType === "http_banner") {
+    const statusCode = typeof details.statusCode === "number" ? details.statusCode : undefined;
+    const serverHeader = typeof details.serverHeader === "string" ? details.serverHeader : undefined;
     const title = typeof details.title === "string" ? details.title : undefined;
-    return title ? `HTTP title ${title}` : "HTTP banner";
+    const parts = [
+      statusCode ? `HTTP ${statusCode}` : "",
+      serverHeader ? `Server ${serverHeader}` : "",
+      title ? `Title ${title}` : "",
+    ].filter(Boolean);
+    return parts.length > 0 ? parts.join(" | ") : "HTTP banner";
   }
 
   return observation.evidenceType.replace(/_/g, " ");
@@ -295,6 +311,7 @@ async function buildOnboardingLocalContext(device: Device): Promise<{
           : null,
       };
     });
+  const hostnameResolution = buildHostnameResolutionSummary(device, observations, routerCandidates);
 
   const discovery = isRecord(device.metadata.discovery) ? device.metadata.discovery : {};
   const classification = isRecord(device.metadata.classification) ? device.metadata.classification : {};
@@ -320,7 +337,15 @@ async function buildOnboardingLocalContext(device: Device): Promise<{
         transport: service.transport,
         secure: service.secure,
         product: service.product ?? null,
+        httpInfo: service.httpInfo
+          ? {
+              statusCode: service.httpInfo.statusCode ?? null,
+              serverHeader: service.httpInfo.serverHeader ?? null,
+              title: service.httpInfo.title ?? null,
+            }
+          : null,
       })),
+      hostnameResolution,
       discovery: {
         confidence: typeof discovery.confidence === "number" ? discovery.confidence : null,
         evidenceTypes: Array.isArray(discovery.evidenceTypes)
@@ -345,11 +370,37 @@ async function buildOnboardingLocalContext(device: Device): Promise<{
         inferredOs: typeof fingerprint.inferredOs === "string" ? fingerprint.inferredOs : null,
         inferredProduct: typeof fingerprint.inferredProduct === "string" ? fingerprint.inferredProduct : null,
       },
+      browserObservation: {
+        endpoints: Array.isArray(browserObservation.endpoints)
+          ? browserObservation.endpoints
+            .filter((value): value is Record<string, unknown> => isRecord(value))
+            .slice(0, 4)
+            .map((endpoint) => ({
+              url: typeof endpoint.url === "string" ? endpoint.url : null,
+              finalUrl: typeof endpoint.finalUrl === "string" ? endpoint.finalUrl : null,
+              statusCode: typeof endpoint.statusCode === "number" ? endpoint.statusCode : null,
+              serverHeader: typeof endpoint.serverHeader === "string" ? endpoint.serverHeader : null,
+              title: typeof endpoint.title === "string" ? endpoint.title : null,
+              vendorHints: Array.isArray(endpoint.vendorHints)
+                ? endpoint.vendorHints.filter((value): value is string => typeof value === "string").slice(0, 3)
+                : [],
+            }))
+          : [],
+      },
       recentHints: {
         dhcpHostnames: Array.from(dhcpHostnames).slice(0, 4),
         dnsNames: Array.from(dnsNames).slice(0, 4),
         httpHosts: Array.from(httpHosts).slice(0, 4),
         tlsSni: Array.from(tlsSni).slice(0, 4),
+        mdnsFriendlyNames: hostnameResolution.mdnsHints.slice(0, 4),
+        httpStatusCodes: device.services
+          .map((service) => service.httpInfo?.statusCode)
+          .filter((value): value is number => typeof value === "number")
+          .slice(0, 4),
+        httpServerHeaders: device.services
+          .map((service) => service.httpInfo?.serverHeader)
+          .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+          .slice(0, 4),
         faviconHashes: Array.from(faviconHashes).map((value) => value.slice(0, 16)).slice(0, 3),
         protocolHints: Array.from(protocolHints).slice(0, 4),
         browserTitles: Array.isArray(browserObservation.endpoints)
@@ -416,6 +467,7 @@ export async function buildOnboardingSystemPrompt(device: Device): Promise<strin
     "Do not create or revise a widget during onboarding unless the user explicitly asks for widget work.",
     "If a widget would help, suggest it in prose instead of creating it automatically.",
     "When the user asks about widgets and a relevant one already exists, prefer the existing widget over creating a duplicate.",
+    "When the user explicitly asks for widget work during onboarding, create or revise it directly in Steward without deferring to a separate builder or asking the user to paste code elsewhere.",
     "Workflow requirements:",
     "1) Determine what this endpoint is responsible for.",
     "2) Request missing credentials only when needed, with explicit reason and least-privilege first.",
@@ -426,29 +478,36 @@ export async function buildOnboardingSystemPrompt(device: Device): Promise<strin
     "3da) Before public web research or asking the user to identify a private-network device manually, inspect Steward's stored local identity evidence with steward_device_identity.",
     "3e) For vendor docs, current advisories, CVEs, or other external/public facts, use steward_web_research instead of guessing.",
     "3f) Treat public web research as supporting context only. Do not identify a private device solely from vendor/OUI plus common port numbers.",
+    "3fa) Do not infer an exact consumer brand, model, or product family from MAC/OUI/vendor research alone. Without corroborating local evidence, keep the identity generic and present it as a hypothesis.",
     "3g) RDP alone does not imply WinRM. Only treat WinRM as available when 5985/5986 or a verified WinRM endpoint is present.",
     "3h) As soon as evidence is strong enough to identify the device class, immediately update its device type and canonical name during onboarding. Do not overwrite names manually set by the user.",
     "3i) If discovery already has a hostname or other identity hint, use it before attempting remote commands just to ask for the hostname.",
     "3j) If the target is still ambiguous and router/gateway candidates are available, call steward_router_lease_snapshot or steward_router_client_drift on those router devices to search for the target IP/MAC before asking the user to check their app/router UI.",
-    "4) Produce workload and assurance recommendations with rationale and monitoring approach.",
+    "3ja) For hostname questions, follow the ladder in order: stored discovery hostname, mDNS/Bonjour hints, DHCP lease hints, then router lease correlation. If it remains unknown, explicitly say which steps resolved nothing.",
+    "3k) If no credible adapter exists yet, inspect existing packages with steward_list_adapters and steward_get_adapter_package, use steward_web_research for vendor facts, then create or extend a real adapter with steward_create_adapter_package, steward_update_adapter_package, or steward_add_adapter_tool.",
+    "4) Produce workload and assurance recommendations with rationale and monitoring approach when the user wants Steward to own ongoing outcomes.",
     "5) Onboarding can wander, but it must eventually complete through the first-party tool steward_complete_onboarding.",
-    "6) Call steward_complete_onboarding once you have a credible management profile, accepted access methods, and the workloads and assurances Steward should own.",
+    "6) Call steward_complete_onboarding once you have a credible adapter selection, accepted access methods, and any workloads or assurances Steward should own.",
+    "6a) If the user explicitly wants access-only onboarding with no committed workloads and no ongoing monitoring, complete onboarding with empty workloads and empty assurances instead of inventing placeholder responsibilities.",
+    "6b) Do not block completion on unknowns that only affect cosmetic naming or physical placement. Keep the name generic and record the uncertainty as a residual unknown instead.",
     "7) Never output fake <tool_call> blocks.",
     "8) Do not say widgets or remotes are outside Steward's scope when the user asks for them.",
     "9) If local evidence is ambiguous or conflicts with public research, state the leading hypotheses with confidence and ask for confirmation instead of asserting a product family.",
+    "10) Do not claim an adapter or adapter tool was added unless you actually used the corresponding first-party tool.",
     "When uncertain, ask focused follow-ups and continue exploration.",
     "Prefer concrete operational wording over generic advice.",
     "",
     `Target device id: ${device.id}`,
     `Target device: ${device.name} (${device.ip})`,
     `Discovered hostname: ${device.hostname || "unknown"}`,
+    `Hostname resolution ladder: ${JSON.stringify(localContext.identity.hostnameResolution)}`,
     `MAC address: ${device.mac || "unknown"}`,
     `Device type: ${device.type}; OS hint: ${device.os || "unknown"}; vendor: ${device.vendor || "unknown"}`,
     `Observed protocols: ${device.protocols.join(", ") || "none"}`,
     `Observed services: ${device.services.map((service) => `${service.name}:${service.port}`).join(", ") || "none"}`,
     `Stored credentials: ${JSON.stringify(credentials)}`,
     `Observed access methods: ${JSON.stringify(accessMethods)}`,
-    `Profile candidates: ${JSON.stringify(profiles)}`,
+    `Adapter candidates: ${JSON.stringify(profiles)}`,
     `Current onboarding draft: ${JSON.stringify(draft)}`,
     `Stored identity context: ${JSON.stringify(localContext.identity)}`,
     `Router/gateway candidates for lease correlation: ${localContext.routerCandidates.length > 0 ? JSON.stringify(localContext.routerCandidates) : "[]"}`,

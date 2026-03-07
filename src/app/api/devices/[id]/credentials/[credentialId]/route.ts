@@ -14,6 +14,7 @@ const updateSchema = z.object({
   protocol: z.string().trim().min(1).optional(),
   accountLabel: z.string().trim().max(256).optional(),
   secret: z.string().optional(),
+  scopeJson: z.record(z.string(), z.unknown()).optional(),
   validateNow: z.boolean().optional(),
 });
 
@@ -38,6 +39,7 @@ export async function PATCH(
       protocol: payload.data.protocol,
       accountLabel: payload.data.accountLabel,
       secret: payload.data.secret,
+      scopeJson: payload.data.scopeJson,
     });
 
     if (payload.data.validateNow) {

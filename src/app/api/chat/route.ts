@@ -5,6 +5,10 @@ import { generateText, stepCountIs, streamText } from "ai";
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { isAuthorized } from "@/lib/auth/guard";
+import {
+  registerActiveChatStream,
+  releaseActiveChatStream,
+} from "@/lib/assistant/chat-stream-registry";
 import { buildAssistantContext } from "@/lib/assistant/context";
 import { maybeUpdateOperatorNotes } from "@/lib/assistant/operator-notes";
 import { buildStewardSystemPrompt } from "@/lib/assistant/prompt";
@@ -439,6 +443,77 @@ function summarizeToolExecution(output: unknown, toolName?: string): {
       };
     }
 
+    if (toolName === "steward_query_network") {
+      const failedText = typeof output.error === "string" ? output.error.trim() : "";
+      if (output.ok === false || failedText.length > 0) {
+        return {
+          status: "failed",
+          summary: failedText || "Network query failed.",
+          outputPreview: previewValue(output, 1200),
+        };
+      }
+
+      const action = typeof output.action === "string" ? output.action : "inventory";
+      const explicitSummary = typeof output.summary === "string" ? output.summary.trim() : "";
+      if (explicitSummary.length > 0) {
+        return {
+          status: "completed",
+          summary: explicitSummary,
+          outputPreview: previewValue(output, 1200),
+        };
+      }
+
+      if (action === "device_summary") {
+        const targetDevice = isRecord(output.targetDevice) ? output.targetDevice : null;
+        const deviceName = targetDevice && typeof targetDevice.name === "string" ? targetDevice.name.trim() : "device";
+        return {
+          status: "completed",
+          summary: `Loaded network summary for ${deviceName}.`,
+          outputPreview: previewValue(output, 1200),
+        };
+      }
+
+      if (action === "dependencies") {
+        const targetDevice = isRecord(output.targetDevice) ? output.targetDevice : null;
+        const deviceName = targetDevice && typeof targetDevice.name === "string" ? targetDevice.name.trim() : "device";
+        const dependentCount = typeof output.dependentCount === "number"
+          ? output.dependentCount
+          : Array.isArray(output.dependentDevices)
+            ? output.dependentDevices.length
+            : 0;
+        return {
+          status: "completed",
+          summary: `Found ${dependentCount} dependent device${dependentCount === 1 ? "" : "s"} for ${deviceName}.`,
+          outputPreview: previewValue(output, 1200),
+        };
+      }
+
+      if (action === "recent_changes") {
+        const count = typeof output.count === "number"
+          ? output.count
+          : Array.isArray(output.changes)
+            ? output.changes.length
+            : 0;
+        const hours = typeof output.hours === "number" ? output.hours : 24;
+        return {
+          status: "completed",
+          summary: `Listed ${count} graph change${count === 1 ? "" : "s"} from the last ${hours} hour${hours === 1 ? "" : "s"}.`,
+          outputPreview: previewValue(output, 1200),
+        };
+      }
+
+      const count = typeof output.matchedDeviceCount === "number"
+        ? output.matchedDeviceCount
+        : Array.isArray(output.devices)
+          ? output.devices.length
+          : 0;
+      return {
+        status: "completed",
+        summary: `Matched ${count} network device${count === 1 ? "" : "s"}.`,
+        outputPreview: previewValue(output, 1200),
+      };
+    }
+
     const widgetRecord = isRecord(output.widget) ? output.widget : null;
     const widgetName = widgetRecord && typeof widgetRecord.name === "string"
       ? widgetRecord.name.trim()
@@ -473,6 +548,67 @@ function summarizeToolExecution(output: unknown, toolName?: string): {
       return {
         status: output.ok === false ? "failed" : "completed",
         summary: `${output.ok === false ? "Failed to delete" : "Deleted"} widget ${deletedName}`,
+        outputPreview: previewValue(output, 1200),
+      };
+    }
+
+    if (
+      toolName === "steward_list_adapters"
+      && Array.isArray(output.adapters)
+      && typeof output.count === "number"
+    ) {
+      return {
+        status: output.ok === false ? "failed" : "completed",
+        summary: `Listed ${output.count} adapter${output.count === 1 ? "" : "s"}.`,
+        outputPreview: previewValue(output, 1200),
+      };
+    }
+
+    if (toolName === "steward_get_adapter_package") {
+      const adapterName = typeof output.adapterName === "string"
+        ? output.adapterName.trim()
+        : isRecord(output.adapter) && typeof output.adapter.name === "string"
+          ? output.adapter.name.trim()
+          : typeof output.adapterId === "string"
+            ? output.adapterId
+            : "adapter";
+      return {
+        status: output.ok === false ? "failed" : "completed",
+        summary: `${output.ok === false ? "Failed to load" : "Loaded"} adapter package ${adapterName}.`,
+        outputPreview: previewValue(output, 1200),
+      };
+    }
+
+    if (toolName === "steward_create_adapter_package" || toolName === "steward_update_adapter_package") {
+      const adapterName = typeof output.adapterName === "string"
+        ? output.adapterName.trim()
+        : typeof output.adapterId === "string"
+          ? output.adapterId
+          : "adapter";
+      const verb = toolName === "steward_create_adapter_package" ? "Created" : "Updated";
+      const failureVerb = toolName === "steward_create_adapter_package" ? "Failed to create" : "Failed to update";
+      return {
+        status: output.ok === false ? "failed" : "completed",
+        summary: `${output.ok === false ? failureVerb : verb} adapter ${adapterName}.`,
+        outputPreview: previewValue(output, 1200),
+      };
+    }
+
+    if (toolName === "steward_add_adapter_tool") {
+      const adapterName = typeof output.adapterName === "string"
+        ? output.adapterName.trim()
+        : typeof output.adapterId === "string"
+          ? output.adapterId
+          : "adapter";
+      const skillName = typeof output.skillName === "string"
+        ? output.skillName.trim()
+        : typeof output.skillId === "string"
+          ? output.skillId
+          : "tool";
+      const verb = output.replaced === true ? "Updated" : "Added";
+      return {
+        status: output.ok === false ? "failed" : "completed",
+        summary: `${output.ok === false ? "Failed to extend" : `${verb} adapter tool ${skillName} on ${adapterName}`}.`,
         outputPreview: previewValue(output, 1200),
       };
     }
@@ -622,7 +758,7 @@ function validateAttachedDeviceChatReadiness(deviceId: string): { ok: true } | {
   if (!run || run.status !== "completed") {
     return {
       ok: false,
-      reason: `Finish onboarding for ${device.name} first so Steward has a committed responsibility contract, management profile, and access plan.`,
+      reason: `Finish onboarding for ${device.name} first so Steward has a committed responsibility contract, adapter selection, and access plan.`,
     };
   }
 
@@ -764,7 +900,7 @@ export async function POST(request: NextRequest) {
       ? persistedHistory.slice(0, -1)
       : persistedHistory;
 
-    const widgetRoutePlan = attachedDevice && !onboardingSession
+    const widgetRoutePlan = attachedDevice
       ? await planWidgetRoute({
         provider,
         model: payload.data.model,
@@ -955,7 +1091,7 @@ export async function POST(request: NextRequest) {
     const tools = await buildAdapterSkillTools({
       attachedDeviceId: attachedDevice?.id,
       allowPreOnboardingExecution: onboardingSession,
-      includeWidgetManagementTool: false,
+      includeWidgetManagementTool: onboardingSession,
       provider,
       model: payload.data.model,
     });
@@ -967,12 +1103,128 @@ export async function POST(request: NextRequest) {
       const encoder = new TextEncoder();
       let assistantText = "";
       let reasoningText = "";
-      let interrupted = request.signal.aborted;
+      let explicitlyCanceled = false;
+      let completed = false;
       const toolEvents: ChatToolEvent[] = [];
       const toolEventIndex = new Map<string, number>();
       const currentToolEvent = (id: string): ChatToolEvent | undefined => {
         const index = toolEventIndex.get(id);
         return index === undefined ? undefined : toolEvents[index];
+      };
+      const streamAbortController = new AbortController();
+      streamAbortController.signal.addEventListener("abort", () => {
+        explicitlyCanceled = true;
+      });
+      if (sessionId) {
+        registerActiveChatStream(sessionId, streamAbortController);
+      }
+
+      let streamClosed = false;
+      let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
+      let resolveControllerReady: (() => void) | null = null;
+      const controllerReady = new Promise<void>((resolve) => {
+        resolveControllerReady = resolve;
+      });
+
+      const send = (event: Record<string, unknown>) => {
+        if (streamClosed || !streamController) {
+          return;
+        }
+
+        try {
+          streamController.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+        } catch (error) {
+          if (isStreamClosureError(error)) {
+            streamClosed = true;
+            return;
+          }
+          throw error;
+        }
+      };
+
+      const close = () => {
+        if (streamClosed) {
+          return;
+        }
+
+        streamClosed = true;
+        if (!streamController) {
+          return;
+        }
+        try {
+          streamController.close();
+        } catch (error) {
+          if (!isStreamClosureError(error)) {
+            throw error;
+          }
+        }
+      };
+
+      const appendAssistantText = (text: string) => {
+        if (text.length === 0) {
+          return;
+        }
+        assistantText += text;
+        send({ type: "text-delta", text });
+      };
+
+      const emitToolEvent = (event: ChatToolEvent) => {
+        send({ type: "tool-event", event });
+      };
+
+      const persistInterruptedAssistant = () => {
+        if (completed) {
+          return;
+        }
+        completed = true;
+        const interruptedText = assistantText.trim().length > 0
+          ? assistantText
+          : toolEvents.length > 0
+            ? buildToolOnlyFallback(toolEvents)
+            : "";
+
+        if (sessionId && interruptedText.trim().length > 0) {
+          const metadata: ChatMessageMetadata = toolEvents.length > 0
+            ? { toolEvents, interrupted: true }
+            : { interrupted: true };
+          stateStore.addChatMessage({
+            id: randomUUID(),
+            sessionId,
+            role: "assistant",
+            content: interruptedText,
+            provider,
+            error: false,
+            createdAt: new Date().toISOString(),
+            metadata,
+          });
+        }
+      };
+
+      const persistFriendlyError = (rawError: unknown) => {
+        if (completed || explicitlyCanceled) {
+          return;
+        }
+        completed = true;
+        const rawMessage = rawError instanceof Error ? rawError.message : String(rawError);
+        const friendlyMessage = toFriendlyChatError(rawMessage, provider);
+
+        if (sessionId) {
+          const metadata: ChatMessageMetadata | undefined = toolEvents.length > 0
+            ? { toolEvents, interrupted: false }
+            : undefined;
+          stateStore.addChatMessage({
+            id: randomUUID(),
+            sessionId,
+            role: "assistant",
+            content: friendlyMessage,
+            provider,
+            error: true,
+            createdAt: new Date().toISOString(),
+            metadata,
+          });
+        }
+
+        send({ type: "error", error: friendlyMessage, provider });
       };
 
       const result = streamText({
@@ -983,327 +1235,240 @@ export async function POST(request: NextRequest) {
         stopWhen: stepCountIs(CHAT_MAX_STEPS),
         temperature: 0.2,
         maxOutputTokens,
-        abortSignal: request.signal,
+        abortSignal: streamAbortController.signal,
         onAbort() {
-          interrupted = true;
+          explicitlyCanceled = true;
+          persistInterruptedAssistant();
+        },
+        onChunk({ chunk }) {
+          if (chunk.type === "text-delta") {
+            appendAssistantText(chunk.text);
+            return;
+          }
+
+          if (chunk.type === "reasoning-delta") {
+            reasoningText += chunk.text;
+            send({ type: "reasoning-delta", text: chunk.text });
+            return;
+          }
+
+          if (chunk.type === "tool-input-start") {
+            const current = currentToolEvent(chunk.id);
+            const label = current?.label
+              ?? (typeof chunk.title === "string" && chunk.title.trim().length > 0
+                ? chunk.title.trim()
+                : humanizeToolName(chunk.toolName));
+            const event = upsertToolEvent(toolEvents, toolEventIndex, {
+              id: chunk.id,
+              toolName: current?.toolName ?? chunk.toolName,
+              label,
+              kind: current?.kind ?? inferToolKind(chunk.toolName),
+              status: current?.status ?? "running",
+              startedAt: current?.startedAt ?? new Date().toISOString(),
+              anchorOffset: current?.anchorOffset ?? assistantText.length,
+              summary: "Running live...",
+            });
+            emitToolEvent(event);
+            return;
+          }
+
+          if (chunk.type === "tool-input-delta") {
+            const current = currentToolEvent(chunk.id);
+            const inputPreview = clampText(`${current?.inputPreview ?? ""}${chunk.delta}`, 700);
+            const event = upsertToolEvent(toolEvents, toolEventIndex, {
+              id: chunk.id,
+              toolName: current?.toolName ?? "tool",
+              label: current?.label ?? "Tool",
+              kind: current?.kind ?? "tool",
+              status: current?.status ?? "running",
+              startedAt: current?.startedAt ?? new Date().toISOString(),
+              anchorOffset: current?.anchorOffset ?? assistantText.length,
+              inputPreview,
+              summary: current?.summary ?? "Preparing tool input...",
+            });
+            emitToolEvent(event);
+            return;
+          }
+
+          if (chunk.type === "tool-call") {
+            const inputPreview = previewValue(chunk.input, 700);
+            const current = currentToolEvent(chunk.toolCallId);
+            const label = current?.label
+              ?? (typeof chunk.title === "string" && chunk.title.trim().length > 0
+                ? chunk.title.trim()
+                : humanizeToolName(chunk.toolName));
+            const event = upsertToolEvent(toolEvents, toolEventIndex, {
+              id: chunk.toolCallId,
+              toolName: chunk.toolName,
+              label,
+              kind: current?.kind ?? inferToolKind(chunk.toolName, inputPreview),
+              status: current?.status ?? "running",
+              startedAt: current?.startedAt ?? new Date().toISOString(),
+              anchorOffset: current?.anchorOffset ?? assistantText.length,
+              inputPreview,
+              summary: "Tool input ready.",
+            });
+            emitToolEvent(event);
+            const line = `[tool] ${chunk.toolName} called\n`;
+            reasoningText += line;
+            send({ type: "reasoning-delta", text: line });
+            return;
+          }
+
+          if (chunk.type === "tool-result") {
+            const execution = summarizeToolExecution(chunk.output, chunk.toolName);
+            const inputPreview = previewValue(chunk.input, 700);
+            const current = currentToolEvent(chunk.toolCallId);
+            const label = current?.label
+              ?? (typeof chunk.title === "string" && chunk.title.trim().length > 0
+                ? chunk.title.trim()
+                : humanizeToolName(chunk.toolName));
+            const event = upsertToolEvent(toolEvents, toolEventIndex, {
+              id: chunk.toolCallId,
+              toolName: chunk.toolName,
+              label,
+              kind: current?.kind ?? inferToolKind(chunk.toolName, inputPreview, execution.outputPreview),
+              status: execution.status,
+              startedAt: current?.startedAt ?? new Date().toISOString(),
+              finishedAt: new Date().toISOString(),
+              anchorOffset: current?.anchorOffset ?? assistantText.length,
+              inputPreview: current?.inputPreview ?? inputPreview,
+              summary: execution.summary,
+              outputPreview: execution.outputPreview,
+              error: execution.status === "failed" ? execution.summary : undefined,
+            });
+            emitToolEvent(event);
+            const line = `[tool] ${chunk.toolName}: ${execution.summary}\n`;
+            reasoningText += line;
+            send({ type: "reasoning-delta", text: line });
+          }
+        },
+        async onFinish(event) {
+          if (completed || explicitlyCanceled) {
+            return;
+          }
+
+          let finalText = event.text || assistantText;
+          const finalReasoning = event.reasoningText ?? reasoningText;
+
+          if (finalText.trim().length === 0) {
+            if (toolEvents.length === 0) {
+              throw new Error("No output generated. Check the stream for errors.");
+            }
+            finalText = buildToolOnlyFallback(toolEvents);
+            send({ type: "text-delta", text: finalText });
+          }
+
+          const autoContinued = await autoContinueIfTruncated({
+            model,
+            systemPrompt,
+            messages,
+            tools,
+            maxOutputTokens,
+            initialText: finalText,
+            initialFinishReason: event.finishReason,
+            abortSignal: streamAbortController.signal,
+          });
+
+          if (autoContinued.text !== finalText) {
+            const extra = autoContinued.text.slice(finalText.length);
+            if (extra.trim().length > 0) {
+              send({ type: "text-delta", text: extra });
+            }
+            finalText = autoContinued.text;
+          }
+
+          if (autoContinued.truncated) {
+            const continuationHint = "\n\n_Output truncated by response length. Ask 'continue' and I will pick up exactly where I left off._";
+            finalText += continuationHint;
+            send({ type: "text-delta", text: continuationHint });
+          }
+
+          assistantText = finalText;
+          reasoningText = finalReasoning;
+          completed = true;
+
+          if (sessionId) {
+            const metadata: ChatMessageMetadata | undefined = toolEvents.length > 0
+              ? { toolEvents }
+              : undefined;
+            stateStore.addChatMessage({
+              id: randomUUID(),
+              sessionId,
+              role: "assistant",
+              content: finalText,
+              provider,
+              error: false,
+              createdAt: new Date().toISOString(),
+              metadata,
+            });
+          }
+
+          await stateStore.addAction({
+            actor: "user",
+            kind: "diagnose",
+            message: `Conversational query handled by ${provider}`,
+            context: {
+              provider,
+              model: payload.data.model,
+              sessionId,
+            },
+          });
+
+          if (attachedDevice) {
+            await maybeUpdateOperatorNotes({
+              device: attachedDevice,
+              provider,
+              model: payload.data.model,
+              userInput: payload.data.input,
+              assistantOutput: finalText,
+              sessionId,
+              onboarding: onboardingSession,
+              toolEvents,
+            });
+          }
+
+          send({
+            type: "finish",
+            provider,
+            text: finalText,
+            reasoning: finalReasoning,
+            metadata: toolEvents.length > 0 ? { toolEvents } : undefined,
+            usage: event.totalUsage,
+          });
+        },
+        onError(error) {
+          persistFriendlyError(error);
         },
       });
 
-      let streamClosed = false;
-      const stream = new ReadableStream<Uint8Array>({
-        async start(controller) {
-
-          const send = (event: Record<string, unknown>) => {
-            if (streamClosed) {
-              return;
-            }
-
-            try {
-              controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
-            } catch (error) {
-              if (isStreamClosureError(error)) {
-                streamClosed = true;
-                return;
-              }
-              throw error;
-            }
-          };
-
-          const close = () => {
-            if (streamClosed) {
-              return;
-            }
-
-            streamClosed = true;
-            try {
-              controller.close();
-            } catch (error) {
-              if (!isStreamClosureError(error)) {
-                throw error;
-              }
-            }
-          };
-
-          const appendAssistantText = (text: string) => {
-            if (text.length === 0) {
-              return;
-            }
-            assistantText += text;
-            send({ type: "text-delta", text });
-          };
-
-          const emitToolEvent = (event: ChatToolEvent) => {
-            send({ type: "tool-event", event });
-          };
-
-          send({ type: "start", provider });
-
-          try {
-            for await (const part of result.fullStream) {
-              if (part.type === "text-start") {
-                if (assistantText.trim().length > 0 && !assistantText.endsWith("\n")) {
-                  appendAssistantText(assistantText.endsWith("\n") ? "\n" : "\n\n");
-                }
-              } else if (part.type === "text-delta") {
-                appendAssistantText(part.text);
-              } else if (part.type === "reasoning-delta") {
-                reasoningText += part.text;
-                send({ type: "reasoning-delta", text: part.text });
-              } else if (part.type === "tool-input-start") {
-                const current = currentToolEvent(part.id);
-                const label = current?.label
-                  ?? (typeof part.title === "string" && part.title.trim().length > 0
-                    ? part.title.trim()
-                    : humanizeToolName(part.toolName));
-                const event = upsertToolEvent(toolEvents, toolEventIndex, {
-                  id: part.id,
-                  toolName: current?.toolName ?? part.toolName,
-                  label,
-                  kind: current?.kind ?? inferToolKind(part.toolName),
-                  status: current?.status ?? "running",
-                  startedAt: current?.startedAt ?? new Date().toISOString(),
-                  anchorOffset: current?.anchorOffset ?? assistantText.length,
-                  summary: "Running live...",
-                });
-                emitToolEvent(event);
-              } else if (part.type === "tool-input-delta") {
-                const current = currentToolEvent(part.id);
-                const inputPreview = clampText(`${current?.inputPreview ?? ""}${part.delta}`, 700);
-                const event = upsertToolEvent(toolEvents, toolEventIndex, {
-                  id: part.id,
-                  toolName: current?.toolName ?? "tool",
-                  label: current?.label ?? "Tool",
-                  kind: current?.kind ?? "tool",
-                  status: current?.status ?? "running",
-                  startedAt: current?.startedAt ?? new Date().toISOString(),
-                  anchorOffset: current?.anchorOffset ?? assistantText.length,
-                  inputPreview,
-                  summary: current?.summary ?? "Preparing tool input...",
-                });
-                emitToolEvent(event);
-              } else if (part.type === "tool-call") {
-                const inputPreview = previewValue(part.input, 700);
-                const current = currentToolEvent(part.toolCallId);
-                const label = current?.label
-                  ?? (typeof part.title === "string" && part.title.trim().length > 0
-                    ? part.title.trim()
-                    : humanizeToolName(part.toolName));
-                const event = upsertToolEvent(toolEvents, toolEventIndex, {
-                  id: part.toolCallId,
-                  toolName: part.toolName,
-                  label,
-                  kind: current?.kind ?? inferToolKind(part.toolName, inputPreview),
-                  status: current?.status ?? "running",
-                  startedAt: current?.startedAt ?? new Date().toISOString(),
-                  anchorOffset: current?.anchorOffset ?? assistantText.length,
-                  inputPreview,
-                  summary: "Tool input ready.",
-                });
-                emitToolEvent(event);
-                const line = `[tool] ${part.toolName} called\n`;
-                reasoningText += line;
-                send({ type: "reasoning-delta", text: line });
-              } else if (part.type === "tool-result") {
-                const execution = summarizeToolExecution(part.output, part.toolName);
-                const inputPreview = previewValue(part.input, 700);
-                const current = currentToolEvent(part.toolCallId);
-                const label = current?.label
-                  ?? (typeof part.title === "string" && part.title.trim().length > 0
-                    ? part.title.trim()
-                    : humanizeToolName(part.toolName));
-                const event = upsertToolEvent(toolEvents, toolEventIndex, {
-                  id: part.toolCallId,
-                  toolName: part.toolName,
-                  label,
-                  kind: current?.kind ?? inferToolKind(part.toolName, inputPreview, execution.outputPreview),
-                  status: execution.status,
-                  startedAt: current?.startedAt ?? new Date().toISOString(),
-                  finishedAt: new Date().toISOString(),
-                  anchorOffset: current?.anchorOffset ?? assistantText.length,
-                  inputPreview: current?.inputPreview ?? inputPreview,
-                  summary: execution.summary,
-                  outputPreview: execution.outputPreview,
-                  error: execution.status === "failed" ? execution.summary : undefined,
-                });
-                emitToolEvent(event);
-                const summary = execution.summary;
-                const line = `[tool] ${part.toolName}: ${summary}\n`;
-                reasoningText += line;
-                send({ type: "reasoning-delta", text: line });
-              } else if (part.type === "tool-error") {
-                const errorMessage = clampText(
-                  part.error instanceof Error ? part.error.message : String(part.error),
-                  700,
-                );
-                const inputPreview = previewValue(part.input, 700);
-                const current = currentToolEvent(part.toolCallId);
-                const label = current?.label
-                  ?? (typeof part.title === "string" && part.title.trim().length > 0
-                    ? part.title.trim()
-                    : humanizeToolName(part.toolName));
-                const event = upsertToolEvent(toolEvents, toolEventIndex, {
-                  id: part.toolCallId,
-                  toolName: part.toolName,
-                  label,
-                  kind: current?.kind ?? inferToolKind(part.toolName, inputPreview, errorMessage),
-                  status: "failed",
-                  startedAt: current?.startedAt ?? new Date().toISOString(),
-                  finishedAt: new Date().toISOString(),
-                  anchorOffset: current?.anchorOffset ?? assistantText.length,
-                  inputPreview: current?.inputPreview ?? inputPreview,
-                  summary: errorMessage,
-                  error: errorMessage,
-                });
-                emitToolEvent(event);
-                const line = `[tool] ${part.toolName} failed: ${errorMessage}\n`;
-                reasoningText += line;
-                send({ type: "reasoning-delta", text: line });
-              }
-            }
-
-            if (assistantText.trim().length === 0) {
-              if (toolEvents.length === 0) {
-                throw new Error("No output generated. Check the stream for errors.");
-              }
-              assistantText = buildToolOnlyFallback(toolEvents);
-              send({ type: "text-delta", text: assistantText });
-            }
-
-            const finishReasonValue = await Promise.resolve(
-              (result as { finishReason?: unknown }).finishReason,
-            );
-
-            const autoContinued = await autoContinueIfTruncated({
-              model,
-              systemPrompt,
-              messages,
-              tools,
-              maxOutputTokens,
-              initialText: assistantText,
-              initialFinishReason: finishReasonValue,
-              abortSignal: request.signal,
-            });
-            if (autoContinued.text !== assistantText) {
-              const extra = autoContinued.text.slice(assistantText.length);
-              if (extra.trim().length > 0) {
-                send({ type: "text-delta", text: extra });
-              }
-              assistantText = autoContinued.text;
-            }
-            if (autoContinued.truncated) {
-              const continuationHint = "\n\n_Output truncated by response length. Ask 'continue' and I will pick up exactly where I left off._";
-              assistantText += continuationHint;
-              send({ type: "text-delta", text: continuationHint });
-            }
-
-            if (interrupted || request.signal.aborted) {
-              return;
-            }
-
-            if (sessionId) {
-              const metadata: ChatMessageMetadata | undefined = toolEvents.length > 0
-                ? { toolEvents }
-                : undefined;
-              stateStore.addChatMessage({
-                id: randomUUID(),
-                sessionId,
-                role: "assistant",
-                content: assistantText,
-                provider,
-                error: false,
-                createdAt: new Date().toISOString(),
-                metadata,
-              });
-            }
-
-            const usage = await result.usage;
-
-            await stateStore.addAction({
-              actor: "user",
-              kind: "diagnose",
-              message: `Conversational query handled by ${provider}`,
-              context: {
-                provider,
-                model: payload.data.model,
-                sessionId,
-              },
-            });
-
-            if (attachedDevice) {
-              await maybeUpdateOperatorNotes({
-                device: attachedDevice,
-                provider,
-                model: payload.data.model,
-                userInput: payload.data.input,
-                assistantOutput: assistantText,
-                sessionId,
-                onboarding: onboardingSession,
-                toolEvents,
-              });
-            }
-
-            send({
-              type: "finish",
-              provider,
-              text: assistantText,
-              reasoning: reasoningText,
-              metadata: toolEvents.length > 0 ? { toolEvents } : undefined,
-              usage,
-            });
-          } catch (error) {
-            if (interrupted || request.signal.aborted || isAbortError(error)) {
-              const interruptedText = assistantText.trim().length > 0
-                ? assistantText
-                : toolEvents.length > 0
-                  ? buildToolOnlyFallback(toolEvents)
-                  : "";
-
-              if (sessionId && interruptedText.trim().length > 0) {
-                const metadata: ChatMessageMetadata = toolEvents.length > 0
-                  ? { toolEvents, interrupted: true }
-                  : { interrupted: true };
-                stateStore.addChatMessage({
-                  id: randomUUID(),
-                  sessionId,
-                  role: "assistant",
-                  content: interruptedText,
-                  provider,
-                  error: false,
-                  createdAt: new Date().toISOString(),
-                  metadata,
-                });
-              }
-
-              return;
-            }
-
-            const rawMessage = error instanceof Error ? error.message : String(error);
-            const friendlyMessage = toFriendlyChatError(rawMessage, provider);
-
-            if (sessionId) {
-              const metadata: ChatMessageMetadata | undefined = toolEvents.length > 0
-                ? { toolEvents, interrupted: false }
-                : undefined;
-              stateStore.addChatMessage({
-                id: randomUUID(),
-                sessionId,
-                role: "assistant",
-                content: friendlyMessage,
-                provider,
-                error: true,
-                createdAt: new Date().toISOString(),
-                metadata,
-              });
-            }
-
-            send({ type: "error", error: friendlyMessage, provider });
-          } finally {
-            close();
+      void (async () => {
+        await controllerReady;
+        send({ type: "start", provider });
+        try {
+          await result.consumeStream({
+            onError(error) {
+              persistFriendlyError(error);
+            },
+          });
+        } catch (error) {
+          persistFriendlyError(error);
+        } finally {
+          if (sessionId) {
+            releaseActiveChatStream(sessionId, streamAbortController);
           }
+          close();
+        }
+      })();
+
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          streamController = controller;
+          resolveControllerReady?.();
         },
         cancel() {
-          // The response stream was closed; request.signal drives actual model
-          // cancellation and the catch path handles interrupted persistence.
+          // Client disconnects should not cancel the model run; they only close
+          // the response socket. Explicit stops go through /api/chat/cancel.
           streamClosed = true;
         },
       });

@@ -1,0 +1,241 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - img [ref=e7]
+          - generic [ref=e9]:
+            - heading "Steward" [level=1] [ref=e10]
+            - paragraph [ref=e11]: Network Operations
+          - button [ref=e12]:
+            - img [ref=e13]
+        - navigation [ref=e19]:
+          - generic [ref=e20]:
+            - paragraph [ref=e21]: Overview
+            - link "Dashboard" [ref=e23] [cursor=pointer]:
+              - /url: /
+              - generic [ref=e24]:
+                - img [ref=e25]
+                - generic [ref=e30]: Dashboard
+            - link "Digest" [ref=e32] [cursor=pointer]:
+              - /url: /digest
+              - generic [ref=e33]:
+                - img [ref=e34]
+                - generic [ref=e37]: Digest
+          - generic [ref=e38]:
+            - paragraph [ref=e39]: Network
+            - link "Devices" [ref=e41] [cursor=pointer]:
+              - /url: /devices
+              - generic [ref=e43]:
+                - img [ref=e44]
+                - generic [ref=e47]: Devices
+            - link "Discovery" [ref=e49] [cursor=pointer]:
+              - /url: /discovery
+              - generic [ref=e50]:
+                - img [ref=e51]
+                - generic [ref=e54]: Discovery
+            - link "Topology" [ref=e56] [cursor=pointer]:
+              - /url: /topology
+              - generic [ref=e57]:
+                - img [ref=e58]
+                - generic [ref=e63]: Topology
+          - generic [ref=e64]:
+            - paragraph [ref=e65]: Health
+            - link "Incidents 14" [ref=e147] [cursor=pointer]:
+              - /url: /incidents
+              - generic [ref=e68]:
+                - img [ref=e69]
+                - generic [ref=e71]: Incidents
+              - generic [ref=e148]: "14"
+            - link "Activity" [ref=e73] [cursor=pointer]:
+              - /url: /activity
+              - generic [ref=e74]:
+                - img [ref=e75]
+                - generic [ref=e77]: Activity
+          - generic [ref=e78]:
+            - paragraph [ref=e79]: Control
+            - link "Approvals" [ref=e81] [cursor=pointer]:
+              - /url: /approvals
+              - generic [ref=e82]:
+                - img [ref=e83]
+                - generic [ref=e86]: Approvals
+            - link "Policies" [ref=e88] [cursor=pointer]:
+              - /url: /policies
+              - generic [ref=e89]:
+                - img [ref=e90]
+                - generic [ref=e93]: Policies
+          - generic [ref=e94]:
+            - paragraph [ref=e95]: Assistant
+            - link "Chat" [ref=e97] [cursor=pointer]:
+              - /url: /chat
+              - generic [ref=e98]:
+                - img [ref=e99]
+                - generic [ref=e101]: Chat
+          - generic [ref=e102]:
+            - paragraph [ref=e103]: System
+            - link "Adapters" [ref=e105] [cursor=pointer]:
+              - /url: /adapters
+              - generic [ref=e106]:
+                - img [ref=e107]
+                - generic [ref=e109]: Adapters
+            - link "Access" [ref=e111] [cursor=pointer]:
+              - /url: /access
+              - generic [ref=e112]:
+                - img [ref=e113]
+                - generic [ref=e125]: Access
+            - link "Settings" [ref=e127] [cursor=pointer]:
+              - /url: /settings
+              - generic [ref=e128]:
+                - img [ref=e129]
+                - generic [ref=e132]: Settings
+        - generic [ref=e149]:
+          - img [ref=e150]
+          - generic [ref=e152]: "Vault: Unlocked"
+    - main [ref=e134]:
+      - main [ref=e137]:
+        - generic [ref=e153]:
+          - generic [ref=e155]:
+            - generic [ref=e156]:
+              - heading "Philips Hue Bridge" [level=1] [ref=e159]
+              - generic [ref=e160]:
+                - generic [ref=e161]: online
+                - generic [ref=e162]: iot
+                - generic [ref=e163]:
+                  - img [ref=e164]
+                  - text: Tier 1
+                - generic [ref=e166]: Adopted
+              - paragraph [ref=e167]: Steward onboarded hue-bridge-(192.168.68.51) and prepared management intents.
+            - generic [ref=e169]:
+              - paragraph [ref=e170]: "First seen: 3/4/2026, 8:46:04 PM"
+              - paragraph [ref=e171]: "Last seen: Just now"
+          - generic [ref=e172]:
+            - tablist [ref=e173]:
+              - tab "Overview" [selected] [ref=e174]
+              - tab "Workloads" [ref=e175]
+              - tab "Access" [ref=e176]
+              - tab "Widgets" [ref=e177]
+              - tab "Chat" [ref=e178]
+              - tab "Activity" [ref=e179]
+              - tab "Settings" [ref=e180]
+            - tabpanel "Overview" [ref=e181]:
+              - generic [ref=e183]:
+                - generic [ref=e184]:
+                  - generic [ref=e185]:
+                    - generic [ref=e186]:
+                      - img [ref=e187]
+                      - heading "Device Snapshot" [level=3] [ref=e190]
+                      - generic [ref=e191]: online
+                    - paragraph [ref=e192]: Steward onboarded hue-bridge-(192.168.68.51) and prepared management intents.
+                  - generic [ref=e193]:
+                    - generic [ref=e194]:
+                      - generic [ref=e195]:
+                        - paragraph [ref=e196]: 100%
+                        - paragraph [ref=e197]: Discovery
+                      - generic [ref=e198]:
+                        - paragraph [ref=e199]: "12"
+                        - paragraph [ref=e200]: Observations
+                      - generic [ref=e201]:
+                        - paragraph [ref=e202]: 37%
+                        - paragraph [ref=e203]: Classifier
+                      - generic [ref=e204]:
+                        - paragraph [ref=e205]: "3"
+                        - paragraph [ref=e206]: Endpoints
+                    - generic [ref=e207]:
+                      - generic [ref=e208]:
+                        - paragraph [ref=e209]: IP Address
+                        - paragraph [ref=e210]: 192.168.68.51
+                      - generic [ref=e211]:
+                        - paragraph [ref=e212]: Hostname
+                        - paragraph [ref=e213]: hue-bridge-(192.168.68.51)
+                      - generic [ref=e214]:
+                        - paragraph [ref=e215]: MAC Address
+                        - paragraph [ref=e216]: ec:b5:fa:17:40:4c
+                      - generic [ref=e217]:
+                        - paragraph [ref=e218]: Vendor
+                        - paragraph [ref=e219]: Signify
+                    - generic [ref=e220]:
+                      - generic [ref=e221]:
+                        - paragraph [ref=e222]: Discovery Evidence
+                        - generic [ref=e223]:
+                          - generic [ref=e224]: arp resolved
+                          - generic [ref=e225]: browser observation
+                          - generic [ref=e226]: http banner
+                          - generic [ref=e227]: icmp reply
+                          - generic [ref=e228]: ssdp response
+                          - generic [ref=e229]: tcp open
+                        - generic [ref=e230]:
+                          - generic [ref=e231]:
+                            - generic [ref=e232]: fingerprint
+                            - generic [ref=e233]: "6"
+                          - generic [ref=e234]:
+                            - generic [ref=e235]: active
+                            - generic [ref=e236]: "4"
+                          - generic [ref=e237]:
+                            - generic [ref=e238]: ssdp
+                            - generic [ref=e239]: "1"
+                          - generic [ref=e240]:
+                            - generic [ref=e241]: passive
+                            - generic [ref=e242]: "1"
+                      - generic [ref=e243]:
+                        - paragraph [ref=e244]: Fingerprint Context
+                        - generic [ref=e245]:
+                          - generic [ref=e246]:
+                            - paragraph [ref=e247]: Version
+                            - paragraph [ref=e248]: v3
+                          - generic [ref=e249]:
+                            - paragraph [ref=e250]: Last Probe
+                            - paragraph [ref=e251]: 7m ago
+                        - paragraph [ref=e252]: "OS: unknown"
+                        - paragraph [ref=e253]: "Product: nginx"
+                    - generic [ref=e254]:
+                      - paragraph [ref=e255]: Latest Probe Signals
+                      - generic [ref=e256]:
+                        - generic [ref=e257]:
+                          - paragraph [ref=e258]: DNS
+                          - paragraph [ref=e259]: n/a
+                        - generic [ref=e260]:
+                          - paragraph [ref=e261]: WinRM
+                          - paragraph [ref=e262]: n/a
+                        - generic [ref=e263]:
+                          - paragraph [ref=e264]: MQTT
+                          - paragraph [ref=e265]: n/a
+                    - generic [ref=e266]:
+                      - paragraph [ref=e267]: Protocols
+                      - generic [ref=e268]:
+                        - generic [ref=e269]: http-api
+                        - generic [ref=e270]: http
+                        - generic [ref=e271]: https
+                    - generic [ref=e272]:
+                      - paragraph [ref=e273]: Top Classification Signals
+                      - generic [ref=e275]:
+                        - generic [ref=e276]:
+                          - generic [ref=e277]: oui
+                          - generic [ref=e278]: "55"
+                        - paragraph [ref=e279]: "Smart home vendor: Signify"
+                - generic [ref=e281]:
+                  - generic [ref=e282]:
+                    - generic [ref=e283]:
+                      - img [ref=e284]
+                      - heading "Recommendations" [level=3] [ref=e286]
+                      - generic [ref=e287]: "3"
+                    - paragraph [ref=e288]: Highest-impact next actions for this device
+                  - list [ref=e290]:
+                    - listitem [ref=e291]:
+                      - generic [ref=e292]:
+                        - paragraph [ref=e293]: Track TLS certificate lifecycle for Philips Hue Bridge
+                        - generic [ref=e294]: medium
+                      - paragraph [ref=e295]: HTTPS services require proactive certificate renewal to avoid service disruption.
+                      - paragraph [ref=e296]: "Impact: Reduces outage risk from certificate expiration."
+                    - listitem [ref=e297]:
+                      - generic [ref=e298]:
+                        - paragraph [ref=e299]: Review channel utilization on hue-bridge-(192.168.68.51)
+                        - generic [ref=e300]: medium
+                      - paragraph [ref=e301]: Wireless performance bottlenecks are commonly caused by channel contention.
+                      - paragraph [ref=e302]: "Impact: Improves throughput and client stability."
+                    - listitem [ref=e303]:
+                      - generic [ref=e304]:
+                        - paragraph [ref=e305]: Track TLS certificate lifecycle for hue-bridge-(192.168.68.51)
+                        - generic [ref=e306]: medium
+                      - paragraph [ref=e307]: HTTPS services require proactive certificate renewal to avoid service disruption.
+                      - paragraph [ref=e308]: "Impact: Reduces outage risk from certificate expiration."
+  - alert [ref=e146]

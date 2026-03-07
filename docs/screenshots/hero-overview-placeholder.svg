@@ -1,0 +1,58 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1600" y2="900" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#07111F"/>
+      <stop offset="1" stop-color="#12324A"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="250" y1="110" x2="1320" y2="760" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0E2035"/>
+      <stop offset="1" stop-color="#132C44"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="900" rx="32" fill="url(#bg)"/>
+  <rect x="64" y="64" width="1472" height="772" rx="28" fill="#091423" stroke="#2A4461"/>
+  <rect x="104" y="112" width="256" height="676" rx="24" fill="#0D1D31"/>
+  <rect x="392" y="112" width="1104" height="676" rx="24" fill="url(#panel)"/>
+  <text x="132" y="168" fill="#E5F0FF" font-size="34" font-family="Arial, Helvetica, sans-serif" font-weight="700">Steward</text>
+  <text x="132" y="208" fill="#83A6C7" font-size="20" font-family="Arial, Helvetica, sans-serif">Your network's first employee</text>
+  <rect x="132" y="248" width="200" height="56" rx="16" fill="#14304B"/>
+  <rect x="132" y="324" width="200" height="56" rx="16" fill="#10263C"/>
+  <rect x="132" y="400" width="200" height="56" rx="16" fill="#10263C"/>
+  <rect x="132" y="476" width="200" height="56" rx="16" fill="#10263C"/>
+  <text x="156" y="283" fill="#F7FAFF" font-size="22" font-family="Arial, Helvetica, sans-serif">Inbox</text>
+  <text x="156" y="359" fill="#9FC0E1" font-size="22" font-family="Arial, Helvetica, sans-serif">Topology</text>
+  <text x="156" y="435" fill="#9FC0E1" font-size="22" font-family="Arial, Helvetica, sans-serif">Devices</text>
+  <text x="156" y="511" fill="#9FC0E1" font-size="22" font-family="Arial, Helvetica, sans-serif">Policies</text>
+  <text x="432" y="170" fill="#EFF7FF" font-size="40" font-family="Arial, Helvetica, sans-serif" font-weight="700">Screenshot placeholder</text>
+  <text x="432" y="214" fill="#9BC0DF" font-size="22" font-family="Arial, Helvetica, sans-serif">Replace this with a real hero capture of the dashboard, chat, and incident feed.</text>
+  <rect x="432" y="254" width="236" height="110" rx="18" fill="#143A58"/>
+  <rect x="692" y="254" width="236" height="110" rx="18" fill="#143A58"/>
+  <rect x="952" y="254" width="236" height="110" rx="18" fill="#143A58"/>
+  <rect x="1212" y="254" width="244" height="110" rx="18" fill="#143A58"/>
+  <text x="460" y="302" fill="#9AC0E1" font-size="18" font-family="Arial, Helvetica, sans-serif">Managed devices</text>
+  <text x="460" y="342" fill="#F8FBFF" font-size="42" font-family="Arial, Helvetica, sans-serif" font-weight="700">128</text>
+  <text x="720" y="302" fill="#9AC0E1" font-size="18" font-family="Arial, Helvetica, sans-serif">Open incidents</text>
+  <text x="720" y="342" fill="#F8FBFF" font-size="42" font-family="Arial, Helvetica, sans-serif" font-weight="700">3</text>
+  <text x="980" y="302" fill="#9AC0E1" font-size="18" font-family="Arial, Helvetica, sans-serif">Pending approvals</text>
+  <text x="980" y="342" fill="#F8FBFF" font-size="42" font-family="Arial, Helvetica, sans-serif" font-weight="700">2</text>
+  <text x="1240" y="302" fill="#9AC0E1" font-size="18" font-family="Arial, Helvetica, sans-serif">Autonomous fixes</text>
+  <text x="1240" y="342" fill="#F8FBFF" font-size="42" font-family="Arial, Helvetica, sans-serif" font-weight="700">19</text>
+  <rect x="432" y="396" width="642" height="348" rx="22" fill="#0D1C2E" stroke="#35597D"/>
+  <rect x="1102" y="396" width="354" height="348" rx="22" fill="#0D1C2E" stroke="#35597D"/>
+  <text x="464" y="442" fill="#EAF4FF" font-size="28" font-family="Arial, Helvetica, sans-serif" font-weight="700">Morning briefing</text>
+  <rect x="464" y="474" width="578" height="72" rx="18" fill="#152B43"/>
+  <rect x="464" y="564" width="578" height="72" rx="18" fill="#152B43"/>
+  <rect x="464" y="654" width="578" height="72" rx="18" fill="#152B43"/>
+  <circle cx="506" cy="510" r="10" fill="#F97316"/>
+  <circle cx="506" cy="600" r="10" fill="#F59E0B"/>
+  <circle cx="506" cy="690" r="10" fill="#10B981"/>
+  <text x="532" y="505" fill="#F8FBFF" font-size="22" font-family="Arial, Helvetica, sans-serif">NAS array degraded. Replacement playbook prepared.</text>
+  <text x="532" y="595" fill="#F8FBFF" font-size="22" font-family="Arial, Helvetica, sans-serif">TLS certificate expires in 9 days. Approval required.</text>
+  <text x="532" y="685" fill="#F8FBFF" font-size="22" font-family="Arial, Helvetica, sans-serif">Three stale containers can be updated after hours.</text>
+  <text x="1134" y="442" fill="#EAF4FF" font-size="28" font-family="Arial, Helvetica, sans-serif" font-weight="700">Operator chat</text>
+  <rect x="1134" y="478" width="290" height="92" rx="18" fill="#173754"/>
+  <rect x="1134" y="590" width="290" height="118" rx="18" fill="#10283F"/>
+  <text x="1160" y="518" fill="#F6FAFF" font-size="20" font-family="Arial, Helvetica, sans-serif">"Why was the file server slow?"</text>
+  <text x="1160" y="626" fill="#B8D0E7" font-size="18" font-family="Arial, Helvetica, sans-serif">Disk I/O on nas-01 was saturated during backup verification.</text>
+  <text x="1160" y="656" fill="#B8D0E7" font-size="18" font-family="Arial, Helvetica, sans-serif">Recommendation: shift the job window or add link capacity.</text>
+</svg>

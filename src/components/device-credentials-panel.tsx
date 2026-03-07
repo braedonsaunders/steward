@@ -3,6 +3,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
 import { withClientApiToken } from "@/lib/auth/client-token";
+import {
+  HTTP_API_AUTH_MODES,
+  describeHttpApiCredentialAuth,
+  getHttpApiCredentialAuth,
+  httpApiCredentialAuthLabel,
+  withHttpApiCredentialAuth,
+} from "@/lib/credentials/http-api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -43,6 +50,10 @@ export function DeviceCredentialsPanel({ deviceId, className }: { deviceId: stri
   const [credentialType, setCredentialType] = useState<string>(CREDENTIAL_TYPE_OPTIONS[0]);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [httpAuthMode, setHttpAuthMode] = useState<(typeof HTTP_API_AUTH_MODES)[number]>("basic");
+  const [httpHeaderName, setHttpHeaderName] = useState("");
+  const [httpQueryParamName, setHttpQueryParamName] = useState("");
+  const [httpPathPrefix, setHttpPathPrefix] = useState("/api");
   const [saving, setSaving] = useState(false);
   const [deletingCredentialId, setDeletingCredentialId] = useState<string | null>(null);
 
@@ -72,6 +83,10 @@ export function DeviceCredentialsPanel({ deviceId, className }: { deviceId: stri
     setCredentialType(CREDENTIAL_TYPE_OPTIONS[0]);
     setUsername("");
     setPassword("");
+    setHttpAuthMode("basic");
+    setHttpHeaderName("");
+    setHttpQueryParamName("");
+    setHttpPathPrefix("/api");
     setAddDialogOpen(true);
   };
 
@@ -80,12 +95,37 @@ export function DeviceCredentialsPanel({ deviceId, className }: { deviceId: stri
     setCredentialType(credential.protocol || CREDENTIAL_TYPE_OPTIONS[0]);
     setUsername(credential.accountLabel ?? "");
     setPassword("");
+    if (credential.protocol === "http-api") {
+      const auth = getHttpApiCredentialAuth(credential.scopeJson);
+      setHttpAuthMode(auth.mode);
+      setHttpHeaderName(auth.headerName ?? "");
+      setHttpQueryParamName(auth.queryParamName ?? "");
+      setHttpPathPrefix(auth.pathPrefix ?? "/api");
+    } else {
+      setHttpAuthMode("basic");
+      setHttpHeaderName("");
+      setHttpQueryParamName("");
+      setHttpPathPrefix("/api");
+    }
     setAddDialogOpen(true);
+  };
+
+  const buildScopeJson = () => {
+    if (credentialType !== "http-api") {
+      return undefined;
+    }
+    return withHttpApiCredentialAuth(undefined, {
+      mode: httpAuthMode,
+      ...(httpHeaderName.trim() ? { headerName: httpHeaderName.trim() } : {}),
+      ...(httpQueryParamName.trim() ? { queryParamName: httpQueryParamName.trim() } : {}),
+      ...(httpPathPrefix.trim() ? { pathPrefix: httpPathPrefix.trim() } : {}),
+    });
   };
 
   const submitCredential = async () => {
     if (!credentialType) return;
     if (!editingCredentialId && !password.trim()) return;
+    if (credentialType === "http-api" && httpAuthMode === "basic" && !username.trim()) return;
     setSaving(true);
     try {
       if (editingCredentialId) {
@@ -98,6 +138,7 @@ export function DeviceCredentialsPanel({ deviceId, className }: { deviceId: stri
               protocol: credentialType,
               secret: password,
               accountLabel: username.trim() || undefined,
+              scopeJson: buildScopeJson(),
             }),
           }),
         );
@@ -113,6 +154,7 @@ export function DeviceCredentialsPanel({ deviceId, className }: { deviceId: stri
             protocol: credentialType,
             secret: password,
             accountLabel: username.trim() || undefined,
+            scopeJson: buildScopeJson(),
           }),
         }));
         const data = (await res.json()) as { snapshot?: AdoptionSnapshot; error?: string };
@@ -193,7 +235,14 @@ export function DeviceCredentialsPanel({ deviceId, className }: { deviceId: stri
               <div key={credential.id} className="flex items-center justify-between rounded-md border px-2 py-1.5 text-xs">
                 <div>
                   <p className="font-medium">{credential.protocol}</p>
-                  <p className="text-muted-foreground">{credential.accountLabel ?? "no username"}</p>
+                  <p className="text-muted-foreground">
+                    {credential.protocol === "http-api"
+                      ? describeHttpApiCredentialAuth(credential.scopeJson)
+                      : credential.accountLabel ?? "no account label"}
+                  </p>
+                  {credential.protocol === "http-api" && credential.accountLabel ? (
+                    <p className="text-[10px] text-muted-foreground">{credential.accountLabel}</p>
+                  ) : null}
                   <p className="text-[10px] text-muted-foreground">
                     {credential.lastValidatedAt
                       ? `Last validated ${new Date(credential.lastValidatedAt).toLocaleString()}`
@@ -244,7 +293,7 @@ export function DeviceCredentialsPanel({ deviceId, className }: { deviceId: stri
           <DialogHeader>
             <DialogTitle>{editingCredentialId ? "Edit Credential" : "Add Credential"}</DialogTitle>
             <DialogDescription>
-              Choose credential type and provide username/password.
+              Choose a protocol and secret type for Steward to store in the device credential vault.
             </DialogDescription>
           </DialogHeader>
 
@@ -259,8 +308,65 @@ export function DeviceCredentialsPanel({ deviceId, className }: { deviceId: stri
               </SelectContent>
             </Select>
 
-            <Label htmlFor="cred-username">Username</Label>
-            <Input id="cred-username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="admin" />
+            {credentialType === "http-api" ? (
+              <>
+                <Label htmlFor="cred-http-auth">HTTP Auth Mode</Label>
+                <Select value={httpAuthMode} onValueChange={(value) => setHttpAuthMode(value as (typeof HTTP_API_AUTH_MODES)[number])}>
+                  <SelectTrigger id="cred-http-auth"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {HTTP_API_AUTH_MODES.map((mode) => (
+                      <SelectItem key={mode} value={mode}>{httpApiCredentialAuthLabel(mode)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </>
+            ) : null}
+
+            <Label htmlFor="cred-username">
+              {credentialType === "http-api" && httpAuthMode !== "basic" ? "Account Label" : "Username"}
+            </Label>
+            <Input
+              id="cred-username"
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              placeholder={credentialType === "http-api" && httpAuthMode !== "basic" ? "steward-hue-bridge" : "admin"}
+            />
+
+            {credentialType === "http-api" && httpAuthMode === "api-key" ? (
+              <>
+                <Label htmlFor="cred-http-header">Header Name</Label>
+                <Input
+                  id="cred-http-header"
+                  value={httpHeaderName}
+                  onChange={(event) => setHttpHeaderName(event.target.value)}
+                  placeholder="X-API-Key"
+                />
+              </>
+            ) : null}
+
+            {credentialType === "http-api" && httpAuthMode === "query-param" ? (
+              <>
+                <Label htmlFor="cred-http-query">Query Parameter</Label>
+                <Input
+                  id="cred-http-query"
+                  value={httpQueryParamName}
+                  onChange={(event) => setHttpQueryParamName(event.target.value)}
+                  placeholder="api_key"
+                />
+              </>
+            ) : null}
+
+            {credentialType === "http-api" && httpAuthMode === "path-segment" ? (
+              <>
+                <Label htmlFor="cred-http-path">Path Prefix</Label>
+                <Input
+                  id="cred-http-path"
+                  value={httpPathPrefix}
+                  onChange={(event) => setHttpPathPrefix(event.target.value)}
+                  placeholder="/api"
+                />
+              </>
+            ) : null}
 
             <Label htmlFor="cred-password">Password / Secret</Label>
             <Input
@@ -274,7 +380,14 @@ export function DeviceCredentialsPanel({ deviceId, className }: { deviceId: stri
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setAddDialogOpen(false)} disabled={saving}>Cancel</Button>
-            <Button onClick={() => void submitCredential()} disabled={saving || (!editingCredentialId && !password.trim())}>
+            <Button
+              onClick={() => void submitCredential()}
+              disabled={
+                saving
+                || (!editingCredentialId && !password.trim())
+                || (credentialType === "http-api" && httpAuthMode === "basic" && !username.trim())
+              }
+            >
               {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
               {editingCredentialId ? "Save Changes" : "Save Credential"}
             </Button>

@@ -1,4 +1,9 @@
 import { randomUUID } from "node:crypto";
+import {
+  type HttpApiCredentialAuthMode,
+  requiresHttpApiAccountLabel,
+  withHttpApiCredentialAuth,
+} from "@/lib/credentials/http-api";
 import { validateMqttCredentialConnection } from "@/lib/network/mqtt-client";
 import { stateStore } from "@/lib/state/store";
 import { vault } from "@/lib/security/vault";
@@ -19,10 +24,15 @@ export interface UpdateDeviceCredentialInput {
   protocol?: string;
   secret?: string;
   accountLabel?: string;
+  scopeJson?: Record<string, unknown>;
 }
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function normalizeProtocol(protocol: string): string {
@@ -42,12 +52,37 @@ function defaultScope(protocol: string): Record<string, unknown> {
     case "kubernetes":
       return { level: "admin", operations: ["workload-control"] };
     case "http-api":
-      return { level: "admin", operations: ["api", "config"] };
+      return withHttpApiCredentialAuth({ level: "admin", operations: ["api", "config"] });
     case "mqtt":
       return { level: "operator", operations: ["telemetry", "message-publish", "message-subscribe"] };
     default:
       return { level: "read", operations: ["observe"] };
   }
+}
+
+function mergeCredentialScope(
+  protocol: string,
+  baseScope?: Record<string, unknown>,
+  overrideScope?: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged = {
+    ...defaultScope(protocol),
+    ...(baseScope ?? {}),
+    ...(overrideScope ?? {}),
+  };
+  if (protocol !== "http-api") {
+    return merged;
+  }
+
+  const authOverride = isRecord(overrideScope?.auth) ? overrideScope.auth : undefined;
+  return withHttpApiCredentialAuth(merged, {
+    ...(authOverride && typeof authOverride.mode === "string"
+      ? { mode: authOverride.mode as HttpApiCredentialAuthMode }
+      : {}),
+    ...(authOverride && typeof authOverride.headerName === "string" ? { headerName: authOverride.headerName } : {}),
+    ...(authOverride && typeof authOverride.queryParamName === "string" ? { queryParamName: authOverride.queryParamName } : {}),
+    ...(authOverride && typeof authOverride.pathPrefix === "string" ? { pathPrefix: authOverride.pathPrefix } : {}),
+  });
 }
 
 function findExistingCredential(
@@ -73,6 +108,11 @@ export async function storeDeviceCredential(input: StoreDeviceCredentialInput): 
   }
 
   const protocol = normalizeProtocol(input.protocol);
+  const scopeJson = mergeCredentialScope(protocol, undefined, input.scopeJson);
+  const accountLabel = input.accountLabel?.trim() || undefined;
+  if (protocol === "http-api" && requiresHttpApiAccountLabel(scopeJson) && !accountLabel) {
+    throw new Error("HTTP Basic credentials require an accountLabel username.");
+  }
   const now = nowIso();
   const existing = findExistingCredential(stateStore.getDeviceCredentials(input.deviceId), protocol, input.adapterId);
   const credentialId = existing?.id ?? randomUUID();
@@ -90,8 +130,8 @@ export async function storeDeviceCredential(input: StoreDeviceCredentialInput): 
     protocol,
     adapterId: input.adapterId?.trim() || undefined,
     vaultSecretRef,
-    accountLabel: input.accountLabel?.trim() || undefined,
-    scopeJson: input.scopeJson ?? defaultScope(protocol),
+    accountLabel,
+    scopeJson,
     status: "provided",
     lastValidatedAt: existing?.lastValidatedAt,
     createdAt: existing?.createdAt ?? now,
@@ -238,6 +278,13 @@ export async function updateDeviceCredential(input: UpdateDeviceCredentialInput)
   }
 
   const nextProtocol = input.protocol ? normalizeProtocol(input.protocol) : existing.protocol;
+  const nextAccountLabel = input.accountLabel === undefined
+    ? existing.accountLabel
+    : input.accountLabel.trim() || undefined;
+  const nextScope = mergeCredentialScope(nextProtocol, existing.scopeJson, input.scopeJson);
+  if (nextProtocol === "http-api" && requiresHttpApiAccountLabel(nextScope) && !nextAccountLabel) {
+    throw new Error("HTTP Basic credentials require an accountLabel username.");
+  }
   if (input.secret && input.secret.trim().length > 0) {
     const unlocked = await vault.ensureUnlocked();
     if (!unlocked) {
@@ -249,8 +296,8 @@ export async function updateDeviceCredential(input: UpdateDeviceCredentialInput)
   const updated: DeviceCredential = {
     ...existing,
     protocol: nextProtocol,
-    accountLabel: input.accountLabel?.trim() || undefined,
-    scopeJson: existing.scopeJson ?? defaultScope(nextProtocol),
+    accountLabel: nextAccountLabel,
+    scopeJson: nextScope,
     status: "provided",
     updatedAt: nowIso(),
   };

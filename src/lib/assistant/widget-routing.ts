@@ -1,4 +1,4 @@
-import { generateObject } from "ai";
+import { generateText } from "ai";
 import { z } from "zod";
 import { buildLanguageModel } from "@/lib/llm/providers";
 import { stateStore } from "@/lib/state/store";
@@ -185,6 +185,82 @@ function summarizeWidgets(deviceId: string): WidgetInventoryEntry[] {
     }));
 }
 
+function clampPrompt(value: string, maxChars = 500): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return normalized.slice(0, Math.max(0, maxChars - 1)).trimEnd() + "…";
+}
+
+function extractFirstJsonObject(text: string): unknown {
+  const fenced = text.match(/```json\s*([\s\S]+?)```/i);
+  const candidate = fenced?.[1]?.trim() ?? text.trim();
+  const firstBrace = candidate.indexOf("{");
+  const lastBrace = candidate.lastIndexOf("}");
+  if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
+    throw new Error("Widget route planner did not return JSON.");
+  }
+  return JSON.parse(candidate.slice(firstBrace, lastBrace + 1));
+}
+
+function buildFallbackWidgetRoutePlan(args: {
+  history: ChatMessage[];
+  userInput: string;
+  widgets: WidgetInventoryEntry[];
+}): WidgetRoutePlan {
+  const text = normalizeWidgetIntentText(args.userInput);
+  const latestWidget = args.widgets[0];
+  const mentionsSeparateNewWidget = /\b(new|another|separate|additional)\b/i.test(args.userInput);
+  const wantsList = /\b(list|which|what)\b/.test(text) && /\bwidgets?\b/.test(text);
+  const wantsInspect = FOLLOW_UP_INSPECT_PATTERN.test(text) || /\bdebug\b/.test(text);
+  const wantsRevision =
+    FOLLOW_UP_CONFIRM_PATTERN.test(text)
+    || FOLLOW_UP_STRONG_WIDGET_ACTION_PATTERN.test(text)
+    || FOLLOW_UP_GENERIC_WIDGET_EDIT_PATTERN.test(text);
+  const hasRecentWidgetContext = recentHistoryHasWidgetContext(args.history);
+
+  if (wantsList) {
+    return {
+      route: "widget",
+      reason: "Heuristic fallback matched a widget list request.",
+      toolArgs: { action: "list" },
+    };
+  }
+
+  if (latestWidget && wantsInspect && (FOLLOW_UP_REFERENCE_PATTERN.test(text) || hasRecentWidgetContext)) {
+    return {
+      route: "widget",
+      reason: "Heuristic fallback matched widget inspection.",
+      toolArgs: {
+        action: "get",
+        widget_id: latestWidget.id,
+      },
+    };
+  }
+
+  if (latestWidget && !mentionsSeparateNewWidget && (wantsRevision || hasRecentWidgetContext)) {
+    return {
+      route: "widget",
+      reason: "Heuristic fallback matched widget revision.",
+      toolArgs: {
+        action: "generate",
+        widget_id: latestWidget.id,
+        prompt: clampPrompt(args.userInput),
+      },
+    };
+  }
+
+  return {
+    route: "widget",
+    reason: "Heuristic fallback matched widget creation.",
+    toolArgs: {
+      action: "generate",
+      prompt: clampPrompt(args.userInput),
+    },
+  };
+}
+
 export async function planWidgetRoute(args: {
   provider: LLMProvider;
   model?: string;
@@ -203,48 +279,61 @@ export async function planWidgetRoute(args: {
   const widgets = summarizeWidgets(args.attachedDevice.id);
   const recentWidgetToolEvents = summarizeRecentWidgetToolEvents(args.history);
 
-  const result = await generateObject({
-    model,
-    schema: WidgetRoutePlanSchema,
-    schemaName: "widget_route_plan",
-    schemaDescription: "Routes a device-attached chat turn to widget management when appropriate.",
-    temperature: 0,
-    maxOutputTokens: 900,
-    system: [
-      "You route Steward device-attached chat turns into explicit widget management plans.",
-      "Return only a JSON object that matches the schema exactly.",
-      "Only route to widget management when the user explicitly asks for widget work, or when a short follow-up clearly continues a recent widget conversation.",
-      "Widget work includes creating, revising, fixing, restyling, inspecting, listing, or deleting a persistent device widget, remote, dashboard, panel, or control surface for the attached device.",
-      "Follow-up pronouns like 'it' or 'that' can still refer to the existing widget when recent conversation/tool activity is about a widget.",
-      "If a widget would simply be helpful for the device, return route='none'. The assistant can suggest it in prose without creating or revising anything.",
-      "If the turn is not widget work, return route='none'.",
-      "If the turn is widget work:",
-      "- Prefer toolArgs.action='generate' for create or revise requests.",
-      "- Use toolArgs.action='get' only for explicit inspection/debug requests.",
-      "- Use toolArgs.action='list' only when the user is explicitly asking what widgets exist.",
-      "- generate already persists the widget. Never plan a separate save step.",
-      "- Never invent widget ids or slugs. Only use values present in the supplied widget inventory.",
-      "- If revising an existing widget, prefer the most recently updated relevant widget from inventory.",
-      "- If widget inventory already contains a relevant widget, revise or inspect it instead of creating a duplicate unless the user explicitly asks for a new, separate, or additional widget.",
-      "- If the user clearly wants a new separate widget, omit widget_id and widget_slug.",
-      "- toolArgs.prompt must be a concrete instruction Steward can hand to steward_manage_widget.",
-      "- Keep toolArgs.prompt concise: <= 500 characters, plain text, no code fences, and no escaped newlines.",
-    ].join("\n"),
-    prompt: [
-      `Attached device: ${args.attachedDevice.name} (${args.attachedDevice.ip}) id=${args.attachedDevice.id} type=${args.attachedDevice.type}`,
-      "",
-      "Attached device widget inventory (newest first):",
-      JSON.stringify(widgets, null, 2),
-      "",
-      "Recent widget tool activity:",
-      JSON.stringify(recentWidgetToolEvents, null, 2),
-      "",
-      "Recent conversation transcript:",
-      summarizeRecentMessages(args.history),
-      "",
-      `Current user message: ${args.userInput}`,
-    ].join("\n"),
-  });
+  try {
+    const result = await generateText({
+      model,
+      temperature: 0,
+      maxOutputTokens: 900,
+      system: [
+        "You route Steward device-attached chat turns into explicit widget management plans.",
+        "Return JSON only. No markdown. No code fences.",
+        "Only route to widget management when the user explicitly asks for widget work, or when a short follow-up clearly continues a recent widget conversation.",
+        "Widget work includes creating, revising, fixing, restyling, inspecting, listing, or deleting a persistent device widget, remote, dashboard, panel, or control surface for the attached device.",
+        "Follow-up pronouns like 'it' or 'that' can still refer to the existing widget when recent conversation/tool activity is about a widget.",
+        "If a widget would simply be helpful for the device, return {\"route\":\"none\",\"reason\":\"...\"}.",
+        "If the turn is not widget work, return {\"route\":\"none\",\"reason\":\"...\"}.",
+        "If the turn is widget work:",
+        "- Prefer toolArgs.action='generate' for create or revise requests.",
+        "- Use toolArgs.action='get' only for explicit inspection/debug requests.",
+        "- Use toolArgs.action='list' only when the user is explicitly asking what widgets exist.",
+        "- generate already persists the widget. Never plan a separate save step.",
+        "- Never invent widget ids or slugs. Only use values present in the supplied widget inventory.",
+        "- If revising an existing widget, prefer the most recently updated relevant widget from inventory.",
+        "- If widget inventory already contains a relevant widget, revise or inspect it instead of creating a duplicate unless the user explicitly asks for a new, separate, or additional widget.",
+        "- If the user clearly wants a new separate widget, omit widget_id and widget_slug.",
+        "- toolArgs.prompt must be a concrete instruction Steward can hand to steward_manage_widget.",
+        "- Keep toolArgs.prompt concise: <= 500 characters, plain text, no code fences, and no escaped newlines.",
+        "Valid JSON shapes:",
+        "{\"route\":\"none\",\"reason\":\"text\"}",
+        "{\"route\":\"widget\",\"reason\":\"text\",\"toolArgs\":{\"action\":\"list\"}}",
+        "{\"route\":\"widget\",\"reason\":\"text\",\"toolArgs\":{\"action\":\"get\",\"widget_id\":\"...\"}}",
+        "{\"route\":\"widget\",\"reason\":\"text\",\"toolArgs\":{\"action\":\"get\",\"widget_slug\":\"...\"}}",
+        "{\"route\":\"widget\",\"reason\":\"text\",\"toolArgs\":{\"action\":\"generate\",\"prompt\":\"...\"}}",
+        "{\"route\":\"widget\",\"reason\":\"text\",\"toolArgs\":{\"action\":\"generate\",\"widget_id\":\"...\",\"prompt\":\"...\"}}",
+        "{\"route\":\"widget\",\"reason\":\"text\",\"toolArgs\":{\"action\":\"generate\",\"widget_slug\":\"...\",\"prompt\":\"...\"}}",
+      ].join("\n"),
+      prompt: [
+        `Attached device: ${args.attachedDevice.name} (${args.attachedDevice.ip}) id=${args.attachedDevice.id} type=${args.attachedDevice.type}`,
+        "",
+        "Attached device widget inventory (newest first):",
+        JSON.stringify(widgets, null, 2),
+        "",
+        "Recent widget tool activity:",
+        JSON.stringify(recentWidgetToolEvents, null, 2),
+        "",
+        "Recent conversation transcript:",
+        summarizeRecentMessages(args.history),
+        "",
+        `Current user message: ${args.userInput}`,
+      ].join("\n"),
+    });
 
-  return result.object;
+    return WidgetRoutePlanSchema.parse(extractFirstJsonObject(result.text));
+  } catch {
+    return buildFallbackWidgetRoutePlan({
+      history: args.history,
+      userInput: args.userInput,
+      widgets,
+    });
+  }
 }

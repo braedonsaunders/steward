@@ -114,6 +114,10 @@ const webResearchFallbackStrategyOptions: Array<{
   { value: "selected_only", label: "Selected provider only" },
 ];
 
+function settingsSignature<T>(value: T): string {
+  return JSON.stringify(value);
+}
+
 // ---------------------------------------------------------------------------
 // Providers Section
 // ---------------------------------------------------------------------------
@@ -1245,14 +1249,34 @@ function GeneralSection({ tab }: { tab: GeneralTabValue }) {
   });
   const [loadingWebResearchKeys, setLoadingWebResearchKeys] = useState(false);
   const [savingWebResearchKeyFor, setSavingWebResearchKeyFor] = useState<WebResearchProvider | null>(null);
+  const runtimeSettingsSignature = useMemo(() => settingsSignature(runtimeSettings), [runtimeSettings]);
+  const systemSettingsSignature = useMemo(() => settingsSignature(systemSettings), [systemSettings]);
+  const persistedRuntimeSettingsSignatureRef = useRef(runtimeSettingsSignature);
+  const persistedSystemSettingsSignatureRef = useRef(systemSettingsSignature);
 
   useEffect(() => {
-    setRuntimeDraft(runtimeSettings);
-  }, [runtimeSettings]);
+    const previousSignature = persistedRuntimeSettingsSignatureRef.current;
+    if (runtimeSettingsSignature === previousSignature) {
+      return;
+    }
+
+    persistedRuntimeSettingsSignatureRef.current = runtimeSettingsSignature;
+    setRuntimeDraft((current) =>
+      settingsSignature(current) === previousSignature ? runtimeSettings : current,
+    );
+  }, [runtimeSettings, runtimeSettingsSignature]);
 
   useEffect(() => {
-    setSystemDraft(systemSettings);
-  }, [systemSettings]);
+    const previousSignature = persistedSystemSettingsSignatureRef.current;
+    if (systemSettingsSignature === previousSignature) {
+      return;
+    }
+
+    persistedSystemSettingsSignatureRef.current = systemSettingsSignature;
+    setSystemDraft((current) =>
+      settingsSignature(current) === previousSignature ? systemSettings : current,
+    );
+  }, [systemSettings, systemSettingsSignature]);
 
   const loadWebResearchCredentials = useCallback(async () => {
     setLoadingWebResearchKeys(true);
@@ -1801,6 +1825,14 @@ function GeneralSection({ tab }: { tab: GeneralTabValue }) {
                   className="md:col-span-2"
                 />
               </div>
+
+              {runtimeDraft.webResearchFallbackStrategy === "selected_only" && (
+                <Alert>
+                  <AlertDescription>
+                    Selected-only fallback means Steward will not retry another provider if the chosen search engine returns zero results.
+                  </AlertDescription>
+                </Alert>
+              )}
 
               <div className="space-y-3 rounded-md border border-border/60 bg-muted/30 p-3">
                 <SettingsToggleRow

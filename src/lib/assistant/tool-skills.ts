@@ -3,12 +3,33 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { dynamicTool, jsonSchema } from "ai";
 import { adapterRegistry } from "@/lib/adapters/registry";
+import type { AdapterToolSkill } from "@/lib/adapters/types";
+import {
+  queryNetworkState,
+  type NetworkQueryAction,
+  type StructuredNetworkQueryInput,
+} from "@/lib/assistant/graph-query";
 import {
   requiresWebResearchApiKey,
   webResearchApiKeySecretRef,
 } from "@/lib/assistant/web-research-config";
 import { runWebResearch } from "@/lib/assistant/web-research";
-import { markCredentialValidatedFromUse } from "@/lib/adoption/credentials";
+import {
+  deleteDeviceCredential,
+  markCredentialValidatedFromUse,
+  redactDeviceCredential,
+  storeDeviceCredential,
+  updateDeviceCredential,
+  validateDeviceCredential,
+} from "@/lib/adoption/credentials";
+import {
+  HTTP_API_AUTH_MODES,
+  describeHttpApiCredentialAuth,
+  getHttpApiCredentialAuth,
+  httpApiCredentialAuthLabel,
+  type HttpApiCredentialAuthMode,
+  withHttpApiCredentialAuth,
+} from "@/lib/credentials/http-api";
 import { completeDeviceOnboarding } from "@/lib/adoption/orchestrator";
 import {
   computeDeviceStateHash,
@@ -18,7 +39,9 @@ import { observeBrowserSurfaces } from "@/lib/discovery/browser-observer";
 import { candidateToDevice } from "@/lib/discovery/classify";
 import { dedupeObservations } from "@/lib/discovery/evidence";
 import { fingerprintDevice } from "@/lib/discovery/fingerprint";
+import { buildHostnameResolutionSummary } from "@/lib/discovery/hostname-resolution";
 import { runNmapDeepFingerprint } from "@/lib/discovery/nmap-deep";
+import { getOuiStats, lookupOuiVendor } from "@/lib/discovery/oui";
 import { collectPacketIntelSnapshot } from "@/lib/discovery/packet-intel";
 import {
   createAssurance,
@@ -31,10 +54,13 @@ import {
   updateAssurance,
   updateResponsibility,
 } from "@/lib/devices/contract-management";
+import { localToolManifestSchema } from "@/lib/local-tools/schema";
+import { localToolRuntime } from "@/lib/local-tools/runtime";
 import { parseWinrmCommandTemplate } from "@/lib/adapters/winrm";
 import { getDeviceNameValidationError, normalizeDeviceName } from "@/lib/devices/naming";
 import { getDefaultProvider } from "@/lib/llm/config";
 import { evaluatePolicy } from "@/lib/policy/engine";
+import { protocolSessionManager } from "@/lib/protocol-sessions/manager";
 import { getAdoptionRecord, getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
 import { getDataDir } from "@/lib/state/db";
 import { stateStore } from "@/lib/state/store";
@@ -46,6 +72,7 @@ import type {
   ActionClass,
   Assurance,
   Device,
+  DeviceCredential,
   DiscoveryObservation,
   LLMProvider,
   OnboardingDraftAssurance,
@@ -73,6 +100,11 @@ interface SkillExecutionConfig {
   expectedSemanticTarget?: string;
   commandTemplate?: string;
   commandTemplates?: Partial<Record<OperationKind, string>>;
+  localToolId?: string;
+  localToolCommand?: string;
+  localToolArgs?: string[];
+  localToolCwd?: string;
+  localToolInstallIfMissing?: boolean;
 }
 
 interface SkillRuntimeDescriptor {
@@ -110,6 +142,10 @@ const MUTATING_KINDS = new Set<OperationKind>([
   "file.copy",
   "network.config",
 ]);
+
+const NETWORK_QUERY_ACTIONS = ["inventory", "device_summary", "dependencies", "recent_changes"] as const;
+const NETWORK_QUERY_ADOPTION_STATUSES = ["any", "discovered", "adopted", "ignored"] as const;
+const NETWORK_QUERY_DEVICE_STATUSES = ["any", "online", "offline", "degraded", "unknown"] as const;
 
 const WEB_RESEARCH_MAX_RESULTS_LIMIT = 80;
 const WEB_RESEARCH_DEEP_READ_LIMIT = 40;
@@ -222,7 +258,7 @@ function validateDeviceReadyForToolUse(
   const adoptionStatus = getDeviceAdoptionStatus(device);
   if (options?.allowPreOnboardingExecution) {
     if (adoptionStatus === "ignored") {
-      return { ok: false, reason: `Device ${device.name} is ignored and cannot be probed in onboarding.` };
+      return { ok: false, reason: `Device ${device.name} is ignored and cannot be probed.` };
     }
     return { ok: true };
   }
@@ -243,6 +279,15 @@ function validateDeviceReadyForContractToolUse(
   device: Device,
 ): { ok: true } | { ok: false; reason: string } {
   return validateDeviceReadyForToolUse(device);
+}
+
+function validateDeviceReadyForExplorationToolUse(
+  device: Device,
+  options?: { allowPreOnboardingExecution?: boolean },
+): { ok: true } | { ok: false; reason: string } {
+  return validateDeviceReadyForToolUse(device, {
+    allowPreOnboardingExecution: options?.allowPreOnboardingExecution,
+  });
 }
 
 function hasSelectedProfileForAdapter(deviceId: string, adapterId: string): boolean {
@@ -318,10 +363,18 @@ function summarizeDiscoveryObservation(observation: DiscoveryObservation): strin
       : typeof details.url === "string"
         ? details.url
         : undefined;
+    const statusCode = typeof details.statusCode === "number" ? details.statusCode : undefined;
+    const serverHeader = typeof details.serverHeader === "string" ? details.serverHeader : undefined;
     const vendorHints = Array.isArray(details.vendorHints)
       ? details.vendorHints.filter((value): value is string => typeof value === "string").slice(0, 2)
       : [];
-    const parts = [title, vendorHints.length > 0 ? vendorHints.join(", ") : "", url].filter(Boolean);
+    const parts = [
+      statusCode ? `HTTP ${statusCode}` : "",
+      serverHeader ? `Server ${serverHeader}` : "",
+      title,
+      vendorHints.length > 0 ? vendorHints.join(", ") : "",
+      url,
+    ].filter(Boolean);
     return parts.length > 0 ? `Browser ${parts.join(" | ")}` : "Browser observation";
   }
 
@@ -343,8 +396,15 @@ function summarizeDiscoveryObservation(observation: DiscoveryObservation): strin
   }
 
   if (observation.evidenceType === "http_banner") {
+    const statusCode = typeof details.statusCode === "number" ? details.statusCode : undefined;
+    const serverHeader = typeof details.serverHeader === "string" ? details.serverHeader : undefined;
     const title = typeof details.title === "string" ? details.title : undefined;
-    return title ? `HTTP title ${title}` : "HTTP banner";
+    const parts = [
+      statusCode ? `HTTP ${statusCode}` : "",
+      serverHeader ? `Server ${serverHeader}` : "",
+      title ? `Title ${title}` : "",
+    ].filter(Boolean);
+    return parts.length > 0 ? parts.join(" | ") : "HTTP banner";
   }
 
   return observation.evidenceType.replace(/_/g, " ");
@@ -722,6 +782,174 @@ function buildContractSnapshotPayload(deviceId: string): {
   };
 }
 
+function summarizeCredentialEntry(
+  credential: DeviceCredential | Omit<DeviceCredential, "vaultSecretRef">,
+): Record<string, unknown> {
+  const summary: Record<string, unknown> = {
+    id: credential.id,
+    protocol: credential.protocol,
+    adapterId: credential.adapterId ?? null,
+    accountLabel: credential.accountLabel ?? null,
+    status: credential.status,
+    lastValidatedAt: credential.lastValidatedAt ?? null,
+    updatedAt: credential.updatedAt,
+  };
+
+  if (credential.protocol.toLowerCase() === "http-api") {
+    const auth = getHttpApiCredentialAuth(credential.scopeJson);
+    summary.httpAuthMode = auth.mode;
+    summary.httpAuth = describeHttpApiCredentialAuth(credential.scopeJson);
+    summary.headerName = auth.headerName ?? null;
+    summary.queryParamName = auth.queryParamName ?? null;
+    summary.pathPrefix = auth.pathPrefix ?? null;
+  }
+
+  return summary;
+}
+
+function credentialUsageHints(
+  credential: DeviceCredential | Omit<DeviceCredential, "vaultSecretRef">,
+): Record<string, unknown> | undefined {
+  if (credential.protocol.toLowerCase() !== "http-api") {
+    return undefined;
+  }
+
+  const auth = getHttpApiCredentialAuth(credential.scopeJson);
+  return {
+    authMode: auth.mode,
+    authLabel: httpApiCredentialAuthLabel(auth.mode),
+    authSummary: describeHttpApiCredentialAuth(credential.scopeJson),
+    pathConvention: auth.mode === "path-segment"
+      ? `Use request paths under ${auth.pathPrefix ?? "/api"} and Steward will inject the stored token after that prefix.`
+      : null,
+  };
+}
+
+function parseHttpApiCredentialMode(value: unknown): HttpApiCredentialAuthMode | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if ((HTTP_API_AUTH_MODES as readonly string[]).includes(normalized)) {
+    return normalized as HttpApiCredentialAuthMode;
+  }
+
+  switch (normalized) {
+    case "username-password":
+    case "password":
+      return "basic";
+    case "bearer-token":
+    case "token":
+      return "bearer";
+    case "header-token":
+    case "api-key-header":
+      return "api-key";
+    case "query-token":
+      return "query-param";
+    case "path-token":
+      return "path-segment";
+    default:
+      return undefined;
+  }
+}
+
+function inferHttpApiCredentialMode(
+  args: Record<string, unknown>,
+  existingScope?: Record<string, unknown>,
+): HttpApiCredentialAuthMode {
+  const explicit = parseHttpApiCredentialMode(
+    inputString(args, "http_auth_mode", "credential_type", "secret_type"),
+  );
+  if (explicit) {
+    return explicit;
+  }
+  if (inputString(args, "http_path_prefix", "path_prefix")) {
+    return "path-segment";
+  }
+  if (inputString(args, "http_query_param_name", "query_param_name")) {
+    return "query-param";
+  }
+  if (inputString(args, "http_header_name", "header_name")) {
+    return "api-key";
+  }
+  if (inputString(args, "account_label", "username")) {
+    return "basic";
+  }
+  return existingScope ? getHttpApiCredentialAuth(existingScope).mode : "bearer";
+}
+
+function buildCredentialScopeFromArgs(
+  protocol: string,
+  args: Record<string, unknown>,
+  existingScope?: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (protocol !== "http-api") {
+    return existingScope;
+  }
+
+  return withHttpApiCredentialAuth(existingScope, {
+    mode: inferHttpApiCredentialMode(args, existingScope),
+    ...(inputString(args, "http_header_name", "header_name")
+      ? { headerName: inputString(args, "http_header_name", "header_name") }
+      : {}),
+    ...(inputString(args, "http_query_param_name", "query_param_name")
+      ? { queryParamName: inputString(args, "http_query_param_name", "query_param_name") }
+      : {}),
+    ...(inputString(args, "http_path_prefix", "path_prefix")
+      ? { pathPrefix: inputString(args, "http_path_prefix", "path_prefix") }
+      : {}),
+  });
+}
+
+function resolveCredentialForDevice(
+  deviceId: string,
+  selector: {
+    id?: string;
+    protocol?: string;
+    accountLabel?: string;
+    adapterId?: string;
+  },
+): { ok: true; value: DeviceCredential } | { ok: false; error: string; matches?: Record<string, unknown>[] } {
+  const credentials = stateStore.getDeviceCredentials(deviceId);
+  if (selector.id) {
+    const exact = credentials.find((credential) => credential.id === selector.id);
+    return exact
+      ? { ok: true, value: exact }
+      : { ok: false, error: `Credential ${selector.id} not found.` };
+  }
+
+  const normalizedProtocol = selector.protocol ? normalizeCredentialProtocol(selector.protocol) : undefined;
+  const normalizedAccountLabel = selector.accountLabel?.trim().toLowerCase();
+  const normalizedAdapterId = selector.adapterId?.trim();
+
+  const matches = credentials.filter((credential) => {
+    if (normalizedProtocol && credential.protocol.toLowerCase() !== normalizedProtocol) {
+      return false;
+    }
+    if (normalizedAccountLabel && (credential.accountLabel?.trim().toLowerCase() ?? "") !== normalizedAccountLabel) {
+      return false;
+    }
+    if (normalizedAdapterId && (credential.adapterId?.trim() ?? "") !== normalizedAdapterId) {
+      return false;
+    }
+    return true;
+  });
+
+  if (matches.length === 1) {
+    return { ok: true, value: matches[0] };
+  }
+  if (matches.length === 0) {
+    return { ok: false, error: "Credential not found." };
+  }
+
+  return {
+    ok: false,
+    error: "Multiple credentials matched. Provide credential_id or narrow by account_label / adapter_id.",
+    matches: matches.map((credential) => summarizeCredentialEntry(credential)),
+  };
+}
+
 const DEVICE_TYPE_ALIAS_MAP: Record<string, DeviceType> = {
   server: "server",
   workstation: "workstation",
@@ -893,7 +1121,10 @@ async function resolveBrowserCredential(device: Device): Promise<{
   password?: string;
 }> {
   const candidates = stateStore.getDeviceCredentials(device.id)
-    .filter((credential) => credential.protocol.toLowerCase() === "http-api");
+    .filter((credential) =>
+      credential.protocol.toLowerCase() === "http-api"
+      && getHttpApiCredentialAuth(credential.scopeJson).mode === "basic"
+    );
   if (candidates.length === 0) {
     return {};
   }
@@ -1329,6 +1560,108 @@ function normalizeToolInput(args: ExecuteArgs & Record<string, unknown>): Record
   return nested;
 }
 
+function cloneJsonValue<T>(value: T): T {
+  if (value === undefined || value === null) {
+    return value;
+  }
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function readStringRecord(value: unknown): Record<string, string> {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  const result: Record<string, string> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item === "string") {
+      result[key] = item;
+    }
+  }
+  return result;
+}
+
+function summarizeAdapterRecord(
+  record: NonNullable<ReturnType<typeof adapterRegistry.getAdapterRecordById>>,
+): Record<string, unknown> {
+  return {
+    id: record.id,
+    name: record.name,
+    description: record.description,
+    version: record.version,
+    author: record.author,
+    source: record.source,
+    enabled: record.enabled,
+    status: record.status,
+    error: record.error ?? null,
+    provides: record.provides,
+    toolSkillCount: record.toolSkills.length,
+    toolSkills: record.toolSkills.map((skill) => ({
+      id: skill.id,
+      name: skill.name,
+      category: skill.category ?? null,
+      operationKinds: skill.operationKinds ?? [],
+      toolCallName: skill.toolCall?.name ?? null,
+    })),
+    updatedAt: record.updatedAt,
+  };
+}
+
+function buildAdapterPackagePayload(
+  pkg: NonNullable<ReturnType<typeof adapterRegistry.getAdapterPackageById>>,
+  options?: {
+    includeEntrySource?: boolean;
+    includeMarkdown?: boolean;
+  },
+): Record<string, unknown> {
+  return {
+    adapter: summarizeAdapterRecord(pkg.adapter),
+    manifest: cloneJsonValue(pkg.manifest),
+    isBuiltin: pkg.isBuiltin,
+    ...(options?.includeEntrySource === false ? {} : { entrySource: pkg.entrySource }),
+    ...(options?.includeMarkdown === false
+      ? {}
+      : {
+        adapterSkillMd: pkg.adapterSkillMd ?? null,
+        toolSkillMd: cloneJsonValue(pkg.toolSkillMd),
+      }),
+  };
+}
+
+function upsertAdapterToolSkillInManifest(
+  manifest: Record<string, unknown>,
+  skillInput: AdapterToolSkill,
+  replaceExisting: boolean,
+): { manifest: Record<string, unknown>; replaced: boolean } {
+  const toolSkills = Array.isArray(manifest.toolSkills)
+    ? cloneJsonValue(manifest.toolSkills)
+    : [];
+  const existingIndex = toolSkills.findIndex((entry) =>
+    isRecord(entry) && typeof entry.id === "string" && entry.id === skillInput.id
+  );
+
+  if (existingIndex >= 0 && !replaceExisting) {
+    throw new Error(`Adapter already has a tool skill with id ${skillInput.id}`);
+  }
+
+  if (existingIndex >= 0) {
+    const existing = toolSkills[existingIndex];
+    toolSkills[existingIndex] = isRecord(existing)
+      ? { ...existing, ...skillInput }
+      : cloneJsonValue(skillInput);
+  } else {
+    toolSkills.push(cloneJsonValue(skillInput));
+  }
+
+  return {
+    manifest: {
+      ...manifest,
+      toolSkills,
+    },
+    replaced: existingIndex >= 0,
+  };
+}
+
 function defaultCommandTemplate(
   kind: OperationKind,
   adapterId: string,
@@ -1618,6 +1951,12 @@ function defaultBrokerRequest(
     const keepaliveSec = Number(input.keepalive_sec);
     const expectRegex = inputString(input, "expect_regex");
     const insecureSkipVerify = mqttSkipCertChecksPreference(input);
+    const sessionId = inputString(input, "session_id");
+    const sessionHolder = inputString(input, "session_holder");
+    const leaseTtlMs = Number(input.lease_ttl_ms);
+    const keepSessionOpen = inputBoolean(input, "keep_session_open");
+    const arbitrationMode = inputString(input, "arbitration_mode");
+    const singleConnectionHint = inputBoolean(input, "single_connection_hint");
 
     return {
       protocol: "mqtt",
@@ -1637,6 +1976,16 @@ function defaultBrokerRequest(
       ...(expectRegex ? { expectRegex } : {}),
       ...(successStrategy ? { successStrategy } : {}),
       ...(insecureSkipVerify !== undefined ? { insecureSkipVerify } : {}),
+      ...(sessionId ? { sessionId } : {}),
+      ...(sessionHolder ? { sessionHolder } : {}),
+      ...(Number.isFinite(leaseTtlMs) ? { leaseTtlMs: clampInt(leaseTtlMs, 10_000, 24 * 60 * 60 * 1000, 5 * 60 * 1000) } : {}),
+      ...(keepSessionOpen !== undefined ? { keepSessionOpen } : {}),
+      ...(
+        arbitrationMode === "shared" || arbitrationMode === "exclusive" || arbitrationMode === "single-connection"
+          ? { arbitrationMode }
+          : {}
+      ),
+      ...(singleConnectionHint !== undefined ? { singleConnectionHint } : {}),
     };
   }
 
@@ -1669,6 +2018,39 @@ function defaultBrokerRequest(
   }
 
   return undefined;
+}
+
+function localToolBrokerRequest(
+  execution: SkillExecutionConfig,
+  input: Record<string, unknown>,
+): ProtocolBrokerRequest | undefined {
+  const toolId = inputString(input, "local_tool_id") ?? execution.localToolId?.trim();
+  if (!toolId) {
+    return undefined;
+  }
+
+  const command = inputString(input, "local_tool_command", "local_tool_bin", "command")
+    ?? execution.localToolCommand?.trim();
+  if (!command) {
+    return undefined;
+  }
+
+  const timeoutValue = Number(input.timeout_ms ?? execution.timeoutMs);
+  const timeoutMs = Number.isFinite(timeoutValue) && timeoutValue >= 1_000 && timeoutValue <= 15 * 60 * 1000
+    ? Math.floor(timeoutValue)
+    : undefined;
+
+  return {
+    protocol: "local-tool",
+    toolId,
+    command,
+    argv: inputStringArray(input, "argv", "local_tool_args") ?? execution.localToolArgs,
+    cwd: inputString(input, "cwd", "local_tool_cwd") ?? execution.localToolCwd,
+    timeoutMs,
+    installIfMissing: inputBoolean(input, "install_if_missing") ?? execution.localToolInstallIfMissing,
+    healthCheckBeforeRun: inputBoolean(input, "health_check_before_run"),
+    approvalReason: inputString(input, "approval_reason"),
+  };
 }
 
 function buildCommonToolArgumentProperties(): Record<string, unknown> {
@@ -1719,6 +2101,19 @@ function buildCommonToolArgumentProperties(): Record<string, unknown> {
     keepalive_sec: { type: "integer", description: "Optional MQTT keepalive in seconds." },
     success_strategy: { type: "string", description: "Optional message success rule: auto, transport, response, expectation." },
     insecure_skip_verify: { type: "boolean", description: "Skip TLS verification for this call when true." },
+    session_id: { type: "string", description: "Optional managed protocol session id to reuse." },
+    session_holder: { type: "string", description: "Optional lease holder label for managed protocol sessions." },
+    lease_ttl_ms: { type: "integer", description: "Optional protocol session lease TTL in milliseconds." },
+    keep_session_open: { type: "boolean", description: "When true, keep the managed protocol session connected after the exchange." },
+    arbitration_mode: { type: "string", description: "Optional session arbitration mode: shared, exclusive, or single-connection." },
+    single_connection_hint: { type: "boolean", description: "When true, Steward treats the protocol session as single-connection." },
+    local_tool_id: { type: "string", description: "Optional managed local-tool manifest id." },
+    local_tool_command: { type: "string", description: "Managed local-tool command/bin name to execute." },
+    local_tool_args: { type: "array", description: "Optional argv array for managed local-tool execution.", items: { type: "string" } },
+    argv: { type: "array", description: "Alias for local_tool_args.", items: { type: "string" } },
+    install_if_missing: { type: "boolean", description: "Allow Steward to install the managed local tool if it is not installed yet." },
+    health_check_before_run: { type: "boolean", description: "Run the managed local-tool health check before execution." },
+    approval_reason: { type: "string", description: "Optional approval context for governed local-tool execution." },
     skip_cert_checks: { type: "boolean", description: "Skip WinRM certificate checks for this call when true." },
     timeout_ms: { type: "integer", description: "Optional per-call timeout override in milliseconds." },
     command: { type: "string", description: "Optional remote command for shell-based tools." },
@@ -1828,9 +2223,11 @@ function buildOperationFromDescriptor(
   const protocolHint = typeof input.protocol === "string"
     ? normalizeCredentialProtocol(input.protocol)
     : "";
+  const localToolId = inputString(input, "local_tool_id") ?? execution.localToolId?.trim();
 
   const adapterId = explicitAdapterId
     || protocolHint
+    || (localToolId ? `local-tool:${localToolId}` : "")
     || execution.adapterId
     || (kind === "shell.command" && hasSnmpInputHints(input)
       ? "snmp"
@@ -1847,7 +2244,7 @@ function buildOperationFromDescriptor(
   const hasExplicitCommandTemplate = Boolean(commandFromInput || commandFromKindConfig || commandFromConfig);
   let brokerRequest = hasExplicitCommandTemplate
     ? undefined
-    : defaultBrokerRequest(kind, adapterId, input, device);
+    : (localToolBrokerRequest(execution, input) ?? defaultBrokerRequest(kind, adapterId, input, device));
   const resolvedCommandTemplate = commandFromInput
     || commandFromKindConfig
     || commandFromConfig
@@ -1941,6 +2338,21 @@ function toSkillExecutionConfig(value: unknown): SkillExecutionConfig {
         .filter(([k, v]) => isOperationKind(k) && typeof v === "string"),
     ) as Partial<Record<OperationKind, string>>
     : undefined;
+  const localToolId = typeof value.localToolId === "string" && value.localToolId.trim().length > 0
+    ? value.localToolId.trim()
+    : undefined;
+  const localToolCommand = typeof value.localToolCommand === "string" && value.localToolCommand.trim().length > 0
+    ? value.localToolCommand.trim()
+    : undefined;
+  const localToolArgs = Array.isArray(value.localToolArgs)
+    ? value.localToolArgs.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    : undefined;
+  const localToolCwd = typeof value.localToolCwd === "string" && value.localToolCwd.trim().length > 0
+    ? value.localToolCwd.trim()
+    : undefined;
+  const localToolInstallIfMissing = typeof value.localToolInstallIfMissing === "boolean"
+    ? value.localToolInstallIfMissing
+    : undefined;
 
   return {
     kind,
@@ -1950,6 +2362,11 @@ function toSkillExecutionConfig(value: unknown): SkillExecutionConfig {
     expectedSemanticTarget,
     commandTemplate,
     commandTemplates,
+    localToolId,
+    localToolCommand,
+    localToolArgs,
+    localToolCwd,
+    localToolInstallIfMissing,
   };
 }
 
@@ -2034,7 +2451,7 @@ export async function buildAdapterSkillTools(
           return {
             ok: false,
             blocked: "profile",
-            error: `Profile ${descriptor.adapterName} is not selected for ${device.name}. Complete onboarding and select the matching management profile first.`,
+            error: `Adapter ${descriptor.adapterName} is not selected for ${device.name}. Complete onboarding and select the matching adapter first.`,
           };
         }
 
@@ -2150,8 +2567,96 @@ export async function buildAdapterSkillTools(
     });
   }
 
+  tools.steward_query_network = dynamicTool({
+    description: "Query Steward's network-wide inventory and graph state across adopted and discovered devices. Use this for other-device lookups, discovery/adoption status, same-subnet peers, dependencies, and recent graph changes.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: [...NETWORK_QUERY_ACTIONS],
+          description: "Network query action: inventory, device_summary, dependencies, or recent_changes.",
+        },
+        device_id: {
+          type: "string",
+          description: "Target device id, exact name, or IP. Optional for device_summary/dependencies when chat is attached to a device.",
+        },
+        same_subnet_as_device_id: {
+          type: "string",
+          description: "Optional inventory filter: only show devices on the same /24 subnet as this device.",
+        },
+        same_subnet_as_attached_device: {
+          type: "boolean",
+          description: "Optional inventory filter: only show devices on the same /24 subnet as the attached device.",
+        },
+        query: {
+          type: "string",
+          description: "Optional inventory or recent-change search text matched against device identity fields, services, or graph node labels.",
+        },
+        adoption_status: {
+          type: "string",
+          enum: [...NETWORK_QUERY_ADOPTION_STATUSES],
+          description: "Optional inventory filter for discovered, adopted, ignored, or any devices.",
+        },
+        status: {
+          type: "string",
+          enum: [...NETWORK_QUERY_DEVICE_STATUSES],
+          description: "Optional inventory filter for runtime status.",
+        },
+        device_type: {
+          type: "string",
+          enum: ["any", ...DEVICE_TYPE_VALUES],
+          description: "Optional inventory filter for device type.",
+        },
+        limit: {
+          type: "integer",
+          description: "Maximum rows to return. Defaults to 20.",
+        },
+        hours: {
+          type: "integer",
+          description: "For recent_changes: how far back to inspect graph node updates. Defaults to 24 hours.",
+        },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const action = inputString(args, "action");
+      if (!action || !NETWORK_QUERY_ACTIONS.includes(action as NetworkQueryAction)) {
+        return { ok: false, error: "Valid action is required.", action: "inventory" };
+      }
+
+      const adoptionStatus = inputString(args, "adoption_status");
+      const status = inputString(args, "status");
+      const deviceType = inputString(args, "device_type");
+      const attachedDevice = options?.attachedDeviceId ? stateStore.getDeviceById(options.attachedDeviceId) : null;
+
+      const queryInput: StructuredNetworkQueryInput = {
+        action: action as NetworkQueryAction,
+        deviceId: inputString(args, "device_id"),
+        sameSubnetAsDeviceId: inputString(args, "same_subnet_as_device_id"),
+        sameSubnetAsAttachedDevice: inputBoolean(args, "same_subnet_as_attached_device") === true,
+        query: inputString(args, "query"),
+        adoptionStatus: adoptionStatus && NETWORK_QUERY_ADOPTION_STATUSES.includes(adoptionStatus as typeof NETWORK_QUERY_ADOPTION_STATUSES[number])
+          ? adoptionStatus as StructuredNetworkQueryInput["adoptionStatus"]
+          : undefined,
+        status: status && NETWORK_QUERY_DEVICE_STATUSES.includes(status as typeof NETWORK_QUERY_DEVICE_STATUSES[number])
+          ? status as StructuredNetworkQueryInput["status"]
+          : undefined,
+        type: deviceType && (deviceType === "any" || DEVICE_TYPE_VALUES.includes(deviceType as DeviceType))
+          ? deviceType as StructuredNetworkQueryInput["type"]
+          : undefined,
+        limit: typeof args.limit === "number" ? args.limit : undefined,
+        hours: typeof args.hours === "number" ? args.hours : undefined,
+      };
+
+      return queryNetworkState(queryInput, attachedDevice);
+    },
+  });
+
   tools.steward_device_identity = dynamicTool({
-    description: "Inspect Steward's stored local identity evidence for a device. Returns MAC, hostname, vendor hints, discovery evidence, recent DHCP/browser/packet signals, and candidate router/gateway devices for DHCP-client correlation. Use this before public web research or asking the user to identify a private-network device manually.",
+    description: "Inspect Steward's stored local identity evidence for a device. Returns MAC, hostname, hostname-resolution ladder details, discovery evidence, recent DHCP/browser/packet signals, HTTP status/header hints, and candidate router/gateway devices for DHCP-client correlation. Use this before public web research or asking the user to identify a private-network device manually.",
     inputSchema: jsonSchema({
       type: "object",
       properties: {
@@ -2177,7 +2682,9 @@ export async function buildAdapterSkillTools(
         return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
       }
 
-      const readiness = validateDeviceReadyForContractToolUse(device);
+      const readiness = validateDeviceReadyForExplorationToolUse(device, {
+        allowPreOnboardingExecution: options?.allowPreOnboardingExecution,
+      });
       if (!readiness.ok) {
         return { ok: false, error: readiness.reason, deviceId: device.id };
       }
@@ -2192,6 +2699,7 @@ export async function buildAdapterSkillTools(
       const routerCandidates = inputBoolean(args, "include_router_candidates") === false
         ? []
         : await buildRouterCandidateSummaries(device, 5);
+      const hostnameResolution = buildHostnameResolutionSummary(device, observations, routerCandidates);
 
       return {
         ok: true,
@@ -2214,7 +2722,16 @@ export async function buildAdapterSkillTools(
           secure: service.secure,
           product: service.product ?? null,
           version: service.version ?? null,
+          httpInfo: service.httpInfo
+            ? {
+                statusCode: service.httpInfo.statusCode ?? null,
+                serverHeader: service.httpInfo.serverHeader ?? null,
+                title: service.httpInfo.title ?? null,
+                poweredBy: service.httpInfo.poweredBy ?? null,
+              }
+            : null,
         })),
+        hostnameResolution,
         discovery: {
           confidence: typeof discovery.confidence === "number" ? discovery.confidence : null,
           evidenceTypes: Array.isArray(discovery.evidenceTypes)
@@ -2249,6 +2766,8 @@ export async function buildAdapterSkillTools(
               .map((endpoint) => ({
                 url: typeof endpoint.url === "string" ? endpoint.url : null,
                 finalUrl: typeof endpoint.finalUrl === "string" ? endpoint.finalUrl : null,
+                statusCode: typeof endpoint.statusCode === "number" ? endpoint.statusCode : null,
+                serverHeader: typeof endpoint.serverHeader === "string" ? endpoint.serverHeader : null,
                 title: typeof endpoint.title === "string" ? endpoint.title : null,
                 vendorHints: Array.isArray(endpoint.vendorHints)
                   ? endpoint.vendorHints.filter((value): value is string => typeof value === "string").slice(0, 3)
@@ -2294,7 +2813,9 @@ export async function buildAdapterSkillTools(
         return { ok: false, error: "Valid device_id is required." };
       }
 
-      const readiness = validateDeviceReadyForContractToolUse(device);
+      const readiness = validateDeviceReadyForExplorationToolUse(device, {
+        allowPreOnboardingExecution: options?.allowPreOnboardingExecution,
+      });
       if (!readiness.ok) {
         return { ok: false, error: readiness.reason, deviceId: device.id };
       }
@@ -2418,6 +2939,16 @@ export async function buildAdapterSkillTools(
           description: "Optional success rule override. Use response or expectation for request/response protocols.",
         },
         insecure_skip_verify: { type: "boolean", description: "Skip MQTT TLS certificate verification when true." },
+        session_id: { type: "string", description: "Optional persistent session id to reuse." },
+        session_holder: { type: "string", description: "Optional lease holder label." },
+        lease_ttl_ms: { type: "integer", description: "Optional session lease TTL in milliseconds." },
+        keep_session_open: { type: "boolean", description: "When true, keep the managed MQTT session connected after the exchange." },
+        arbitration_mode: {
+          type: "string",
+          enum: ["shared", "exclusive", "single-connection"],
+          description: "Optional session arbitration mode.",
+        },
+        single_connection_hint: { type: "boolean", description: "When true, Steward treats the session as single-connection." },
       },
       required: ["device_id"],
       additionalProperties: false,
@@ -2432,7 +2963,9 @@ export async function buildAdapterSkillTools(
         return { ok: false, error: "Valid device_id is required." };
       }
 
-      const readiness = validateDeviceReadyForContractToolUse(device);
+      const readiness = validateDeviceReadyForExplorationToolUse(device, {
+        allowPreOnboardingExecution: options?.allowPreOnboardingExecution,
+      });
       if (!readiness.ok) {
         return { ok: false, error: readiness.reason, deviceId: device.id };
       }
@@ -2506,6 +3039,347 @@ export async function buildAdapterSkillTools(
     },
   });
 
+  tools.steward_list_local_tools = dynamicTool({
+    description: "List governed local-tool manifests Steward knows about, along with installation state, health, and approval status.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Optional free-text filter over id, name, description, and capabilities." },
+      },
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      await localToolRuntime.initialize();
+      const query = inputString(args, "query")?.toLowerCase();
+      const tools = localToolRuntime.listTools().filter((tool) => {
+        if (!query) {
+          return true;
+        }
+        const haystack = [
+          tool.id,
+          tool.manifest.name,
+          tool.manifest.description,
+          ...tool.manifest.capabilities,
+        ].join("\n").toLowerCase();
+        return haystack.includes(query);
+      });
+      return {
+        ok: true,
+        count: tools.length,
+        tools,
+      };
+    },
+  });
+
+  tools.steward_register_local_tool = dynamicTool({
+    description: "Register or update a governed local-tool manifest. Use this to describe a third-party host utility without hardcoding it into Steward.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        manifest: { type: "object", additionalProperties: true },
+      },
+      required: ["manifest"],
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const parsed = localToolManifestSchema.safeParse(args.manifest);
+      if (!parsed.success) {
+        return { ok: false, error: parsed.error.flatten() };
+      }
+      await localToolRuntime.initialize();
+      const tool = localToolRuntime.registerManifest(parsed.data);
+      return { ok: true, tool };
+    },
+  });
+
+  tools.steward_install_local_tool = dynamicTool({
+    description: "Install a governed local tool according to Steward policy. If policy requires approval, this call returns the pending approval record instead of bypassing it.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        tool_id: { type: "string", description: "Managed local-tool id." },
+      },
+      required: ["tool_id"],
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const toolId = inputString(args, "tool_id");
+      if (!toolId) {
+        return { ok: false, error: "tool_id is required." };
+      }
+      await localToolRuntime.initialize();
+      return localToolRuntime.installTool(toolId, "steward");
+    },
+  });
+
+  tools.steward_list_local_tool_approvals = dynamicTool({
+    description: "List governed local-tool approval records so Steward can see whether installs or executions are pending, approved, or denied.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        tool_id: { type: "string", description: "Optional local-tool id filter." },
+        status: { type: "string", enum: ["pending", "approved", "denied", "expired"], description: "Optional approval status filter." },
+      },
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      await localToolRuntime.initialize();
+      return {
+        ok: true,
+        approvals: localToolRuntime.listApprovals({
+          ...(inputString(args, "tool_id") ? { toolId: inputString(args, "tool_id") } : {}),
+          ...(args.status === "pending" || args.status === "approved" || args.status === "denied" || args.status === "expired"
+            ? { status: args.status }
+            : {}),
+        }),
+      };
+    },
+  });
+
+  tools.steward_resolve_local_tool_approval = dynamicTool({
+    description: "Approve or deny a governed local-tool approval request.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        approval_id: { type: "string", description: "Pending approval id." },
+        decision: { type: "string", enum: ["approve", "deny"], description: "Approval decision." },
+        reason: { type: "string", description: "Optional denial reason." },
+      },
+      required: ["approval_id", "decision"],
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const approvalId = inputString(args, "approval_id");
+      if (!approvalId) {
+        return { ok: false, error: "approval_id is required." };
+      }
+      const decision = inputString(args, "decision");
+      const approval = decision === "approve"
+        ? localToolRuntime.approveApproval(approvalId, "steward")
+        : localToolRuntime.denyApproval(approvalId, "steward", inputString(args, "reason") ?? "");
+      if (!approval) {
+        return { ok: false, error: `Approval ${approvalId} was not pending.` };
+      }
+      return { ok: true, approval };
+    },
+  });
+
+  tools.steward_run_local_tool = dynamicTool({
+    description: "Execute a governed local-tool command on the Steward host. The tool must be registered, approved per policy, and constrained to its managed command set.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        tool_id: { type: "string", description: "Managed local-tool id." },
+        command: { type: "string", description: "Managed command/bin name from the tool manifest." },
+        argv: { type: "array", items: { type: "string" }, description: "Optional argv array." },
+        timeout_ms: { type: "integer", description: "Optional execution timeout in milliseconds." },
+        install_if_missing: { type: "boolean", description: "Install the tool first if it is not installed yet." },
+        health_check_before_run: { type: "boolean", description: "Run the managed health check before execution." },
+        approval_reason: { type: "string", description: "Optional approval context if policy gates execution." },
+      },
+      required: ["tool_id", "command"],
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const toolId = inputString(args, "tool_id");
+      const command = inputString(args, "command");
+      if (!toolId || !command) {
+        return { ok: false, error: "tool_id and command are required." };
+      }
+      await localToolRuntime.initialize();
+      return localToolRuntime.execute({
+        toolId,
+        command,
+        argv: inputStringArray(args, "argv"),
+        timeoutMs: clampInt(args.timeout_ms, 1_000, 15 * 60 * 1000, 60_000),
+        installIfMissing: inputBoolean(args, "install_if_missing"),
+        healthCheckBeforeRun: inputBoolean(args, "health_check_before_run"),
+        approvalReason: inputString(args, "approval_reason"),
+      }, "steward");
+    },
+  });
+
+  tools.steward_list_protocol_sessions = dynamicTool({
+    description: "List governed protocol sessions Steward is managing, including status, arbitration mode, leases, and recent connectivity state.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        device_id: { type: "string", description: "Optional target device id, name, or IP." },
+        protocol: { type: "string", enum: ["mqtt", "websocket"], description: "Optional session protocol filter." },
+        status: { type: "string", enum: ["idle", "connecting", "connected", "blocked", "error", "stopped"], description: "Optional session status filter." },
+      },
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const device = inputString(args, "device_id")
+        ? await resolveDeviceByTarget(inputString(args, "device_id"), options?.attachedDeviceId)
+        : undefined;
+      return {
+        ok: true,
+        sessions: protocolSessionManager.listSessions({
+          ...(device ? { deviceId: device.id } : {}),
+          ...(args.protocol === "mqtt" || args.protocol === "websocket" ? { protocol: args.protocol } : {}),
+          ...(args.status === "idle" || args.status === "connecting" || args.status === "connected" || args.status === "blocked" || args.status === "error" || args.status === "stopped" ? { status: args.status } : {}),
+        }),
+      };
+    },
+  });
+
+  tools.steward_open_mqtt_session = dynamicTool({
+    description: "Open or renew a persistent managed MQTT session with lease arbitration. Use this for telemetry subscriptions that must stay connected across turns.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        device_id: { type: "string", description: "Target device id, name, or IP." },
+        port: { type: "integer", description: "Optional MQTT port override." },
+        secure: { type: "boolean", description: "Optional secure transport override." },
+        use_ssl: { type: "boolean", description: "Alias for secure transport." },
+        scheme: { type: "string", enum: ["mqtt", "mqtts"], description: "Optional MQTT scheme override." },
+        username: { type: "string", description: "Optional MQTT username override." },
+        client_id: { type: "string", description: "Optional MQTT client id override." },
+        subscribe_topics: { type: "array", items: { type: "string" }, description: "Topics to keep subscribed on the managed session." },
+        qos: { type: "integer", description: "Optional MQTT QoS level (0, 1, or 2)." },
+        keepalive_sec: { type: "integer", description: "Optional MQTT keepalive in seconds." },
+        connect_timeout_ms: { type: "integer", description: "Optional MQTT connect timeout." },
+        response_timeout_ms: { type: "integer", description: "Optional response timeout used by the session bootstrap exchange." },
+        insecure_skip_verify: { type: "boolean", description: "Skip MQTT TLS verification when true." },
+        session_id: { type: "string", description: "Optional explicit session id." },
+        session_holder: { type: "string", description: "Optional lease holder label." },
+        purpose: { type: "string", description: "Optional session purpose label." },
+        arbitration_mode: { type: "string", enum: ["shared", "exclusive", "single-connection"], description: "Optional session arbitration mode." },
+        single_connection_hint: { type: "boolean", description: "When true, Steward leases the session as single-connection." },
+      },
+      required: ["device_id"],
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const device = await resolveDeviceByTarget(
+        typeof args.device_id === "string" ? args.device_id : undefined,
+        options?.attachedDeviceId,
+      );
+      if (!device) {
+        return { ok: false, error: "Valid device_id is required." };
+      }
+
+      const brokerRequest = defaultBrokerRequest("mqtt.message", "mqtt", {
+        ...args,
+        session_holder: inputString(args, "session_holder") ?? `steward:${device.id}`,
+        keep_session_open: true,
+      }, device);
+      if (!brokerRequest || brokerRequest.protocol !== "mqtt") {
+        return { ok: false, error: "At least one subscribe_topics entry is required to open a managed MQTT session." };
+      }
+
+      const credentials = stateStore.getDeviceCredentials(device.id)
+        .filter((credential) => credential.protocol === "mqtt")
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      const credential = credentials.find((entry) => entry.status === "validated" || entry.status === "provided") ?? credentials[0];
+      try {
+        const session = await protocolSessionManager.openPersistentMqttSession({
+          device,
+          broker: brokerRequest,
+          credentialId: credential?.id,
+          credentialUsername: brokerRequest.username ?? credential?.accountLabel,
+          holder: brokerRequest.sessionHolder ?? `steward:${device.id}`,
+          purpose: inputString(args, "purpose") ?? `Managed MQTT session for ${device.name}`,
+          sessionId: brokerRequest.sessionId,
+          adapterId: "mqtt",
+          arbitrationMode: brokerRequest.arbitrationMode,
+          singleConnectionHint: brokerRequest.singleConnectionHint,
+        });
+
+        return {
+          ok: true,
+          deviceId: device.id,
+          deviceName: device.name,
+          session,
+        };
+      } catch (error) {
+        return {
+          ok: false,
+          deviceId: device.id,
+          deviceName: device.name,
+          error: error instanceof Error ? error.message : "Failed to open managed MQTT session.",
+        };
+      }
+    },
+  });
+
+  tools.steward_read_protocol_session_messages = dynamicTool({
+    description: "Read recent messages captured by a managed protocol session.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        session_id: { type: "string", description: "Managed protocol session id." },
+        limit: { type: "integer", description: "Optional number of recent messages to return." },
+      },
+      required: ["session_id"],
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const sessionId = inputString(args, "session_id");
+      if (!sessionId) {
+        return { ok: false, error: "session_id is required." };
+      }
+      const session = protocolSessionManager.getSession(sessionId);
+      if (!session) {
+        return { ok: false, error: `Protocol session ${sessionId} not found.` };
+      }
+      const limit = clampInt(args.limit, 1, 2_000, 100);
+      return {
+        ok: true,
+        session,
+        messages: protocolSessionManager.getMessages(sessionId, limit),
+      };
+    },
+  });
+
+  tools.steward_release_protocol_session = dynamicTool({
+    description: "Release the active lease for a managed protocol session so Steward disconnects when policy requires it.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        session_id: { type: "string", description: "Managed protocol session id." },
+        lease_id: { type: "string", description: "Optional explicit lease id. Defaults to the session's active lease." },
+      },
+      required: ["session_id"],
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const sessionId = inputString(args, "session_id");
+      if (!sessionId) {
+        return { ok: false, error: "session_id is required." };
+      }
+      const session = protocolSessionManager.getSession(sessionId);
+      if (!session) {
+        return { ok: false, error: `Protocol session ${sessionId} not found.` };
+      }
+      const leaseId = inputString(args, "lease_id") ?? session.activeLeaseId;
+      if (!leaseId) {
+        return { ok: false, error: `Protocol session ${sessionId} has no active lease.` };
+      }
+      const lease = protocolSessionManager.releaseLease(leaseId);
+      if (!lease) {
+        return { ok: false, error: `Lease ${leaseId} was not active.` };
+      }
+      return {
+        ok: true,
+        lease,
+        session: protocolSessionManager.getSession(sessionId),
+      };
+    },
+  });
+
   tools.steward_deep_probe = dynamicTool({
     description: "Run deep device identification (fingerprint + nmap scripts + browser observation + packet intel).",
     inputSchema: jsonSchema({
@@ -2530,7 +3404,9 @@ export async function buildAdapterSkillTools(
         return { ok: false, error: "Valid device_id is required." };
       }
 
-      const readiness = validateDeviceReadyForContractToolUse(device);
+      const readiness = validateDeviceReadyForExplorationToolUse(device, {
+        allowPreOnboardingExecution: options?.allowPreOnboardingExecution,
+      });
       if (!readiness.ok) {
         return { ok: false, error: readiness.reason, deviceId: device.id };
       }
@@ -2807,7 +3683,7 @@ export async function buildAdapterSkillTools(
   });
 
   tools.steward_complete_onboarding = dynamicTool({
-    description: "Commit onboarding for a device by selecting the management profile, accepted access methods, and the workloads and assurances Steward will own.",
+    description: "Commit onboarding for a device by selecting the adapter, accepted access methods, and any workloads or assurances Steward will own.",
     inputSchema: jsonSchema({
       type: "object",
       properties: {
@@ -2831,7 +3707,7 @@ export async function buildAdapterSkillTools(
         },
         workloads: {
           type: "array",
-          description: "Committed workloads Steward will own after onboarding.",
+          description: "Optional committed workloads Steward will own after onboarding. Omit to use the current draft, or pass an empty array to commit no ongoing responsibilities.",
           items: {
             type: "object",
             properties: {
@@ -2847,7 +3723,7 @@ export async function buildAdapterSkillTools(
         },
         assurances: {
           type: "array",
-          description: "Committed assurances/checks Steward will keep running for the device.",
+          description: "Optional committed assurances/checks Steward will keep running for the device. Omit to use the current draft, or pass an empty array to commit no ongoing monitoring.",
           items: {
             type: "object",
             properties: {
@@ -2959,6 +3835,493 @@ export async function buildAdapterSkillTools(
         summary: snapshot.run?.summary ?? snapshot.draft?.summary ?? `Onboarding completed for ${device.name}.`,
         residualUnknowns: snapshot.draft?.residualUnknowns ?? [],
       };
+    },
+  });
+
+  tools.steward_list_adapters = dynamicTool({
+    description: "List Steward adapter packages, including built-in and custom adapters, their capabilities, status, and tool skills. Use this before creating a new adapter so you can reuse or extend an existing package when possible.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Optional free-text filter matched against adapter id, name, description, author, and skill names.",
+        },
+        provides: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional capability filter such as profile, protocol, discovery, enrichment, or playbooks.",
+        },
+        enabled_only: {
+          type: "boolean",
+          description: "When true, only return enabled adapters.",
+        },
+        tool_query: {
+          type: "string",
+          description: "Optional filter matched against tool skill ids, names, descriptions, and tool call names.",
+        },
+      },
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const query = inputString(args, "query")?.toLowerCase();
+      const provides = (inputStringArray(args, "provides") ?? []).map((value) => value.toLowerCase());
+      const enabledOnly = inputBoolean(args, "enabled_only") === true;
+      const toolQuery = inputString(args, "tool_query")?.toLowerCase();
+
+      const records = adapterRegistry.getAdapterRecords().filter((record) => {
+        if (enabledOnly && !record.enabled) {
+          return false;
+        }
+        if (provides.length > 0 && !provides.every((capability) => record.provides.some((provided) => provided === capability))) {
+          return false;
+        }
+        if (query) {
+          const haystack = [
+            record.id,
+            record.name,
+            record.description,
+            record.author,
+            ...record.toolSkills.map((skill) => skill.id),
+            ...record.toolSkills.map((skill) => skill.name),
+          ].join("\n").toLowerCase();
+          if (!haystack.includes(query)) {
+            return false;
+          }
+        }
+        if (toolQuery) {
+          const matched = record.toolSkills.some((skill) =>
+            [
+              skill.id,
+              skill.name,
+              skill.description,
+              skill.toolCall?.name ?? "",
+            ].join("\n").toLowerCase().includes(toolQuery)
+          );
+          if (!matched) {
+            return false;
+          }
+        }
+        return true;
+      });
+
+      return {
+        ok: true,
+        count: records.length,
+        adapters: records.map((record) => summarizeAdapterRecord(record)),
+      };
+    },
+  });
+
+  tools.steward_get_adapter_package = dynamicTool({
+    description: "Read a full adapter package, including manifest, entry source, and Markdown guidance. Use this to inspect existing adapters before extending them or using one as a template for a new device family.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        adapter_id: {
+          type: "string",
+          description: "Adapter id to inspect.",
+        },
+        include_entry_source: {
+          type: "boolean",
+          description: "When false, omit the adapter entry source code.",
+        },
+        include_markdown: {
+          type: "boolean",
+          description: "When false, omit adapter and tool Markdown guidance files.",
+        },
+      },
+      required: ["adapter_id"],
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const adapterId = inputString(args, "adapter_id");
+      if (!adapterId) {
+        return { ok: false, error: "adapter_id is required." };
+      }
+
+      try {
+        const pkg = adapterRegistry.getAdapterPackageById(adapterId);
+        if (!pkg) {
+          return { ok: false, error: `Adapter ${adapterId} not found.` };
+        }
+
+        return {
+          ok: true,
+          adapterId,
+          ...buildAdapterPackagePayload(pkg, {
+            includeEntrySource: inputBoolean(args, "include_entry_source") !== false,
+            includeMarkdown: inputBoolean(args, "include_markdown") !== false,
+          }),
+        };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : `Failed to load adapter ${adapterId}.`,
+        };
+      }
+    },
+  });
+
+  tools.steward_create_adapter_package = dynamicTool({
+    description: "Create a real adapter package in Steward, backed by the same registry and package files as the adapters page. Use this after research when a device or vendor needs new adapter coverage.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        manifest: {
+          type: "object",
+          description: "Full adapter manifest object.",
+          additionalProperties: true,
+        },
+        entry_source: {
+          type: "string",
+          description: "Complete adapter entry source code.",
+        },
+        adapter_skill_md: {
+          type: "string",
+          description: "Optional adapter-level Markdown guidance.",
+        },
+        tool_skill_md: {
+          type: "object",
+          description: "Optional map of tool skill id to Markdown guidance.",
+          additionalProperties: { type: "string" },
+        },
+        include_package: {
+          type: "boolean",
+          description: "When true, include the resulting adapter package contents in the response.",
+        },
+        include_entry_source: {
+          type: "boolean",
+          description: "When include_package is true, include the entry source code unless false.",
+        },
+        include_markdown: {
+          type: "boolean",
+          description: "When include_package is true, include Markdown guidance unless false.",
+        },
+      },
+      required: ["manifest", "entry_source"],
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      if (!isRecord(args.manifest)) {
+        return { ok: false, error: "manifest must be an object." };
+      }
+      const entrySource = inputString(args, "entry_source");
+      if (!entrySource) {
+        return { ok: false, error: "entry_source is required." };
+      }
+
+      try {
+        const created = await adapterRegistry.createAdapterPackage({
+          manifest: cloneJsonValue(args.manifest),
+          entrySource,
+          adapterSkillMd: inputString(args, "adapter_skill_md"),
+          toolSkillMd: readStringRecord(args.tool_skill_md),
+        }, { actor: "steward" });
+        const pkg = inputBoolean(args, "include_package")
+          ? adapterRegistry.getAdapterPackageById(created.id)
+          : undefined;
+
+        return {
+          ok: true,
+          adapterId: created.id,
+          adapterName: created.name,
+          adapter: summarizeAdapterRecord(created),
+          ...(pkg
+            ? {
+              package: buildAdapterPackagePayload(pkg, {
+                includeEntrySource: inputBoolean(args, "include_entry_source") !== false,
+                includeMarkdown: inputBoolean(args, "include_markdown") !== false,
+              }),
+            }
+            : {}),
+        };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : "Failed to create adapter package.",
+        };
+      }
+    },
+  });
+
+  tools.steward_update_adapter_package = dynamicTool({
+    description: "Update an existing adapter package by replacing its manifest and entry source with a full new package definition.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        adapter_id: {
+          type: "string",
+          description: "Existing adapter id to update.",
+        },
+        manifest: {
+          type: "object",
+          description: "Full replacement adapter manifest object. Its id must match adapter_id.",
+          additionalProperties: true,
+        },
+        entry_source: {
+          type: "string",
+          description: "Complete replacement adapter entry source code.",
+        },
+        adapter_skill_md: {
+          type: "string",
+          description: "Optional replacement adapter-level Markdown guidance.",
+        },
+        tool_skill_md: {
+          type: "object",
+          description: "Optional replacement map of tool skill id to Markdown guidance.",
+          additionalProperties: { type: "string" },
+        },
+        include_package: {
+          type: "boolean",
+          description: "When true, include the resulting adapter package contents in the response.",
+        },
+        include_entry_source: {
+          type: "boolean",
+          description: "When include_package is true, include the entry source code unless false.",
+        },
+        include_markdown: {
+          type: "boolean",
+          description: "When include_package is true, include Markdown guidance unless false.",
+        },
+      },
+      required: ["adapter_id", "manifest", "entry_source"],
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const adapterId = inputString(args, "adapter_id");
+      if (!adapterId) {
+        return { ok: false, error: "adapter_id is required." };
+      }
+      if (!isRecord(args.manifest)) {
+        return { ok: false, error: "manifest must be an object." };
+      }
+      const entrySource = inputString(args, "entry_source");
+      if (!entrySource) {
+        return { ok: false, error: "entry_source is required." };
+      }
+
+      try {
+        const existingPackage = adapterRegistry.getAdapterPackageById(adapterId);
+        if (!existingPackage) {
+          return { ok: false, error: `Adapter ${adapterId} not found.` };
+        }
+
+        const updated = await adapterRegistry.updateAdapterPackage(adapterId, {
+          manifest: cloneJsonValue(args.manifest),
+          entrySource,
+          adapterSkillMd: inputString(args, "adapter_skill_md") ?? existingPackage.adapterSkillMd,
+          toolSkillMd: Object.keys(readStringRecord(args.tool_skill_md)).length > 0
+            ? readStringRecord(args.tool_skill_md)
+            : existingPackage.toolSkillMd,
+        }, { actor: "steward" });
+        const pkg = inputBoolean(args, "include_package")
+          ? adapterRegistry.getAdapterPackageById(updated.id)
+          : undefined;
+
+        return {
+          ok: true,
+          adapterId: updated.id,
+          adapterName: updated.name,
+          adapter: summarizeAdapterRecord(updated),
+          ...(pkg
+            ? {
+              package: buildAdapterPackagePayload(pkg, {
+                includeEntrySource: inputBoolean(args, "include_entry_source") !== false,
+                includeMarkdown: inputBoolean(args, "include_markdown") !== false,
+              }),
+            }
+            : {}),
+        };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : `Failed to update adapter ${adapterId}.`,
+        };
+      }
+    },
+  });
+
+  tools.steward_add_adapter_tool = dynamicTool({
+    description: "Add or update a tool skill on an existing adapter package. Use this when Steward knows the adapter but needs new operational tools for a device family.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        adapter_id: {
+          type: "string",
+          description: "Adapter id to extend.",
+        },
+        skill: {
+          type: "object",
+          description: "Adapter tool skill object to insert or update.",
+          additionalProperties: true,
+        },
+        replace_existing: {
+          type: "boolean",
+          description: "When false, fail if the adapter already has a tool skill with the same id. Defaults to true.",
+        },
+        manifest_patch: {
+          type: "object",
+          description: "Optional shallow manifest patch merged before the tool skill is saved. Do not include id or toolSkills here.",
+          additionalProperties: true,
+        },
+        version: {
+          type: "string",
+          description: "Optional explicit manifest version to write after the patch.",
+        },
+        tool_skill_md: {
+          type: "string",
+          description: "Optional Markdown guidance for this tool skill.",
+        },
+        adapter_skill_md: {
+          type: "string",
+          description: "Optional replacement adapter-level Markdown guidance.",
+        },
+        tool_config: {
+          type: "object",
+          description: "Optional persisted tool config patch for this skill, for example {\"enabled\": true}.",
+          additionalProperties: true,
+        },
+        entry_source_mode: {
+          type: "string",
+          enum: ["preserve", "append", "replace"],
+          description: "How to handle adapter entry source. Defaults to preserve.",
+        },
+        entry_source: {
+          type: "string",
+          description: "Entry source content used when entry_source_mode is append or replace.",
+        },
+        include_package: {
+          type: "boolean",
+          description: "When true, include the resulting adapter package contents in the response.",
+        },
+        include_entry_source: {
+          type: "boolean",
+          description: "When include_package is true, include the entry source code unless false.",
+        },
+        include_markdown: {
+          type: "boolean",
+          description: "When include_package is true, include Markdown guidance unless false.",
+        },
+      },
+      required: ["adapter_id", "skill"],
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const adapterId = inputString(args, "adapter_id");
+      if (!adapterId) {
+        return { ok: false, error: "adapter_id is required." };
+      }
+      if (!isRecord(args.skill)) {
+        return { ok: false, error: "skill must be an object." };
+      }
+
+      const skillId = inputString(args.skill, "id");
+      if (!skillId) {
+        return { ok: false, error: "skill.id is required." };
+      }
+
+      try {
+        const pkg = adapterRegistry.getAdapterPackageById(adapterId);
+        if (!pkg) {
+          return { ok: false, error: `Adapter ${adapterId} not found.` };
+        }
+
+        const manifest = isRecord(pkg.manifest) ? cloneJsonValue(pkg.manifest) : {};
+        const manifestPatch = isRecord(args.manifest_patch) ? cloneJsonValue(args.manifest_patch) : {};
+
+        if (manifestPatch.id !== undefined && String(manifestPatch.id) !== adapterId) {
+          return { ok: false, error: "manifest_patch.id cannot change the adapter id." };
+        }
+        delete manifestPatch.id;
+        delete manifestPatch.toolSkills;
+
+        const replaceExisting = inputBoolean(args, "replace_existing") !== false;
+        const skillInput = cloneJsonValue(args.skill) as unknown as AdapterToolSkill;
+        const { manifest: nextManifestWithSkill, replaced } = upsertAdapterToolSkillInManifest(
+          { ...manifest, ...manifestPatch },
+          skillInput,
+          replaceExisting,
+        );
+
+        const version = inputString(args, "version");
+        const nextManifest = version
+          ? { ...nextManifestWithSkill, version }
+          : nextManifestWithSkill;
+
+        const entrySourceMode = inputString(args, "entry_source_mode") ?? "preserve";
+        const entrySourceInput = inputString(args, "entry_source");
+        let nextEntrySource = pkg.entrySource;
+        if (entrySourceMode === "replace") {
+          if (!entrySourceInput) {
+            return { ok: false, error: "entry_source is required when entry_source_mode is replace." };
+          }
+          nextEntrySource = entrySourceInput;
+        } else if (entrySourceMode === "append") {
+          if (!entrySourceInput) {
+            return { ok: false, error: "entry_source is required when entry_source_mode is append." };
+          }
+          nextEntrySource = `${pkg.entrySource.trimEnd()}\n\n${entrySourceInput.trim()}\n`;
+        } else if (entrySourceMode !== "preserve") {
+          return { ok: false, error: `Unsupported entry_source_mode: ${entrySourceMode}` };
+        }
+
+        const nextToolSkillMd = {
+          ...pkg.toolSkillMd,
+          ...(
+            typeof args.tool_skill_md === "string" && args.tool_skill_md.trim().length > 0
+              ? { [skillId]: args.tool_skill_md }
+              : {}
+          ),
+        };
+
+        const updated = await adapterRegistry.updateAdapterPackage(adapterId, {
+          manifest: nextManifest,
+          entrySource: nextEntrySource,
+          adapterSkillMd: inputString(args, "adapter_skill_md") ?? pkg.adapterSkillMd,
+          toolSkillMd: nextToolSkillMd,
+        }, { actor: "steward" });
+
+        if (isRecord(args.tool_config) && Object.keys(args.tool_config).length > 0) {
+          await adapterRegistry.updateAdapterConfig(adapterId, {
+            toolConfig: {
+              [skillId]: cloneJsonValue(args.tool_config),
+            },
+          }, { actor: "steward" });
+        }
+
+        const refreshedPackage = inputBoolean(args, "include_package")
+          ? adapterRegistry.getAdapterPackageById(adapterId)
+          : undefined;
+
+        return {
+          ok: true,
+          adapterId: updated.id,
+          adapterName: updated.name,
+          skillId,
+          skillName: inputString(args.skill, "name") ?? skillId,
+          replaced,
+          adapter: summarizeAdapterRecord(updated),
+          ...(refreshedPackage
+            ? {
+              package: buildAdapterPackagePayload(refreshedPackage, {
+                includeEntrySource: inputBoolean(args, "include_entry_source") !== false,
+                includeMarkdown: inputBoolean(args, "include_markdown") !== false,
+              }),
+            }
+            : {}),
+        };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : `Failed to extend adapter ${adapterId}.`,
+        };
+      }
     },
   });
 
@@ -3561,8 +4924,47 @@ export async function buildAdapterSkillTools(
     },
   });
 
+  tools.steward_lookup_oui = dynamicTool({
+    description: "Look up a MAC address or OUI prefix in Steward's local IEEE-backed OUI database. Use this instead of public web research for vendor identification from MAC prefixes.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        mac: {
+          type: "string",
+          description: "Full MAC address or OUI prefix such as 00:55:DA or 00:55:DA:52:EE:6B.",
+        },
+      },
+      required: ["mac"],
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const rawMac = typeof args.mac === "string" ? args.mac.trim() : "";
+      if (!rawMac) {
+        return { ok: false, error: "mac is required." };
+      }
+
+      const normalized = rawMac.toLowerCase().replace(/-/g, ":");
+      const prefix = normalized.slice(0, 8);
+      const vendor = lookupOuiVendor(normalized);
+      const stats = getOuiStats();
+
+      return {
+        ok: Boolean(vendor),
+        mac: rawMac,
+        normalizedMac: normalized,
+        prefix,
+        vendor: vendor ?? null,
+        summary: vendor
+          ? `Local OUI database matched ${prefix} to ${vendor}.`
+          : `No vendor match found in the local OUI database for ${prefix}.`,
+        database: stats,
+      };
+    },
+  });
+
   tools.steward_web_research = dynamicTool({
-    description: "Search the public web for current or external information and optionally read result pages. The model should decide breadth/depth per task, then iterate: first pass, inspect findings, optionally read more via read_from_result, or re-run with a refined query.",
+    description: "Search the public web for current or external information and optionally read result pages. Use this for public internet facts, not for MAC/OUI vendor lookups that should use steward_lookup_oui. The model should decide breadth/depth per task, then iterate: first pass, inspect findings, optionally read more via read_from_result, or re-run with a refined query.",
     inputSchema: jsonSchema({
       type: "object",
       properties: {
@@ -4366,6 +5768,247 @@ export async function buildAdapterSkillTools(
         inferredName: Boolean(inferName && !inputName && normalizedName),
         inferredCategory: Boolean(inferCategory && !inputCategory && nextCategory),
         summary: `Updated ${device.name}: ${changedFields.join(", ")}.`,
+      };
+    },
+  });
+
+  tools.steward_manage_credentials = dynamicTool({
+    description: "List, store, update, validate, or delete first-party device credentials in Steward's vault-backed credential store. Use this during onboarding instead of telling the user to save credentials manually.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["list", "store", "update", "validate", "delete"],
+          description: "Credential action to perform.",
+        },
+        device_id: {
+          type: "string",
+          description: "Target device id, name, or IP. Optional when chat is attached to a device.",
+        },
+        credential_id: {
+          type: "string",
+          description: "Existing credential id for update, validate, or delete.",
+        },
+        credential_protocol: {
+          type: "string",
+          description: "Selector for an existing credential protocol when credential_id is not known.",
+        },
+        credential_adapter_id: {
+          type: "string",
+          description: "Optional selector to narrow an existing credential by adapter id.",
+        },
+        match_account_label: {
+          type: "string",
+          description: "Optional selector to narrow an existing credential by current account label.",
+        },
+        protocol: {
+          type: "string",
+          description: "Credential protocol to store, or replacement protocol when updating.",
+        },
+        adapter_id: {
+          type: "string",
+          description: "Optional adapter binding for the stored credential.",
+        },
+        account_label: {
+          type: "string",
+          description: "Optional username or account label. Required for HTTP Basic auth.",
+        },
+        secret: {
+          type: "string",
+          description: "Secret value to store. Never returned by the tool.",
+        },
+        validate_now: {
+          type: "boolean",
+          description: "Validate immediately after storing or updating when true.",
+        },
+        http_auth_mode: {
+          type: "string",
+          enum: [
+            ...HTTP_API_AUTH_MODES,
+            "username-password",
+            "bearer-token",
+            "api-key-header",
+            "query-token",
+            "path-token",
+          ],
+          description: "For http-api credentials: basic, bearer, api-key, query-param, or path-segment. Use path-token for Hue-style /api/<token>/... auth.",
+        },
+        http_header_name: {
+          type: "string",
+          description: "For http-api api-key mode: header name to populate with the stored secret. Defaults to X-API-Key.",
+        },
+        http_query_param_name: {
+          type: "string",
+          description: "For http-api query-param mode: query parameter name to populate with the stored secret. Defaults to api_key.",
+        },
+        http_path_prefix: {
+          type: "string",
+          description: "For http-api path-segment mode: path prefix after which Steward inserts the stored secret. Defaults to /api.",
+        },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const action = inputString(args, "action");
+      if (!action) {
+        return { ok: false, error: "action is required." };
+      }
+
+      const device = await resolveDeviceByTarget(
+        inputString(args, "device_id"),
+        options?.attachedDeviceId,
+      );
+      if (!device) {
+        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+      }
+
+      const readiness = validateDeviceReadyForToolUse(device, {
+        allowPreOnboardingExecution: true,
+      });
+      if (!readiness.ok) {
+        return { ok: false, error: readiness.reason, deviceId: device.id };
+      }
+
+      if (action === "list") {
+        const credentials = stateStore.getDeviceCredentials(device.id).map((credential) =>
+          summarizeCredentialEntry(redactDeviceCredential(credential))
+        );
+        return {
+          ok: true,
+          deviceId: device.id,
+          deviceName: device.name,
+          credentialCount: credentials.length,
+          credentials,
+        };
+      }
+
+      if (action === "store") {
+        const protocolInput = inputString(args, "protocol");
+        if (!protocolInput) {
+          return { ok: false, error: "protocol is required for store." };
+        }
+        const secret = inputString(args, "secret");
+        if (!secret) {
+          return { ok: false, error: "secret is required for store." };
+        }
+
+        const protocol = normalizeCredentialProtocol(protocolInput);
+        const accountLabel = inputString(args, "account_label");
+        const scopeJson = buildCredentialScopeFromArgs(protocol, args);
+        if (protocol === "http-api") {
+          const auth = getHttpApiCredentialAuth(scopeJson);
+          if (auth.mode === "basic" && !accountLabel) {
+            return { ok: false, error: "account_label is required for HTTP Basic auth." };
+          }
+        }
+
+        let credential = await storeDeviceCredential({
+          deviceId: device.id,
+          protocol,
+          secret,
+          adapterId: inputString(args, "adapter_id"),
+          accountLabel,
+          scopeJson,
+        });
+
+        if (inputBoolean(args, "validate_now") === true) {
+          credential = await validateDeviceCredential(device.id, credential.id);
+        }
+
+        const redacted = redactDeviceCredential(credential);
+        return {
+          ok: true,
+          deviceId: device.id,
+          deviceName: device.name,
+          credential: summarizeCredentialEntry(redacted),
+          usageHints: credentialUsageHints(redacted),
+          credentialCount: stateStore.getDeviceCredentials(device.id).length,
+          summary: `Stored ${protocol} credential for ${device.name}.`,
+        };
+      }
+
+      const resolved = resolveCredentialForDevice(device.id, {
+        id: inputString(args, "credential_id"),
+        protocol: inputString(args, "credential_protocol"),
+        accountLabel: inputString(args, "match_account_label"),
+        adapterId: inputString(args, "credential_adapter_id"),
+      });
+      if (!resolved.ok) {
+        return {
+          ok: false,
+          error: resolved.error,
+          matches: resolved.matches,
+          deviceId: device.id,
+          deviceName: device.name,
+        };
+      }
+
+      if (action === "validate") {
+        const credential = await validateDeviceCredential(device.id, resolved.value.id);
+        const redacted = redactDeviceCredential(credential);
+        return {
+          ok: true,
+          deviceId: device.id,
+          deviceName: device.name,
+          credential: summarizeCredentialEntry(redacted),
+          usageHints: credentialUsageHints(redacted),
+          summary: `Validated ${credential.protocol} credential for ${device.name}.`,
+        };
+      }
+
+      if (action === "delete") {
+        const deleted = redactDeviceCredential(resolved.value);
+        await deleteDeviceCredential(device.id, resolved.value.id);
+        return {
+          ok: true,
+          deviceId: device.id,
+          deviceName: device.name,
+          deletedCredential: summarizeCredentialEntry(deleted),
+          credentialCount: stateStore.getDeviceCredentials(device.id).length,
+          summary: `Deleted ${resolved.value.protocol} credential for ${device.name}.`,
+        };
+      }
+
+      if (action !== "update") {
+        return { ok: false, error: `Unsupported action: ${action}` };
+      }
+
+      const replacementProtocolRaw = inputString(args, "protocol");
+      const nextProtocol = normalizeCredentialProtocol(replacementProtocolRaw ?? resolved.value.protocol);
+      const nextAccountLabel = inputString(args, "account_label");
+      const scopeJson = buildCredentialScopeFromArgs(nextProtocol, args, resolved.value.scopeJson);
+      if (nextProtocol === "http-api") {
+        const auth = getHttpApiCredentialAuth(scopeJson);
+        const effectiveAccountLabel = nextAccountLabel ?? resolved.value.accountLabel;
+        if (auth.mode === "basic" && !effectiveAccountLabel?.trim()) {
+          return { ok: false, error: "account_label is required for HTTP Basic auth." };
+        }
+      }
+
+      let updated = await updateDeviceCredential({
+        deviceId: device.id,
+        credentialId: resolved.value.id,
+        protocol: replacementProtocolRaw ? nextProtocol : undefined,
+        secret: inputString(args, "secret"),
+        accountLabel: nextAccountLabel,
+        scopeJson,
+      });
+
+      if (inputBoolean(args, "validate_now") === true) {
+        updated = await validateDeviceCredential(device.id, updated.id);
+      }
+
+      const redacted = redactDeviceCredential(updated);
+      return {
+        ok: true,
+        deviceId: device.id,
+        deviceName: device.name,
+        credential: summarizeCredentialEntry(redacted),
+        usageHints: credentialUsageHints(redacted),
+        summary: `Updated ${updated.protocol} credential for ${device.name}.`,
       };
     },
   });

@@ -44,7 +44,7 @@ export async function POST(
     const available = new Set(snapshot.profiles.map((profile) => profile.profileId));
     const missing = profileIds.filter((profileId) => !available.has(profileId));
     if (missing.length > 0) {
-      return NextResponse.json({ error: `Unknown profile selection: ${missing.join(", ")}` }, { status: 404 });
+      return NextResponse.json({ error: `Unknown adapter selection: ${missing.join(", ")}` }, { status: 404 });
     }
     stateStore.selectDeviceProfiles(id, profileIds);
   }

@@ -120,9 +120,18 @@ function parseMultilineList(value: string): string[] {
   return dedupeStrings(value.split("\n"));
 }
 
-export function DeviceWorkloadsPanel({ deviceId, className }: { deviceId: string; className?: string }) {
+export function DeviceWorkloadsPanel({
+  deviceId,
+  active = true,
+  className,
+}: {
+  deviceId: string;
+  active?: boolean;
+  className?: string;
+}) {
   const [snapshot, setSnapshot] = useState<AdoptionSnapshot | null>(null);
   const [findings, setFindings] = useState<DeviceFinding[]>([]);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -203,13 +212,25 @@ export function DeviceWorkloadsPanel({ deviceId, className }: { deviceId: string
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load Steward contract");
     } finally {
+      setHasLoaded(true);
       setLoading(false);
     }
   }, [deviceId]);
 
   useEffect(() => {
+    setSnapshot(null);
+    setFindings([]);
+    setError(null);
+    setHasLoaded(false);
+    setLoading(true);
+  }, [deviceId]);
+
+  useEffect(() => {
+    if (!active || hasLoaded) {
+      return;
+    }
     void refresh();
-  }, [refresh]);
+  }, [active, hasLoaded, refresh]);
 
   const resetWorkloadForm = useCallback(() => {
     setEditingWorkloadId(null);
@@ -1067,7 +1088,7 @@ export function DeviceWorkloadsPanel({ deviceId, className }: { deviceId: string
             </div>
 
             <p className="text-xs text-muted-foreground">
-              Steward should end onboarding with a committed responsibility contract. Edit responsibilities and checks here when you want deterministic control; use Chat when you want Steward to refine the model agentically.
+              Steward should end onboarding with a committed contract, including an intentionally empty one for access-only devices. Edit responsibilities and checks here when you want deterministic control; use Chat when you want Steward to refine the model agentically.
             </p>
 
             <div className="space-y-2">
@@ -1092,7 +1113,7 @@ export function DeviceWorkloadsPanel({ deviceId, className }: { deviceId: string
 
               {(snapshot?.workloads.length ?? 0) === 0 ? (
                 <p className="text-xs text-muted-foreground">
-                  No responsibilities have been committed yet. Finish onboarding in Chat to convert observed access and profiles into a concrete Steward contract.
+                  No responsibilities have been committed yet. That can be intentional for access-only onboarding, or you can finish onboarding in Chat to convert observed access and adapter candidates into a concrete Steward contract.
                 </p>
               ) : (
                 <div className="space-y-2">

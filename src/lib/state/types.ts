@@ -139,6 +139,9 @@ export type HttpRequestMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 export type MessageSuccessStrategy = "auto" | "transport" | "response" | "expectation";
 export type WebSocketSuccessStrategy = MessageSuccessStrategy;
 export type MqttMessageQos = 0 | 1 | 2;
+export type LocalToolApprovalPolicy = "require_approval" | "allow_safe" | "allow_all" | "deny";
+export type LocalToolRisk = "low" | "medium" | "high";
+export type LocalToolSourceKind = "npm-package" | "binary-path";
 export type WinrmAuthentication =
   | "default"
   | "basic"
@@ -223,6 +226,12 @@ export interface MqttBrokerRequest {
   expectRegex?: string;
   successStrategy?: MessageSuccessStrategy;
   insecureSkipVerify?: boolean;
+  sessionId?: string;
+  sessionHolder?: string;
+  leaseTtlMs?: number;
+  keepSessionOpen?: boolean;
+  arbitrationMode?: ProtocolSessionArbitrationMode;
+  singleConnectionHint?: boolean;
 }
 
 export interface WinrmBrokerRequest {
@@ -236,11 +245,24 @@ export interface WinrmBrokerRequest {
   expectRegex?: string;
 }
 
+export interface LocalToolBrokerRequest {
+  protocol: "local-tool";
+  toolId: string;
+  command: string;
+  argv?: string[];
+  cwd?: string;
+  timeoutMs?: number;
+  installIfMissing?: boolean;
+  healthCheckBeforeRun?: boolean;
+  approvalReason?: string;
+}
+
 export type ProtocolBrokerRequest =
   | SshBrokerRequest
   | HttpBrokerRequest
   | WebSocketBrokerRequest
   | MqttBrokerRequest
+  | LocalToolBrokerRequest
   | WinrmBrokerRequest;
 
 export interface OperationSafetyProfile {
@@ -343,6 +365,7 @@ export interface TlsCertInfo {
 }
 
 export interface HttpInfo {
+  statusCode?: number;
   serverHeader?: string;
   poweredBy?: string;
   title?: string;
@@ -422,6 +445,161 @@ export interface AssuranceRun {
   summary: string;
   evidenceJson: Record<string, unknown>;
   evaluatedAt: string;
+}
+
+export interface LocalToolBinarySpec {
+  name: string;
+  bin: string;
+  versionArgs?: string[];
+  healthCheckArgs?: string[];
+}
+
+export interface LocalToolManifest {
+  id: string;
+  name: string;
+  description: string;
+  sourceKind: LocalToolSourceKind;
+  risk: LocalToolRisk;
+  packageName?: string;
+  packageVersion?: string;
+  binaryPath?: string;
+  docsUrl?: string;
+  capabilities: string[];
+  bins: LocalToolBinarySpec[];
+  runtimeHints?: {
+    interactive?: boolean;
+    requiresNetwork?: boolean;
+    singleConnectionRisk?: boolean;
+    vendor?: string;
+  };
+}
+
+export type LocalToolStatus =
+  | "not_installed"
+  | "installing"
+  | "installed"
+  | "error"
+  | "blocked"
+  | "disabled";
+
+export type LocalToolHealthStatus = "unknown" | "healthy" | "degraded" | "unavailable";
+
+export interface LocalToolRecord {
+  id: string;
+  manifest: LocalToolManifest;
+  enabled: boolean;
+  status: LocalToolStatus;
+  healthStatus: LocalToolHealthStatus;
+  installDir?: string;
+  binPaths: Record<string, string>;
+  installedVersion?: string;
+  lastInstalledAt?: string;
+  lastCheckedAt?: string;
+  lastRunAt?: string;
+  approvedAt?: string;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type LocalToolApprovalAction = "install" | "upgrade" | "execute";
+export type LocalToolApprovalStatus = "pending" | "approved" | "denied" | "expired";
+
+export interface LocalToolApproval {
+  id: string;
+  toolId: string;
+  action: LocalToolApprovalAction;
+  status: LocalToolApprovalStatus;
+  requestedBy: "steward" | "user";
+  requestedAt: string;
+  expiresAt?: string;
+  reason: string;
+  requestJson: Record<string, unknown>;
+  approvedBy?: string;
+  approvedAt?: string;
+  deniedBy?: string;
+  deniedAt?: string;
+  denialReason?: string;
+  decisionJson: Record<string, unknown>;
+}
+
+export interface LocalToolExecutionRequest {
+  toolId: string;
+  command: string;
+  argv?: string[];
+  cwd?: string;
+  timeoutMs?: number;
+  installIfMissing?: boolean;
+  healthCheckBeforeRun?: boolean;
+  approvalReason?: string;
+}
+
+export interface LocalToolExecutionResult {
+  ok: boolean;
+  toolId: string;
+  command: string;
+  argv: string[];
+  code: number;
+  stdout: string;
+  stderr: string;
+  summary: string;
+  binPath?: string;
+  durationMs: number;
+}
+
+export type ProtocolSessionProtocol = "mqtt" | "websocket";
+export type ProtocolSessionDesiredState = "active" | "idle" | "stopped";
+export type ProtocolSessionStatus = "idle" | "connecting" | "connected" | "blocked" | "error" | "stopped";
+export type ProtocolSessionArbitrationMode = "shared" | "exclusive" | "single-connection";
+export type ProtocolSessionLeaseMode = "observe" | "exchange" | "command";
+export type ProtocolSessionLeaseStatus = "pending" | "active" | "released" | "expired" | "rejected";
+export type ProtocolSessionMessageDirection = "inbound" | "outbound" | "system";
+
+export interface ProtocolSessionRecord {
+  id: string;
+  deviceId: string;
+  protocol: ProtocolSessionProtocol;
+  adapterId?: string;
+  desiredState: ProtocolSessionDesiredState;
+  status: ProtocolSessionStatus;
+  arbitrationMode: ProtocolSessionArbitrationMode;
+  singleConnectionHint: boolean;
+  keepaliveAllowed: boolean;
+  summary?: string;
+  configJson: Record<string, unknown>;
+  activeLeaseId?: string;
+  lastConnectedAt?: string;
+  lastDisconnectedAt?: string;
+  lastMessageAt?: string;
+  lastError?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProtocolSessionLease {
+  id: string;
+  sessionId: string;
+  holder: string;
+  purpose: string;
+  mode: ProtocolSessionLeaseMode;
+  status: ProtocolSessionLeaseStatus;
+  exclusive: boolean;
+  requestedAt: string;
+  grantedAt?: string;
+  releasedAt?: string;
+  expiresAt: string;
+  metadataJson: Record<string, unknown>;
+}
+
+export interface ProtocolSessionMessage {
+  id: string;
+  sessionId: string;
+  deviceId: string;
+  direction: ProtocolSessionMessageDirection;
+  channel: string;
+  payload: string;
+  metadataJson: Record<string, unknown>;
+  observedAt: string;
 }
 
 export interface Device {
@@ -900,6 +1078,17 @@ export interface RuntimeSettings {
   securityScannerAlertsEnabled: boolean;
   serviceContractScannerAlertsEnabled: boolean;
   ignoredIncidentTypes: string[];
+  localToolInstallPolicy: LocalToolApprovalPolicy;
+  localToolExecutionPolicy: LocalToolApprovalPolicy;
+  localToolApprovalTtlMs: number;
+  localToolHealthCheckIntervalMs: number;
+  localToolAutoInstallBuiltins: boolean;
+  protocolSessionSweepIntervalMs: number;
+  protocolSessionDefaultLeaseTtlMs: number;
+  protocolSessionMaxLeaseTtlMs: number;
+  protocolSessionMessageRetentionLimit: number;
+  protocolSessionReconnectBaseMs: number;
+  protocolSessionReconnectMaxMs: number;
 }
 
 export type UserRole = "Owner" | "Admin" | "Operator" | "Auditor" | "ReadOnly";
@@ -1208,6 +1397,10 @@ export interface StewardState {
   maintenanceWindows: MaintenanceWindow[];
   playbookRuns: PlaybookRun[];
   dailyDigests: DailyDigest[];
+  localTools: LocalToolRecord[];
+  localToolApprovals: LocalToolApproval[];
+  protocolSessions: ProtocolSessionRecord[];
+  protocolSessionLeases: ProtocolSessionLease[];
   systemSettings: SystemSettings;
   authSettings: AuthSettings;
 }

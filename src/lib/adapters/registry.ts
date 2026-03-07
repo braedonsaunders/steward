@@ -50,6 +50,10 @@ export interface AdapterPackageMutation {
   toolSkillMd?: Record<string, string>;
 }
 
+interface AdapterMutationOptions {
+  actor?: "user" | "steward";
+}
+
 function adaptersDir(): string {
   const dir = path.join(getDataDir(), "adapters");
   mkdirSync(dir, { recursive: true });
@@ -112,6 +116,10 @@ function slugify(value: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
   return normalized || "adapter";
+}
+
+function normalizeMutationActor(actor: "user" | "steward" | undefined): "user" | "steward" {
+  return actor === "steward" ? "steward" : "user";
 }
 
 function safeReadMarkdownAttachment(
@@ -908,6 +916,7 @@ class AdapterRegistry {
 
   async createAdapterPackage(
     mutation: AdapterPackageMutation,
+    options?: AdapterMutationOptions,
   ): Promise<AdapterRecord> {
     const manifest = parseManifestMutation(mutation.manifest);
     if (!manifest.id) {
@@ -945,7 +954,7 @@ class AdapterRegistry {
     }
 
     await stateStore.addAction({
-      actor: "user",
+      actor: normalizeMutationActor(options?.actor),
       kind: "config",
       message: `Created adapter: ${created.name}`,
       context: { adapterId: created.id },
@@ -957,6 +966,7 @@ class AdapterRegistry {
   async updateAdapterPackage(
     id: string,
     mutation: AdapterPackageMutation,
+    options?: AdapterMutationOptions,
   ): Promise<AdapterRecord> {
     const db = getDb();
     const row = db.prepare("SELECT * FROM adapters WHERE id = ?").get(id) as Record<string, unknown> | undefined;
@@ -986,7 +996,7 @@ class AdapterRegistry {
     }
 
     await stateStore.addAction({
-      actor: "user",
+      actor: normalizeMutationActor(options?.actor),
       kind: "config",
       message: `Updated adapter package: ${updated.name}`,
       context: { adapterId: updated.id },
@@ -995,7 +1005,7 @@ class AdapterRegistry {
     return updated;
   }
 
-  async deleteAdapterPackage(id: string): Promise<void> {
+  async deleteAdapterPackage(id: string, options?: AdapterMutationOptions): Promise<void> {
     if (BUILTIN_ADAPTER_IDS.has(id)) {
       throw new Error("Built-in adapters cannot be deleted");
     }
@@ -1017,14 +1027,14 @@ class AdapterRegistry {
     await this.reload();
 
     await stateStore.addAction({
-      actor: "user",
+      actor: normalizeMutationActor(options?.actor),
       kind: "config",
       message: `Deleted adapter package: ${record.name}`,
       context: { adapterId: id },
     });
   }
 
-  async enableAdapter(id: string): Promise<void> {
+  async enableAdapter(id: string, options?: AdapterMutationOptions): Promise<void> {
     const db = getDb();
     const now = new Date().toISOString();
     db.prepare("UPDATE adapters SET enabled = 1, updatedAt = ? WHERE id = ?").run(now, id);
@@ -1058,14 +1068,14 @@ class AdapterRegistry {
     this.rebuildPlaybookCache();
 
     await stateStore.addAction({
-      actor: "user",
+      actor: normalizeMutationActor(options?.actor),
       kind: "config",
       message: `Enabled adapter: ${manifest.name}`,
       context: { adapterId: id },
     });
   }
 
-  async disableAdapter(id: string): Promise<void> {
+  async disableAdapter(id: string, options?: AdapterMutationOptions): Promise<void> {
     const db = getDb();
     const now = new Date().toISOString();
 
@@ -1083,7 +1093,7 @@ class AdapterRegistry {
     db.prepare("UPDATE adapters SET enabled = 0, status = 'disabled', error = NULL, updatedAt = ? WHERE id = ?").run(now, id);
 
     await stateStore.addAction({
-      actor: "user",
+      actor: normalizeMutationActor(options?.actor),
       kind: "config",
       message: `Disabled adapter: ${entry?.manifest.name ?? id}`,
       context: { adapterId: id },
@@ -1098,6 +1108,7 @@ class AdapterRegistry {
       toolConfig?: Record<string, unknown>;
       toolMode?: "merge" | "replace";
     },
+    options?: AdapterMutationOptions,
   ): Promise<AdapterRecord> {
     const db = getDb();
     const row = db.prepare("SELECT * FROM adapters WHERE id = ?").get(id) as Record<string, unknown> | undefined;
@@ -1199,7 +1210,7 @@ class AdapterRegistry {
     }
 
     await stateStore.addAction({
-      actor: "user",
+      actor: normalizeMutationActor(options?.actor),
       kind: "config",
       message: `Updated adapter configuration: ${manifest.name}`,
       context: {

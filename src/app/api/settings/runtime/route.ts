@@ -55,6 +55,17 @@ const schema = z.object({
   securityScannerAlertsEnabled: z.boolean(),
   serviceContractScannerAlertsEnabled: z.boolean(),
   ignoredIncidentTypes: z.array(z.string().trim().min(1).max(120)).max(100),
+  localToolInstallPolicy: z.enum(["require_approval", "allow_safe", "allow_all", "deny"]),
+  localToolExecutionPolicy: z.enum(["require_approval", "allow_safe", "allow_all", "deny"]),
+  localToolApprovalTtlMs: z.number().int().min(60_000).max(24 * 60 * 60 * 1000),
+  localToolHealthCheckIntervalMs: z.number().int().min(60_000).max(30 * 24 * 60 * 60 * 1000),
+  localToolAutoInstallBuiltins: z.boolean(),
+  protocolSessionSweepIntervalMs: z.number().int().min(1_000).max(10 * 60 * 1000),
+  protocolSessionDefaultLeaseTtlMs: z.number().int().min(10_000).max(24 * 60 * 60 * 1000),
+  protocolSessionMaxLeaseTtlMs: z.number().int().min(10_000).max(7 * 24 * 60 * 60 * 1000),
+  protocolSessionMessageRetentionLimit: z.number().int().min(10).max(10_000),
+  protocolSessionReconnectBaseMs: z.number().int().min(100).max(5 * 60 * 1000),
+  protocolSessionReconnectMaxMs: z.number().int().min(500).max(30 * 60 * 1000),
 });
 
 export async function GET(request: NextRequest) {
@@ -114,6 +125,18 @@ export async function POST(request: NextRequest) {
   if (data.approvalTtlClassDMs > data.approvalTtlClassCMs || data.approvalTtlClassCMs > data.approvalTtlClassBMs) {
     return NextResponse.json(
       { error: "Approval TTLs must satisfy D <= C <= B" },
+      { status: 400 },
+    );
+  }
+  if (data.protocolSessionDefaultLeaseTtlMs > data.protocolSessionMaxLeaseTtlMs) {
+    return NextResponse.json(
+      { error: "protocolSessionDefaultLeaseTtlMs must be less than or equal to protocolSessionMaxLeaseTtlMs" },
+      { status: 400 },
+    );
+  }
+  if (data.protocolSessionReconnectBaseMs > data.protocolSessionReconnectMaxMs) {
+    return NextResponse.json(
+      { error: "protocolSessionReconnectBaseMs must be less than or equal to protocolSessionReconnectMaxMs" },
       { status: 400 },
     );
   }

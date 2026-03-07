@@ -163,6 +163,7 @@ const grabHttpInfo = (ip: string, port: number, secure: boolean, timeoutMs = 300
             body.match(/content="([^"]{1,200})"[^>]*name="generator"/i) ??
             body.match(/name="generator"[^>]*content="([^"]{1,200})"/i);
           settle({
+            statusCode: res.statusCode ?? undefined,
             serverHeader: serverHeader || undefined,
             poweredBy: poweredBy || undefined,
             title: titleMatch?.[1]?.trim(),
@@ -1002,6 +1003,7 @@ export async function fingerprintDevice(
         details: {
           port,
           secure,
+          statusCode: info.statusCode,
           serverHeader: info.serverHeader,
           title: info.title,
           poweredBy: info.poweredBy,

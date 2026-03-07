@@ -1,0 +1,2 @@
+[   11273ms] [ERROR] The Content Security Policy directive 'frame-ancestors' is ignored when delivered via a <meta> element. @ about:srcdoc:0
+[   11280ms] Invalid or unexpected token

@@ -1,0 +1,35 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1600" y2="900" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#07111E"/>
+      <stop offset="1" stop-color="#16354D"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="900" rx="32" fill="url(#bg)"/>
+  <rect x="72" y="72" width="1456" height="756" rx="28" fill="#0A1626" stroke="#31516E"/>
+  <text x="120" y="156" fill="#F2F8FF" font-size="42" font-family="Arial, Helvetica, sans-serif" font-weight="700">Topology placeholder</text>
+  <text x="120" y="202" fill="#9EC3E1" font-size="22" font-family="Arial, Helvetica, sans-serif">Replace with the real network map and dependency overlays.</text>
+  <line x1="470" y1="260" x2="780" y2="430" stroke="#4E7BA3" stroke-width="6"/>
+  <line x1="470" y1="260" x2="780" y2="630" stroke="#4E7BA3" stroke-width="6"/>
+  <line x1="1110" y1="260" x2="780" y2="430" stroke="#4E7BA3" stroke-width="6"/>
+  <line x1="1110" y1="260" x2="780" y2="630" stroke="#4E7BA3" stroke-width="6"/>
+  <line x1="780" y1="430" x2="780" y2="630" stroke="#4E7BA3" stroke-width="6"/>
+  <rect x="340" y="188" width="260" height="124" rx="24" fill="#173754"/>
+  <rect x="980" y="188" width="260" height="124" rx="24" fill="#173754"/>
+  <rect x="650" y="370" width="260" height="124" rx="24" fill="#173754"/>
+  <rect x="650" y="570" width="260" height="124" rx="24" fill="#173754"/>
+  <rect x="192" y="610" width="280" height="124" rx="24" fill="#123149"/>
+  <rect x="1128" y="610" width="280" height="124" rx="24" fill="#123149"/>
+  <text x="396" y="240" fill="#A3C7E5" font-size="18" font-family="Arial, Helvetica, sans-serif">Edge</text>
+  <text x="396" y="282" fill="#F8FBFF" font-size="34" font-family="Arial, Helvetica, sans-serif" font-weight="700">pfSense</text>
+  <text x="1036" y="240" fill="#A3C7E5" font-size="18" font-family="Arial, Helvetica, sans-serif">Wireless</text>
+  <text x="1036" y="282" fill="#F8FBFF" font-size="34" font-family="Arial, Helvetica, sans-serif" font-weight="700">AP cluster</text>
+  <text x="706" y="422" fill="#A3C7E5" font-size="18" font-family="Arial, Helvetica, sans-serif">Core</text>
+  <text x="706" y="464" fill="#F8FBFF" font-size="34" font-family="Arial, Helvetica, sans-serif" font-weight="700">switch-01</text>
+  <text x="706" y="622" fill="#A3C7E5" font-size="18" font-family="Arial, Helvetica, sans-serif">Storage</text>
+  <text x="706" y="664" fill="#F8FBFF" font-size="34" font-family="Arial, Helvetica, sans-serif" font-weight="700">nas-01</text>
+  <text x="250" y="662" fill="#A3C7E5" font-size="18" font-family="Arial, Helvetica, sans-serif">Workloads</text>
+  <text x="250" y="704" fill="#F8FBFF" font-size="34" font-family="Arial, Helvetica, sans-serif" font-weight="700">vm-host-02</text>
+  <text x="1186" y="662" fill="#A3C7E5" font-size="18" font-family="Arial, Helvetica, sans-serif">Service</text>
+  <text x="1186" y="704" fill="#F8FBFF" font-size="34" font-family="Arial, Helvetica, sans-serif" font-weight="700">gitlab.internal</text>
+</svg>

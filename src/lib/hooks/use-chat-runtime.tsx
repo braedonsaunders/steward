@@ -98,6 +98,23 @@ function mergeToolEvent(events: ChatToolEvent[] | undefined, incoming: ChatToolE
   return next;
 }
 
+function isInterruptedMessage(message: ChatMessageRecord | undefined): boolean {
+  return Boolean(message?.metadata?.interrupted);
+}
+
+function isTerminalAssistantMessage(
+  message: ChatMessageRecord | undefined,
+  options?: { allowInterrupted?: boolean },
+): boolean {
+  if (!message || message.role !== "assistant" || message.streaming) {
+    return false;
+  }
+  if (message.error) {
+    return true;
+  }
+  return options?.allowInterrupted ? true : !isInterruptedMessage(message);
+}
+
 export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
   const [sessions, setSessions] = useState<ChatSessionRecord[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
@@ -110,8 +127,10 @@ export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
 
   const sessionsRef = useRef<ChatSessionRecord[]>([]);
   const freshSessionIdsRef = useRef<Set<string>>(new Set());
+  const refreshSessionsRequestIdRef = useRef(0);
   const activeStreamAbortRef = useRef<AbortController | null>(null);
   const activeStreamSessionIdRef = useRef<string | null>(null);
+  const manuallyStoppedSessionIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     sessionsRef.current = sessions;
@@ -146,13 +165,19 @@ export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
   );
 
   const refreshSessions = useCallback(async () => {
+    const requestId = refreshSessionsRequestIdRef.current + 1;
+    refreshSessionsRequestIdRef.current = requestId;
     setSessionsLoading(true);
     try {
       const res = await fetch("/api/chat/sessions", withClientApiToken({ cache: "no-store" }));
       const data = (await res.json()) as ChatSessionRecord[];
-      setSessions(data);
+      if (refreshSessionsRequestIdRef.current === requestId) {
+        setSessions(data);
+      }
     } finally {
-      setSessionsLoading(false);
+      if (refreshSessionsRequestIdRef.current === requestId) {
+        setSessionsLoading(false);
+      }
     }
   }, []);
 
@@ -171,6 +196,7 @@ export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
         const data = (await res.json()) as ChatSessionRecord & { messages: ChatMessageRecord[] };
         const nextMessages = data.messages ?? [];
         const { messages: _messages, ...session } = data;
+        void _messages;
 
         upsertSessionRecord(session);
         setMessagesBySession((prev) => ({
@@ -246,6 +272,14 @@ export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
     if (sessionId && activeSessionId !== sessionId) {
       return;
     }
+    manuallyStoppedSessionIdsRef.current.add(activeSessionId);
+    void fetch("/api/chat/cancel", withClientApiToken({
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionId: activeSessionId }),
+    })).catch(() => {
+      // Local abort still stops the client stream even if the cancel request fails.
+    });
     activeStreamAbortRef.current?.abort();
   }, []);
 
@@ -342,11 +376,15 @@ export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
   );
 
   const reconcileSessionMessages = useCallback(
-    async (sessionId: string, attempts: number): Promise<ChatMessageRecord[]> => {
+    async (
+      sessionId: string,
+      attempts: number,
+      options?: { allowInterrupted?: boolean },
+    ): Promise<ChatMessageRecord[]> => {
       let syncedMessages: ChatMessageRecord[] = [];
       for (let attempt = 0; attempt < attempts; attempt += 1) {
         syncedMessages = await loadSessionMessages(sessionId, { silent: true });
-        if (syncedMessages.at(-1)?.role === "assistant") {
+        if (isTerminalAssistantMessage(syncedMessages.at(-1), options)) {
           return syncedMessages;
         }
         if (attempt < attempts - 1) {
@@ -516,12 +554,14 @@ export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
         ),
       );
 
+      const manuallyStopped = manuallyStoppedSessionIdsRef.current.delete(sessionId);
       const syncedMessages = await reconcileSessionMessages(
         sessionId,
         streamResult.sawTerminalEvent ? 2 : 5,
+        { allowInterrupted: manuallyStopped },
       );
 
-      if (!streamResult.sawTerminalEvent && syncedMessages.at(-1)?.role !== "assistant") {
+      if (!streamResult.sawTerminalEvent && !isTerminalAssistantMessage(syncedMessages.at(-1), { allowInterrupted: manuallyStopped })) {
         setSessionMessages(sessionId, () => [
           ...syncedMessages,
           {
@@ -563,6 +603,14 @@ export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
       return { ok: true, sessionId };
     } catch (error) {
       if (isAbortError(error)) {
+        const manuallyStopped = manuallyStoppedSessionIdsRef.current.delete(sessionId);
+        if (!manuallyStopped) {
+          const syncedMessages = await reconcileSessionMessages(sessionId, 6);
+          if (isTerminalAssistantMessage(syncedMessages.at(-1))) {
+            return { ok: true, sessionId };
+          }
+        }
+
         setSessionMessages(sessionId, (prev) =>
           prev.map((message) =>
             message.id === assistantId
@@ -581,6 +629,11 @@ export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
         return { ok: false, sessionId };
       }
 
+      const syncedMessages = await reconcileSessionMessages(sessionId, 6);
+      if (isTerminalAssistantMessage(syncedMessages.at(-1))) {
+        return { ok: true, sessionId };
+      }
+
       setSessionMessages(sessionId, (prev) =>
         prev.map((message) =>
           message.id === assistantId
@@ -595,6 +648,7 @@ export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
       );
       return { ok: false, sessionId };
     } finally {
+      manuallyStoppedSessionIdsRef.current.delete(sessionId);
       if (activeStreamAbortRef.current === abortController) {
         activeStreamAbortRef.current = null;
       }

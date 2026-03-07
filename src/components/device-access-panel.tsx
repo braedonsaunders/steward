@@ -54,14 +54,17 @@ function accessStatusVariant(status: AccessMethod["status"]): "default" | "secon
 
 export function DeviceAccessPanel({
   deviceId,
+  active = true,
   className,
   section = "all",
 }: {
   deviceId: string;
+  active?: boolean;
   className?: string;
   section?: DeviceAccessSection;
 }) {
   const [snapshot, setSnapshot] = useState<AdoptionSnapshot | null>(null);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [credentialValidating, setCredentialValidating] = useState<Record<string, boolean>>({});
@@ -88,13 +91,24 @@ export function DeviceAccessPanel({
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load device access");
     } finally {
+      setHasLoaded(true);
       setLoading(false);
     }
   }, [deviceId]);
 
   useEffect(() => {
+    setSnapshot(null);
+    setError(null);
+    setHasLoaded(false);
+    setLoading(true);
+  }, [deviceId]);
+
+  useEffect(() => {
+    if (!active || hasLoaded) {
+      return;
+    }
     void refresh();
-  }, [refresh]);
+  }, [active, hasLoaded, refresh]);
 
   const openCreateDialog = () => {
     setEditingCredentialId(null);
@@ -205,11 +219,11 @@ export function DeviceAccessPanel({
       }));
       const data = (await res.json()) as { error?: string };
       if (!res.ok) {
-        throw new Error(data.error ?? "Failed to select management profile");
+        throw new Error(data.error ?? "Failed to select adapter");
       }
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to select management profile");
+      setError(err instanceof Error ? err.message : "Failed to select adapter");
     } finally {
       setSelectingProfileId(null);
     }
@@ -220,7 +234,7 @@ export function DeviceAccessPanel({
       <CardHeader>
         <div className="flex items-center gap-2">
           <Puzzle className="size-4 text-muted-foreground" />
-          <CardTitle className="text-base">Management Profiles</CardTitle>
+          <CardTitle className="text-base">Adapters</CardTitle>
           <div className="ml-auto flex items-center gap-2">
             {(snapshot?.profiles.length ?? 0) > 0 ? (
               <Badge variant="secondary" className="tabular-nums">
@@ -233,13 +247,13 @@ export function DeviceAccessPanel({
             </Button>
           </div>
         </div>
-        <CardDescription>First-party or fallback profiles Steward can credibly use to manage this device</CardDescription>
+        <CardDescription>First-party or fallback adapters Steward can credibly use to manage this device</CardDescription>
       </CardHeader>
       <CardContent className="min-h-0 flex-1">
         {(snapshot?.profiles.length ?? 0) === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 py-8 text-center">
             <Puzzle className="size-8 text-muted-foreground/40" />
-            <p className="text-sm text-muted-foreground">No management profiles matched this device yet</p>
+            <p className="text-sm text-muted-foreground">No adapters matched this device yet</p>
           </div>
         ) : (
           <ul className="h-full space-y-2 overflow-auto pr-1">

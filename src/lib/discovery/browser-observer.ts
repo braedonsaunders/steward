@@ -20,14 +20,16 @@ interface BrowserProbeResult {
     collectedAt: string;
     endpoints: Array<{
       url: string;
-      finalUrl?: string;
-      title?: string;
-      statusCode?: number;
-      hasLoginForm: boolean;
-      frameworkHints: string[];
-      vendorHints: string[];
-      screenshotPath?: string;
-      faviconHash?: string;
+    finalUrl?: string;
+    title?: string;
+    statusCode?: number;
+    serverHeader?: string;
+    poweredBy?: string;
+    hasLoginForm: boolean;
+    frameworkHints: string[];
+    vendorHints: string[];
+    screenshotPath?: string;
+    faviconHash?: string;
     }>;
   };
 }
@@ -195,6 +197,8 @@ const runFallbackProbe = async (
   url: string;
   finalUrl?: string;
   statusCode?: number;
+  serverHeader?: string;
+  poweredBy?: string;
   title?: string;
   hasLoginForm: boolean;
   frameworkHints: string[];
@@ -205,12 +209,16 @@ const runFallbackProbe = async (
     const response = await fetchWithTimeout(url, timeoutMs);
     const statusCode = response.status;
     const finalUrl = response.url;
+    const serverHeader = response.headers.get("server") ?? undefined;
+    const poweredBy = response.headers.get("x-powered-by") ?? undefined;
     const html = (await response.text()).slice(0, 200_000);
     const title = htmlTitle(html);
     return {
       url,
       finalUrl,
       statusCode,
+      serverHeader,
+      poweredBy,
       title,
       hasLoginForm: hasLoginForm(html),
       frameworkHints: frameworkHintsFromHtml(html),
@@ -348,6 +356,9 @@ export async function observeBrowserSurfaces(
             name: target.secure ? "https" : "http",
             secure: target.secure,
             httpInfo: {
+              statusCode: details.statusCode,
+              serverHeader: details.serverHeader,
+              poweredBy: details.poweredBy,
               title: details.title,
             },
             product: details.vendorHints[0],

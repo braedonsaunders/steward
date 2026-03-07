@@ -17,12 +17,14 @@ import {
 import { createApproval, expireStale } from "@/lib/approvals/queue";
 import { adapterRegistry } from "@/lib/adapters/registry";
 import { ensureDigestScheduler, stopDigestScheduler } from "@/lib/digest/scheduler";
+import { localToolRuntime } from "@/lib/local-tools/runtime";
 import { getAdoptionRecord, getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
 import {
   evaluateServiceContract,
   getRequiredProtocolsForServiceContract,
   isServiceContractDue,
 } from "@/lib/monitoring/contracts";
+import { protocolSessionManager } from "@/lib/protocol-sessions/manager";
 import { graphStore } from "@/lib/state/graph";
 import { stateStore } from "@/lib/state/store";
 import { runShell } from "@/lib/utils/shell";
@@ -1435,6 +1437,9 @@ const actPhase = async (devices: Device[]): Promise<{
 
   // Expire stale approvals
   expireStale();
+  localToolRuntime.expireStaleApprovals();
+  await localToolRuntime.runScheduledHealthChecks();
+  await protocolSessionManager.sweep();
   await stateStore.setRecommendations(recommendations.slice(0, 400));
 
   return {
@@ -1473,6 +1478,8 @@ const learnPhase = async (devices: Device[]): Promise<void> => {
 let loopHandle: NodeJS.Timeout | undefined;
 let loopRunning = false;
 let currentIntervalMs: number | undefined;
+let sessionSweepHandle: NodeJS.Timeout | undefined;
+let currentSessionSweepIntervalMs: number | undefined;
 
 export const runStewardCycle = async (
   trigger: "manual" | "interval" = "manual",
@@ -1584,14 +1591,20 @@ export const runStewardCycle = async (
 
 export const ensureStewardLoop = (): void => {
   ensureDigestScheduler();
-  const intervalMs = stateStore.getRuntimeSettings().agentIntervalMs;
-  if (loopHandle && currentIntervalMs === intervalMs) {
+  const runtimeSettings = stateStore.getRuntimeSettings();
+  const intervalMs = runtimeSettings.agentIntervalMs;
+  const sessionSweepIntervalMs = runtimeSettings.protocolSessionSweepIntervalMs;
+  if (loopHandle && currentIntervalMs === intervalMs && sessionSweepHandle && currentSessionSweepIntervalMs === sessionSweepIntervalMs) {
     return;
   }
 
   if (loopHandle) {
     clearInterval(loopHandle);
     loopHandle = undefined;
+  }
+  if (sessionSweepHandle) {
+    clearInterval(sessionSweepHandle);
+    sessionSweepHandle = undefined;
   }
 
   currentIntervalMs = intervalMs;
@@ -1600,17 +1613,28 @@ export const ensureStewardLoop = (): void => {
       console.error("Steward interval cycle failed", error);
     });
   }, intervalMs);
+
+  currentSessionSweepIntervalMs = sessionSweepIntervalMs;
+  sessionSweepHandle = setInterval(() => {
+    void protocolSessionManager.sweep().catch((error) => {
+      console.error("Protocol session sweep failed", error);
+    });
+    localToolRuntime.expireStaleApprovals();
+  }, sessionSweepIntervalMs);
 };
 
 export const stopStewardLoop = (): void => {
   stopDigestScheduler();
-  if (!loopHandle) {
-    return;
+  if (loopHandle) {
+    clearInterval(loopHandle);
+    loopHandle = undefined;
+    currentIntervalMs = undefined;
   }
-
-  clearInterval(loopHandle);
-  loopHandle = undefined;
-  currentIntervalMs = undefined;
+  if (sessionSweepHandle) {
+    clearInterval(sessionSweepHandle);
+    sessionSweepHandle = undefined;
+    currentSessionSweepIntervalMs = undefined;
+  }
 };
 
 export const isStewardCycleRunning = (): boolean => loopRunning;

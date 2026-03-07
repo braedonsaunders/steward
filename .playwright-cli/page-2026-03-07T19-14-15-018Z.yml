@@ -1,0 +1,196 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - img [ref=e7]
+          - generic [ref=e9]:
+            - heading "Steward" [level=1] [ref=e10]
+            - paragraph [ref=e11]: Network Operations
+          - button [ref=e12]:
+            - img [ref=e13]
+        - navigation [ref=e19]:
+          - generic [ref=e20]:
+            - paragraph [ref=e21]: Overview
+            - link "Dashboard" [ref=e23] [cursor=pointer]:
+              - /url: /
+              - generic [ref=e24]:
+                - img [ref=e25]
+                - generic [ref=e30]: Dashboard
+            - link "Digest" [ref=e32] [cursor=pointer]:
+              - /url: /digest
+              - generic [ref=e33]:
+                - img [ref=e34]
+                - generic [ref=e37]: Digest
+          - generic [ref=e38]:
+            - paragraph [ref=e39]: Network
+            - link "Devices" [ref=e41] [cursor=pointer]:
+              - /url: /devices
+              - generic [ref=e43]:
+                - img [ref=e44]
+                - generic [ref=e47]: Devices
+            - link "Discovery" [ref=e49] [cursor=pointer]:
+              - /url: /discovery
+              - generic [ref=e50]:
+                - img [ref=e51]
+                - generic [ref=e54]: Discovery
+            - link "Topology" [ref=e56] [cursor=pointer]:
+              - /url: /topology
+              - generic [ref=e57]:
+                - img [ref=e58]
+                - generic [ref=e63]: Topology
+          - generic [ref=e64]:
+            - paragraph [ref=e65]: Health
+            - link "Incidents 15" [ref=e147] [cursor=pointer]:
+              - /url: /incidents
+              - generic [ref=e68]:
+                - img [ref=e69]
+                - generic [ref=e71]: Incidents
+              - generic [ref=e148]: "15"
+            - link "Activity" [ref=e73] [cursor=pointer]:
+              - /url: /activity
+              - generic [ref=e74]:
+                - img [ref=e75]
+                - generic [ref=e77]: Activity
+          - generic [ref=e78]:
+            - paragraph [ref=e79]: Control
+            - link "Approvals" [ref=e81] [cursor=pointer]:
+              - /url: /approvals
+              - generic [ref=e82]:
+                - img [ref=e83]
+                - generic [ref=e86]: Approvals
+            - link "Policies" [ref=e88] [cursor=pointer]:
+              - /url: /policies
+              - generic [ref=e89]:
+                - img [ref=e90]
+                - generic [ref=e93]: Policies
+          - generic [ref=e94]:
+            - paragraph [ref=e95]: Assistant
+            - link "Chat" [ref=e97] [cursor=pointer]:
+              - /url: /chat
+              - generic [ref=e98]:
+                - img [ref=e99]
+                - generic [ref=e101]: Chat
+          - generic [ref=e102]:
+            - paragraph [ref=e103]: System
+            - link "Adapters" [ref=e105] [cursor=pointer]:
+              - /url: /adapters
+              - generic [ref=e106]:
+                - img [ref=e107]
+                - generic [ref=e109]: Adapters
+            - link "Access" [ref=e111] [cursor=pointer]:
+              - /url: /access
+              - generic [ref=e112]:
+                - img [ref=e113]
+                - generic [ref=e125]: Access
+            - link "Settings" [ref=e127] [cursor=pointer]:
+              - /url: /settings
+              - generic [ref=e128]:
+                - img [ref=e129]
+                - generic [ref=e132]: Settings
+        - generic [ref=e149]:
+          - img [ref=e150]
+          - generic [ref=e152]: "Vault: Unlocked"
+    - main [ref=e134]:
+      - main [ref=e137]:
+        - generic [ref=e153]:
+          - generic [ref=e155]:
+            - generic [ref=e156]:
+              - heading "iot-192-168-68-68" [level=1] [ref=e159]
+              - generic [ref=e160]:
+                - generic [ref=e161]: online
+                - generic [ref=e162]: iot
+                - generic [ref=e163]:
+                  - img [ref=e164]
+                  - text: Tier 1
+                - generic [ref=e166]: Adopted
+            - generic [ref=e168]:
+              - paragraph [ref=e169]: "First seen: 3/4/2026, 8:46:04 PM"
+              - paragraph [ref=e170]: "Last seen: 5m ago"
+          - generic [ref=e171]:
+            - tablist [ref=e172]:
+              - tab "Overview" [selected] [ref=e173]
+              - tab "Workloads" [ref=e174]
+              - tab "Access" [ref=e175]
+              - tab "Widgets" [ref=e176]
+              - tab "Chat" [ref=e177]
+              - tab "Activity" [ref=e178]
+              - tab "Settings" [ref=e179]
+            - tabpanel "Overview" [ref=e180]:
+              - generic [ref=e182]:
+                - generic [ref=e183]:
+                  - generic [ref=e184]:
+                    - generic [ref=e185]:
+                      - img [ref=e186]
+                      - heading "Device Snapshot" [level=3] [ref=e189]
+                      - generic [ref=e190]: online
+                    - paragraph [ref=e191]: An IoT device at 192.168.68.68 with no detected protocols, services, or classification signals. The device is online but essentially opaque—there is insufficient telemetry to determine its function, firmware, or communication patterns. Manual identification is strongly recommended before assigning workloads or credentials.
+                  - generic [ref=e192]:
+                    - generic [ref=e193]:
+                      - generic [ref=e194]:
+                        - paragraph [ref=e195]: 93%
+                        - paragraph [ref=e196]: Discovery
+                      - generic [ref=e197]:
+                        - paragraph [ref=e198]: "2"
+                        - paragraph [ref=e199]: Observations
+                      - generic [ref=e200]:
+                        - paragraph [ref=e201]: 0%
+                        - paragraph [ref=e202]: Classifier
+                      - generic [ref=e203]:
+                        - paragraph [ref=e204]: "0"
+                        - paragraph [ref=e205]: Endpoints
+                    - generic [ref=e206]:
+                      - generic [ref=e207]:
+                        - paragraph [ref=e208]: IP Address
+                        - paragraph [ref=e209]: 192.168.68.68
+                      - generic [ref=e210]:
+                        - paragraph [ref=e211]: MAC Address
+                        - paragraph [ref=e212]: 0:55:da:52:ee:6b
+                    - generic [ref=e213]:
+                      - generic [ref=e214]:
+                        - paragraph [ref=e215]: Discovery Evidence
+                        - generic [ref=e216]:
+                          - generic [ref=e217]: icmp reply
+                          - generic [ref=e218]: ssdp response
+                        - generic [ref=e219]:
+                          - generic [ref=e220]:
+                            - generic [ref=e221]: active
+                            - generic [ref=e222]: "1"
+                          - generic [ref=e223]:
+                            - generic [ref=e224]: ssdp
+                            - generic [ref=e225]: "1"
+                      - generic [ref=e226]:
+                        - paragraph [ref=e227]: Fingerprint Context
+                        - generic [ref=e228]:
+                          - generic [ref=e229]:
+                            - paragraph [ref=e230]: Version
+                            - paragraph [ref=e231]: none
+                          - generic [ref=e232]:
+                            - paragraph [ref=e233]: Last Probe
+                            - paragraph [ref=e234]: 5m ago
+                        - paragraph [ref=e235]: "OS: unknown"
+                        - paragraph [ref=e236]: "Product: unknown"
+                    - generic [ref=e237]:
+                      - paragraph [ref=e238]: Latest Probe Signals
+                      - generic [ref=e239]:
+                        - generic [ref=e240]:
+                          - paragraph [ref=e241]: DNS
+                          - paragraph [ref=e242]: n/a
+                        - generic [ref=e243]:
+                          - paragraph [ref=e244]: WinRM
+                          - paragraph [ref=e245]: n/a
+                        - generic [ref=e246]:
+                          - paragraph [ref=e247]: MQTT
+                          - paragraph [ref=e248]: n/a
+                - generic [ref=e250]:
+                  - generic [ref=e251]:
+                    - generic [ref=e252]:
+                      - img [ref=e253]
+                      - heading "Recommendations" [level=3] [ref=e255]
+                    - paragraph [ref=e256]: Highest-impact next actions for this device
+                  - generic [ref=e258]:
+                    - img [ref=e259]
+                    - paragraph [ref=e261]: No recommendations for this device
+  - button "Open Next.js Dev Tools" [ref=e267] [cursor=pointer]:
+    - img [ref=e268]
+  - alert [ref=e146]

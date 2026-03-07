@@ -90,6 +90,11 @@ const ManifestSchema = z.object({
         expectedSemanticTarget: z.string().min(1).optional(),
         commandTemplate: z.string().min(1).optional(),
         commandTemplates: z.record(z.string(), z.string()).optional(),
+        localToolId: z.string().min(1).optional(),
+        localToolCommand: z.string().min(1).optional(),
+        localToolArgs: z.array(z.string().min(1)).optional(),
+        localToolCwd: z.string().min(1).optional(),
+        localToolInstallIfMissing: z.boolean().optional(),
       }).optional(),
       skillMdPath: z.string().min(1).optional(),
       operationKinds: z.array(

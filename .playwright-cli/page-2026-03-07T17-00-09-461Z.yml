@@ -1,0 +1,209 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - img [ref=e7]
+          - generic [ref=e9]:
+            - heading "Steward" [level=1] [ref=e10]
+            - paragraph [ref=e11]: Network Operations
+          - button [ref=e12]:
+            - img [ref=e13]
+        - navigation [ref=e19]:
+          - generic [ref=e20]:
+            - paragraph [ref=e21]: Overview
+            - link "Dashboard" [ref=e23] [cursor=pointer]:
+              - /url: /
+              - generic [ref=e24]:
+                - img [ref=e25]
+                - generic [ref=e30]: Dashboard
+            - link "Digest" [ref=e32] [cursor=pointer]:
+              - /url: /digest
+              - generic [ref=e33]:
+                - img [ref=e34]
+                - generic [ref=e37]: Digest
+          - generic [ref=e38]:
+            - paragraph [ref=e39]: Network
+            - link "Devices" [ref=e41] [cursor=pointer]:
+              - /url: /devices
+              - generic [ref=e43]:
+                - img [ref=e44]
+                - generic [ref=e47]: Devices
+            - link "Discovery" [ref=e49] [cursor=pointer]:
+              - /url: /discovery
+              - generic [ref=e50]:
+                - img [ref=e51]
+                - generic [ref=e54]: Discovery
+            - link "Topology" [ref=e56] [cursor=pointer]:
+              - /url: /topology
+              - generic [ref=e57]:
+                - img [ref=e58]
+                - generic [ref=e63]: Topology
+          - generic [ref=e64]:
+            - paragraph [ref=e65]: Health
+            - link "Incidents 15" [ref=e147] [cursor=pointer]:
+              - /url: /incidents
+              - generic [ref=e68]:
+                - img [ref=e69]
+                - generic [ref=e71]: Incidents
+              - generic [ref=e148]: "15"
+            - link "Activity" [ref=e73] [cursor=pointer]:
+              - /url: /activity
+              - generic [ref=e74]:
+                - img [ref=e75]
+                - generic [ref=e77]: Activity
+          - generic [ref=e78]:
+            - paragraph [ref=e79]: Control
+            - link "Approvals" [ref=e81] [cursor=pointer]:
+              - /url: /approvals
+              - generic [ref=e82]:
+                - img [ref=e83]
+                - generic [ref=e86]: Approvals
+            - link "Policies" [ref=e88] [cursor=pointer]:
+              - /url: /policies
+              - generic [ref=e89]:
+                - img [ref=e90]
+                - generic [ref=e93]: Policies
+          - generic [ref=e94]:
+            - paragraph [ref=e95]: Assistant
+            - link "Chat" [ref=e97] [cursor=pointer]:
+              - /url: /chat
+              - generic [ref=e98]:
+                - img [ref=e99]
+                - generic [ref=e101]: Chat
+          - generic [ref=e102]:
+            - paragraph [ref=e103]: System
+            - link "Adapters" [ref=e105] [cursor=pointer]:
+              - /url: /adapters
+              - generic [ref=e106]:
+                - img [ref=e107]
+                - generic [ref=e109]: Adapters
+            - link "Access" [ref=e111] [cursor=pointer]:
+              - /url: /access
+              - generic [ref=e112]:
+                - img [ref=e113]
+                - generic [ref=e125]: Access
+            - link "Settings" [ref=e127] [cursor=pointer]:
+              - /url: /settings
+              - generic [ref=e128]:
+                - img [ref=e129]
+                - generic [ref=e132]: Settings
+        - generic [ref=e149]:
+          - img [ref=e150]
+          - generic [ref=e152]: "Vault: Unlocked"
+    - main [ref=e134]:
+      - main [ref=e137]:
+        - generic [ref=e153]:
+          - generic [ref=e155]:
+            - generic [ref=e156]:
+              - heading "lg-innotek-iot-192-168-68-55" [level=1] [ref=e159]
+              - generic [ref=e160]:
+                - generic [ref=e161]: online
+                - generic [ref=e162]: iot
+                - generic [ref=e163]:
+                  - img [ref=e164]
+                  - text: Tier 1
+                - generic [ref=e166]: Adopted
+            - generic [ref=e168]:
+              - paragraph [ref=e169]: "First seen: 3/4/2026, 8:46:04 PM"
+              - paragraph [ref=e170]: "Last seen: 25m ago"
+          - generic [ref=e171]:
+            - tablist [ref=e172]:
+              - tab "Overview" [ref=e173]
+              - tab "Workloads" [ref=e174]
+              - tab "Access" [ref=e175]
+              - tab "Widgets" [ref=e176]
+              - tab "Chat" [selected] [ref=e177]
+              - tab "Activity" [ref=e178]
+              - tab "Settings" [ref=e179]
+            - tabpanel "Chat" [ref=e298]:
+              - generic [ref=e302]:
+                - generic [ref=e303]:
+                  - generic [ref=e305]:
+                    - button "New Chat" [ref=e306]:
+                      - img [ref=e307]
+                      - text: New Chat
+                    - button [ref=e309]:
+                      - img [ref=e310]
+                  - generic [ref=e318]:
+                    - button "[Onboarding] lg-innotek-iot-192-168-68-55 just now lg-innotek-iot-192-168-68-55" [ref=e319]:
+                      - paragraph [ref=e320]: "[Onboarding] lg-innotek-iot-192-168-68-55"
+                      - paragraph [ref=e321]: just now
+                      - paragraph [ref=e322]:
+                        - img [ref=e323]
+                        - generic [ref=e326]: lg-innotek-iot-192-168-68-55
+                    - generic [ref=e327]:
+                      - button "Rename" [ref=e328]
+                      - button "Delete" [ref=e329]
+                - generic [ref=e330]:
+                  - generic [ref=e331]:
+                    - generic [ref=e332]:
+                      - img [ref=e333]
+                      - heading "[Onboarding] lg-innotek-iot-192-168-68-55" [level=1] [ref=e336]
+                      - generic [ref=e337]:
+                        - img [ref=e338]
+                        - generic [ref=e341]: lg-innotek-iot-192-168-68-55
+                    - generic [ref=e342]:
+                      - button "Rename" [ref=e343]:
+                        - img [ref=e344]
+                        - text: Rename
+                      - button "Delete" [ref=e346]:
+                        - img [ref=e347]
+                        - text: Delete
+                      - combobox [ref=e350]:
+                        - generic: Anthropic
+                        - img
+                      - generic [ref=e351]: claude-opus-4-6
+                  - generic [ref=e355]:
+                    - img [ref=e357]
+                    - generic [ref=e360]:
+                      - paragraph [ref=e361]: anthropic
+                      - generic [ref=e362]:
+                        - paragraph [ref=e363]: I'll start by gathering as much identity evidence as possible. Let me check the router's DHCP lease table for this device and run a deep probe simultaneously.
+                        - generic [ref=e364]:
+                          - generic [ref=e366]:
+                            - generic [ref=e367]:
+                              - generic [ref=e368]:
+                                - img [ref=e370]
+                                - generic [ref=e377]:
+                                  - paragraph [ref=e378]: Deep Probe
+                                  - paragraph [ref=e379]: Probe
+                              - generic [ref=e380]:
+                                - paragraph [ref=e381]: Tool input ready.
+                                - paragraph [ref=e382]: 1 input
+                            - generic [ref=e383]:
+                              - generic [ref=e384]:
+                                - img [ref=e385]
+                                - text: Running
+                              - button "Expand Deep Probe details" [ref=e387]:
+                                - img [ref=e388]
+                                - text: Details
+                          - generic [ref=e391]:
+                            - generic [ref=e392]:
+                              - generic [ref=e393]:
+                                - img [ref=e395]
+                                - generic [ref=e402]:
+                                  - paragraph [ref=e403]: Router Lease Snapshot
+                                  - paragraph [ref=e404]: Probe
+                              - generic [ref=e405]:
+                                - paragraph [ref=e406]: TP-Link Deco XE75 Pro
+                                - paragraph [ref=e407]: 1 input · output
+                            - generic [ref=e408]:
+                              - generic [ref=e409]:
+                                - img [ref=e410]
+                                - text: Complete
+                              - button "Expand Router Lease Snapshot details" [ref=e413]:
+                                - img [ref=e414]
+                                - text: Details
+                        - generic [ref=e416]:
+                          - img [ref=e417]
+                          - img [ref=e420]
+                          - text: live
+                      - paragraph [ref=e422]: 12:00 PM
+                  - generic [ref=e423]:
+                    - generic [ref=e424]:
+                      - textbox "Ask Steward anything about your environment..." [ref=e425]
+                      - button "Interrupt response" [ref=e426]:
+                        - img [ref=e427]
+                    - paragraph [ref=e429]: Streaming live... 6s elapsed. Press stop to interrupt.
+  - alert [ref=e146]
