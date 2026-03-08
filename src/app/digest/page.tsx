@@ -32,24 +32,28 @@ export default function DigestPage() {
 
   if (loading) {
     return (
-      <div className="space-y-6">
+      <div className="flex h-full min-h-0 flex-col gap-6">
         <div className="flex items-center justify-between">
           <Skeleton className="h-8 w-48" />
           <Skeleton className="h-9 w-36" />
         </div>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {[1, 2, 3, 4].map((i) => (
-            <Skeleton key={i} className="h-20" />
-          ))}
+        <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+          <div className="space-y-6">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {[1, 2, 3, 4].map((i) => (
+                <Skeleton key={i} className="h-20" />
+              ))}
+            </div>
+            <Skeleton className="h-64" />
+            <Skeleton className="h-48" />
+          </div>
         </div>
-        <Skeleton className="h-64" />
-        <Skeleton className="h-48" />
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <div className="flex h-full min-h-0 flex-col gap-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -87,36 +91,38 @@ export default function DigestPage() {
       </div>
 
       {/* Content */}
-      {latestDigest ? (
-        <DigestView digest={latestDigest} />
-      ) : (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center gap-4 py-20">
-            <FileText className="h-12 w-12 text-muted-foreground/40" />
-            <div className="text-center space-y-1">
-              <p className="text-sm font-medium text-muted-foreground">
-                No digest generated yet
-              </p>
-              <p className="text-xs text-muted-foreground/70">
-                Click &quot;Generate Now&quot; to create your first daily digest
-                summarizing overnight activity, incidents, and recommendations.
-              </p>
-            </div>
-            <Button
-              variant="outline"
-              onClick={handleGenerate}
-              disabled={generating}
-            >
-              {generating ? (
-                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="mr-1.5 h-4 w-4" />
-              )}
-              Generate First Digest
-            </Button>
-          </CardContent>
-        </Card>
-      )}
+      <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+        {latestDigest ? (
+          <DigestView digest={latestDigest} />
+        ) : (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center gap-4 py-20">
+              <FileText className="h-12 w-12 text-muted-foreground/40" />
+              <div className="text-center space-y-1">
+                <p className="text-sm font-medium text-muted-foreground">
+                  No digest generated yet
+                </p>
+                <p className="text-xs text-muted-foreground/70">
+                  Click &quot;Generate Now&quot; to create your first daily digest
+                  summarizing overnight activity, incidents, and recommendations.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                onClick={handleGenerate}
+                disabled={generating}
+              >
+                {generating ? (
+                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-1.5 h-4 w-4" />
+                )}
+                Generate First Digest
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+      </div>
     </div>
   );
 }

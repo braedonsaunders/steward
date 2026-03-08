@@ -1083,6 +1083,7 @@ export function ChatWorkspace({
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [newChatDeviceId, setNewChatDeviceId] = useState<string>(sessionScope === "device" && initialDeviceId ? initialDeviceId : "__none__");
   const [groupBy, setGroupBy] = useState<"recent" | "device">("recent");
+  const [showDeviceChats, setShowDeviceChats] = useState(sessionScope === "device");
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1107,7 +1108,7 @@ export function ChatWorkspace({
     : composerDeviceId === "__none__"
       ? undefined
       : composerDeviceId;
-  const visibleSessions = useMemo(
+  const scopedSessions = useMemo(
     () => (
       scopedDeviceId
         ? sessions.filter((session) => session.deviceId === scopedDeviceId)
@@ -1115,13 +1116,29 @@ export function ChatWorkspace({
     ),
     [scopedDeviceId, sessions],
   );
+  const deviceAttachedSessionCount = useMemo(
+    () => (
+      deviceScoped
+        ? 0
+        : scopedSessions.filter((session) => Boolean(session.deviceId)).length
+    ),
+    [deviceScoped, scopedSessions],
+  );
+  const listedSessions = useMemo(
+    () => (
+      deviceScoped || showDeviceChats
+        ? scopedSessions
+        : scopedSessions.filter((session) => !session.deviceId)
+    ),
+    [deviceScoped, scopedSessions, showDeviceChats],
+  );
 
   const effectiveSelectedProvider = enabledProviders.some((config) => config.provider === selectedProvider)
     ? selectedProvider
     : enabledProviders[0]?.provider ?? selectedProvider;
   const activeConfig = providerConfigs.find((c) => c.provider === effectiveSelectedProvider);
   const activeModel = activeConfig?.model ?? "default";
-  const activeSession = visibleSessions.find((session) => session.id === activeSessionId);
+  const activeSession = scopedSessions.find((session) => session.id === activeSessionId);
   const messages = useMemo(
     () => getSessionMessages(activeSessionId),
     [activeSessionId, getSessionMessages],
@@ -1152,18 +1169,18 @@ export function ChatWorkspace({
       return [{
         key: scopedDeviceId ?? "device",
         label: scopedDeviceId ? deviceById.get(scopedDeviceId)?.name ?? "Current device" : "Current device",
-        sessions: visibleSessions,
+        sessions: listedSessions,
       }];
     }
 
-    if (groupBy === "recent") {
-      return [{ key: "recent", label: "Recent", sessions: visibleSessions }];
+    if (groupBy === "recent" || !showDeviceChats) {
+      return [{ key: "recent", label: "Recent", sessions: listedSessions }];
     }
 
     const bucket = new Map<string, ChatSession[]>();
     const unassigned: ChatSession[] = [];
 
-    for (const session of visibleSessions) {
+    for (const session of listedSessions) {
       if (!session.deviceId || !deviceById.has(session.deviceId)) {
         unassigned.push(session);
         continue;
@@ -1186,7 +1203,7 @@ export function ChatWorkspace({
     }
 
     return grouped;
-  }, [deviceById, deviceScoped, groupBy, scopedDeviceId, visibleSessions]);
+  }, [deviceById, deviceScoped, groupBy, listedSessions, scopedDeviceId, showDeviceChats]);
 
   const selectSession = useCallback((sessionId: string | null) => {
     setActiveSessionId(sessionId);
@@ -1196,9 +1213,20 @@ export function ChatWorkspace({
   const applyRequestedDeviceSelection = useCallback((deviceId: string) => {
     setNewChatDeviceId(deviceId);
     if (!deviceScoped) {
+      setShowDeviceChats(true);
       setGroupBy("device");
     }
   }, [deviceScoped]);
+
+  const toggleDeviceChats = useCallback(() => {
+    setShowDeviceChats((current) => {
+      const next = !current;
+      if (!next) {
+        setGroupBy("recent");
+      }
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     const query = window.matchMedia("(max-width: 767px)");
@@ -1229,44 +1257,44 @@ export function ChatWorkspace({
   useEffect(() => {
     const pendingPreferredSessionId = pendingPreferredSessionIdRef.current;
     if (!pendingPreferredSessionId) return;
-    if (!visibleSessions.some((session) => session.id === pendingPreferredSessionId)) return;
+    if (!scopedSessions.some((session) => session.id === pendingPreferredSessionId)) return;
     pendingPreferredSessionIdRef.current = null;
-  }, [visibleSessions]);
+  }, [scopedSessions]);
 
   useEffect(() => {
     if (!deviceScoped) return;
     if (activeSessionId) return;
     if (sessionsLoading) return;
     if (preferredSessionId) return;
-    if (visibleSessions.length === 0) return;
+    if (scopedSessions.length === 0) return;
 
     const initialSessionTimer = window.setTimeout(() => {
-      selectSession(visibleSessions[0]?.id ?? null);
+      selectSession(scopedSessions[0]?.id ?? null);
     }, 0);
     return () => window.clearTimeout(initialSessionTimer);
-  }, [activeSessionId, deviceScoped, preferredSessionId, selectSession, sessionsLoading, visibleSessions]);
+  }, [activeSessionId, deviceScoped, preferredSessionId, scopedSessions, selectSession, sessionsLoading]);
 
   useEffect(() => {
     if (activeSessionId) return;
     if (!streamingSessionId) return;
-    if (!visibleSessions.some((session) => session.id === streamingSessionId)) return;
+    if (!scopedSessions.some((session) => session.id === streamingSessionId)) return;
 
     const streamingTimer = window.setTimeout(() => {
       selectSession(streamingSessionId);
     }, 0);
     return () => window.clearTimeout(streamingTimer);
-  }, [activeSessionId, selectSession, streamingSessionId, visibleSessions]);
+  }, [activeSessionId, scopedSessions, selectSession, streamingSessionId]);
 
   useEffect(() => {
     if (!activeSessionId) return;
-    if (visibleSessions.some((session) => session.id === activeSessionId)) return;
+    if (scopedSessions.some((session) => session.id === activeSessionId)) return;
     if (sessionsLoading) return;
     if (preferredSessionId && activeSessionId === preferredSessionId) return;
     const fallbackTimer = window.setTimeout(() => {
-      selectSession(visibleSessions[0]?.id ?? null);
+      selectSession(scopedSessions[0]?.id ?? null);
     }, 0);
     return () => window.clearTimeout(fallbackTimer);
-  }, [activeSessionId, preferredSessionId, selectSession, sessionsLoading, visibleSessions]);
+  }, [activeSessionId, preferredSessionId, scopedSessions, selectSession, sessionsLoading]);
 
   useEffect(() => {
     if (!activeSessionId) return;
@@ -1307,11 +1335,14 @@ export function ChatWorkspace({
   const handleCreateSession = useCallback(async (deviceId?: string) => {
     const session = await createSession(deviceId);
     if (session) {
+      if (!deviceScoped && session.deviceId) {
+        setShowDeviceChats(true);
+      }
       selectSession(session.id);
       setTimeout(() => textareaRef.current?.focus(), 100);
     }
     return session;
-  }, [createSession, selectSession]);
+  }, [createSession, deviceScoped, selectSession]);
 
   useEffect(() => {
     deepLinkAppliedRef.current = false;
@@ -1329,9 +1360,9 @@ export function ChatWorkspace({
       applyRequestedDeviceSelection(requestedDeviceId);
     }, 0);
 
-    const matchingSession = visibleSessions.find(
+    const matchingSession = scopedSessions.find(
       (session) => session.deviceId === requestedDeviceId && isOnboardingChatSession(session),
-    ) ?? visibleSessions.find((session) => session.deviceId === requestedDeviceId);
+    ) ?? scopedSessions.find((session) => session.deviceId === requestedDeviceId);
     if (matchingSession) {
       const sessionTimer = window.setTimeout(() => {
         selectSession(matchingSession.id);
@@ -1361,7 +1392,7 @@ export function ChatWorkspace({
     handleCreateSession,
     requestedDeviceId,
     selectSession,
-    visibleSessions,
+    scopedSessions,
     sessionsLoading,
     shouldAutostart,
   ]);
@@ -1574,12 +1605,38 @@ export function ChatWorkspace({
                     size="sm"
                     variant={groupBy === "device" ? "secondary" : "ghost"}
                     className={cn("h-6 px-2 text-[11px]", groupBy === "device" ? "shadow-none" : "")}
+                    disabled={!showDeviceChats}
                     onClick={() => setGroupBy("device")}
                   >
                     Device
                   </Button>
                 </div>
               </div>
+
+              {deviceAttachedSessionCount > 0 && (
+                <div className="flex min-w-0 items-center justify-between gap-2 rounded-md border bg-background/60 px-2 py-2">
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Device chats
+                    </p>
+                    <p className="truncate text-[11px] text-muted-foreground">
+                      {showDeviceChats
+                        ? `${deviceAttachedSessionCount} shown in the sidebar`
+                        : `${deviceAttachedSessionCount} hidden from the sidebar`}
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={showDeviceChats ? "secondary" : "outline"}
+                    className={cn("h-7 shrink-0 gap-1 px-2 text-[11px]", compact && "h-6 px-1.5 text-[10px]")}
+                    onClick={toggleDeviceChats}
+                  >
+                    <ChevronDown className={cn("h-3 w-3 transition-transform", showDeviceChats && "rotate-180")} />
+                    {showDeviceChats ? "Hide" : "Show"}
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1593,15 +1650,17 @@ export function ChatWorkspace({
               </div>
             )}
 
-            {!sessionsLoading && visibleSessions.length === 0 && (
+            {!sessionsLoading && listedSessions.length === 0 && (
               <p className="px-2 py-8 text-center text-xs text-muted-foreground">
-                No conversations yet
+                {deviceAttachedSessionCount > 0 && !showDeviceChats
+                  ? "Device chats are hidden. Show them to browse attached conversations."
+                  : "No conversations yet"}
               </p>
             )}
 
             {groupedSessions.map((group) => (
               <div key={group.key} className="space-y-0.5">
-                {groupBy === "device" && (
+                {groupBy === "device" && showDeviceChats && (
                   <p className="px-2 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground first:pt-0">
                     {group.label}
                   </p>
