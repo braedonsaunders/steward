@@ -1,6 +1,11 @@
+import { generateText } from "ai";
 import { executeBrokerOperation } from "@/lib/adapters/protocol-broker";
 import { parseWinrmCommandTemplate } from "@/lib/adapters/winrm";
 import { randomUUID } from "node:crypto";
+import { getDefaultProvider } from "@/lib/llm/config";
+import { llmHealthController } from "@/lib/llm/health";
+import { buildLanguageModel } from "@/lib/llm/providers";
+import { applyPromptFirewall } from "@/lib/llm/prompt-firewall";
 import { runShell } from "@/lib/utils/shell";
 import type { Device, OperationSpec, ProtocolBrokerRequest, ServiceContract } from "@/lib/state/types";
 
@@ -9,7 +14,8 @@ export type MonitorType =
   | "port_open"
   | "http_contains"
   | "shell_assertion"
-  | "desktop_ui_assertion";
+  | "desktop_ui_assertion"
+  | "semantic_assertion";
 
 export interface MonitorContractDraft {
   contract: ServiceContract;
@@ -83,6 +89,9 @@ function inferCriticality(prompt: string): ServiceContract["criticality"] {
 }
 
 function inferMonitorType(prompt: string): MonitorType {
+  if (/\b(semantic|llm|looks right|behaves correctly|works correctly|content is correct|dashboard is correct)\b/i.test(prompt)) {
+    return "semantic_assertion";
+  }
   if (/\b(ui|gui|desktop|screen|window|rdp|vnc|login page)\b/i.test(prompt)) {
     return "desktop_ui_assertion";
   }
@@ -167,6 +176,12 @@ function inferRequiredProtocols(
     if (present.has("http-api")) return ["http-api"];
     return ["http-api"];
   }
+  if (monitorType === "semantic_assertion") {
+    if (present.has("http-api")) return ["http-api"];
+    if (present.has("ssh")) return ["ssh"];
+    if (present.has("winrm")) return ["winrm"];
+    return ["http-api"];
+  }
   if (monitorType === "desktop_ui_assertion") {
     const requirements: string[] = [];
     if (present.has("winrm")) requirements.push("winrm");
@@ -242,7 +257,7 @@ export function buildCustomMonitorContractFromPrompt(
     (cleanedPrompt.match(/\b(?:using|via)\s+(ssh|winrm|docker|http-api|snmp|mqtt|rdp|vnc)\b/ig) ?? [])
       .map((token) => token.replace(/\b(using|via)\s+/i, "")),
   );
-  const requiredProtocols = inferRequiredProtocols(monitorType, device, explicitProtocols);
+  let requiredProtocols = inferRequiredProtocols(monitorType, device, explicitProtocols);
   const serviceToken = extractServiceToken(cleanedPrompt);
   const intervalSec = parseIntervalSecFromPrompt(cleanedPrompt);
   const notes: string[] = [];
@@ -298,6 +313,34 @@ export function buildCustomMonitorContractFromPrompt(
     }
   }
 
+  if (monitorType === "semantic_assertion") {
+    basePolicy.semanticPrompt = cleanedPrompt;
+    const explicitCommand = extractCodeBlock(cleanedPrompt);
+    const explicitUrl = extractUrl(cleanedPrompt);
+    if (explicitUrl) {
+      basePolicy.url = explicitUrl;
+      basePolicy.evidenceMode = "http";
+      if (explicitProtocols.length === 0) {
+        requiredProtocols = ["http-api"];
+      }
+    } else if (explicitCommand) {
+      basePolicy.commandTemplate = explicitCommand;
+      basePolicy.evidenceMode = "shell";
+      if (explicitProtocols.length === 0) {
+        requiredProtocols = ["ssh"];
+      }
+    } else {
+      basePolicy.url = `http://${device.ip}/`;
+      basePolicy.evidenceMode = "http";
+      if (explicitProtocols.length === 0) {
+        requiredProtocols = ["http-api"];
+      }
+      notes.push("No explicit evidence source provided; semantic monitor will inspect the default HTTP endpoint.");
+    }
+    basePolicy.confidenceThreshold = 0.7;
+    basePolicy.requiredProtocols = requiredProtocols;
+  }
+
   if (monitorType === "desktop_ui_assertion") {
     const probeCommand = extractCodeBlock(cleanedPrompt);
     if (probeCommand) {
@@ -351,6 +394,7 @@ function asMonitorType(value: unknown): MonitorType {
   if (monitorType === "http_contains") return "http_contains";
   if (monitorType === "shell_assertion") return "shell_assertion";
   if (monitorType === "desktop_ui_assertion") return "desktop_ui_assertion";
+  if (monitorType === "semantic_assertion") return "semantic_assertion";
   return "service_presence";
 }
 
@@ -366,6 +410,15 @@ export function getRequiredProtocolsForServiceContract(contract: ServiceContract
 
   const monitorType = getMonitorType(contract);
   if (monitorType === "http_contains") return ["http-api"];
+  if (monitorType === "semantic_assertion") {
+    if (typeof contract.policyJson.commandTemplate === "string" && contract.policyJson.commandTemplate.trim().length > 0) {
+      return ["ssh"];
+    }
+    if (typeof contract.policyJson.probeCommandTemplate === "string" && contract.policyJson.probeCommandTemplate.trim().length > 0) {
+      return ["winrm"];
+    }
+    return ["http-api"];
+  }
   if (monitorType === "desktop_ui_assertion") return ["winrm"];
   if (monitorType === "shell_assertion") return ["ssh"];
   return [];
@@ -409,6 +462,270 @@ async function fetchTextWithTimeout(url: string, timeoutMs: number): Promise<{ o
     };
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+function extractJsonObject(raw: string): Record<string, unknown> | null {
+  const text = raw.trim();
+  if (text.startsWith("{") && text.endsWith("}")) {
+    try {
+      const parsed = JSON.parse(text);
+      return isRecord(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(match[0]);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+async function gatherSemanticEvidence(
+  device: Device,
+  contract: ServiceContract,
+): Promise<Record<string, unknown> | null> {
+  const policy = contract.policyJson;
+  const evidenceMode = typeof policy.evidenceMode === "string"
+    ? policy.evidenceMode.trim().toLowerCase()
+    : undefined;
+  const timeoutMs = Number.isFinite(Number(policy.timeoutMs))
+    ? Math.min(10 * 60_000, Math.max(2_000, Math.floor(Number(policy.timeoutMs))))
+    : 20_000;
+
+  if (
+    evidenceMode === "shell"
+    || typeof policy.commandTemplate === "string"
+    || typeof policy.command === "string"
+  ) {
+    const commandTemplate = typeof policy.commandTemplate === "string"
+      ? policy.commandTemplate.trim()
+      : typeof policy.command === "string"
+        ? policy.command.trim()
+        : "";
+    if (!commandTemplate) {
+      return null;
+    }
+    const command = interpolateHost(commandTemplate, device);
+    const brokerRequest = brokerRequestFromPolicy(policy, command);
+    if (brokerRequest) {
+      const operation: OperationSpec = {
+        id: `contract:${contract.id}:semantic`,
+        adapterId: adapterIdForBroker(brokerRequest.protocol),
+        kind: "shell.command",
+        mode: "read",
+        timeoutMs,
+        brokerRequest,
+        expectedSemanticTarget: contract.displayName,
+        safety: {
+          dryRunSupported: false,
+          requiresConfirmedRevert: false,
+          criticality: "low",
+        },
+      };
+      const result = await executeBrokerOperation(operation, device, {}, { actor: "steward" });
+      return {
+        source: "shell",
+        brokerProtocol: brokerRequest.protocol,
+        ok: result.ok,
+        status: result.status,
+        phase: result.phase,
+        proof: result.proof,
+        summary: result.summary,
+        output: result.output.slice(0, 2_000),
+        details: result.details,
+      };
+    }
+
+    const result = await runShell(command, timeoutMs);
+    return {
+      source: "shell",
+      ok: result.ok,
+      exitCode: result.code,
+      output: `${result.stdout}${result.stderr ? `\n${result.stderr}` : ""}`.trim().slice(0, 2_000),
+      command,
+    };
+  }
+
+  if (
+    evidenceMode === "desktop"
+    || typeof policy.probeCommandTemplate === "string"
+    || typeof policy.probeCommand === "string"
+  ) {
+    const commandTemplate = typeof policy.probeCommandTemplate === "string"
+      ? policy.probeCommandTemplate.trim()
+      : typeof policy.probeCommand === "string"
+        ? policy.probeCommand.trim()
+        : "";
+    if (!commandTemplate) {
+      return null;
+    }
+    const command = interpolateHost(commandTemplate, device);
+    const result = await runShell(command, timeoutMs);
+    return {
+      source: "desktop",
+      ok: result.ok,
+      exitCode: result.code,
+      output: `${result.stdout}${result.stderr ? `\n${result.stderr}` : ""}`.trim().slice(0, 2_000),
+      command,
+    };
+  }
+
+  const rawUrl = typeof policy.url === "string" ? policy.url.trim() : "";
+  const url = rawUrl.length > 0 ? rawUrl : `http://${device.ip}/`;
+  const response = await fetchTextWithTimeout(url, timeoutMs);
+  return {
+    source: "http",
+    ok: response.ok,
+    status: response.status,
+    url,
+    body: response.body.slice(0, 4_000),
+  };
+}
+
+async function evaluateSemanticAssertion(
+  device: Device,
+  contract: ServiceContract,
+  defaultPolicy: Record<string, unknown>,
+): Promise<ServiceContractEvaluation> {
+  const semanticPrompt = typeof contract.policyJson.semanticPrompt === "string" && contract.policyJson.semanticPrompt.trim().length > 0
+    ? contract.policyJson.semanticPrompt.trim()
+    : typeof contract.rationale === "string" && contract.rationale.trim().length > 0
+      ? contract.rationale.trim()
+      : `Determine whether ${contract.displayName} is healthy and matches its expected behavior.`;
+  const confidenceThreshold = Number.isFinite(Number(contract.policyJson.confidenceThreshold))
+    ? Math.max(0.1, Math.min(1, Number(contract.policyJson.confidenceThreshold)))
+    : 0.7;
+  const evidence = await gatherSemanticEvidence(device, contract);
+  if (!evidence) {
+    return {
+      status: "pending",
+      summary: `${contract.displayName} semantic monitor is missing a usable evidence source.`,
+      evidenceJson: {
+        monitorType: "semantic_assertion",
+        reason: "missing_evidence_source",
+      },
+      updatedPolicyJson: {
+        ...defaultPolicy,
+        lastStatus: "pending",
+      },
+      monitorType: "semantic_assertion",
+    };
+  }
+
+  let providerForHealth = "default";
+  try {
+    const provider = await getDefaultProvider();
+    providerForHealth = provider;
+    const model = await buildLanguageModel(provider);
+    const evidenceInput = JSON.stringify({
+      contract: {
+        displayName: contract.displayName,
+        criticality: contract.criticality,
+        desiredState: contract.desiredState,
+      },
+      semanticPrompt,
+      evidence,
+    });
+    const firewall = applyPromptFirewall(evidenceInput);
+    const result = await generateText({
+      model,
+      temperature: 0,
+      maxOutputTokens: 500,
+      prompt: [
+        "You evaluate whether a semantic monitor contract is satisfied.",
+        "Return ONLY a single JSON object with keys:",
+        "status ('pass' | 'fail' | 'pending'), confidence (0..1), summary (string), reasoning (string).",
+        "Use 'pending' if the evidence is insufficient or ambiguous.",
+        "Do not invent evidence beyond the payload.",
+        `Monitor: ${contract.displayName}`,
+        `Semantic prompt: ${semanticPrompt}`,
+        firewall.tainted
+          ? `Evidence was sanitized by prompt firewall. Reasons: ${firewall.reasons.join(", ")}`
+          : "Evidence passed prompt firewall.",
+        firewall.sanitized,
+      ].join("\n"),
+    });
+    llmHealthController.reportSuccess(provider);
+
+    const parsed = extractJsonObject(result.text);
+    if (!parsed) {
+      return {
+        status: "pending",
+        summary: `${contract.displayName} semantic evaluation returned an invalid result.`,
+        evidenceJson: {
+          monitorType: "semantic_assertion",
+          provider,
+          semanticPrompt,
+          evidence,
+          rawModelOutput: result.text.slice(0, 2_000),
+        },
+        updatedPolicyJson: {
+          ...defaultPolicy,
+          lastStatus: "pending",
+        },
+        monitorType: "semantic_assertion",
+      };
+    }
+
+    const proposedStatus = parsed.status === "pass" || parsed.status === "fail" || parsed.status === "pending"
+      ? parsed.status
+      : "pending";
+    const confidence = Number.isFinite(Number(parsed.confidence))
+      ? Math.max(0, Math.min(1, Number(parsed.confidence)))
+      : 0.5;
+    const summary = typeof parsed.summary === "string" && parsed.summary.trim().length > 0
+      ? parsed.summary.trim()
+      : `${contract.displayName} semantic evaluation completed.`;
+    const reasoning = typeof parsed.reasoning === "string" ? parsed.reasoning.trim() : "";
+    const status = confidence >= confidenceThreshold ? proposedStatus : "pending";
+    const effectiveSummary = status === proposedStatus
+      ? summary
+      : `${summary} (Confidence ${confidence.toFixed(2)} below threshold ${confidenceThreshold.toFixed(2)}.)`;
+
+    return {
+      status,
+      summary: effectiveSummary,
+      evidenceJson: {
+        monitorType: "semantic_assertion",
+        provider,
+        confidence,
+        confidenceThreshold,
+        reasoning,
+        semanticPrompt,
+        evidence,
+      },
+      updatedPolicyJson: {
+        ...defaultPolicy,
+        lastStatus: status,
+        lastConfidence: confidence,
+      },
+      monitorType: "semantic_assertion",
+    };
+  } catch (error) {
+    llmHealthController.reportFailure(providerForHealth);
+    return {
+      status: "pending",
+      summary: `${contract.displayName} semantic evaluation is unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      evidenceJson: {
+        monitorType: "semantic_assertion",
+        semanticPrompt,
+        evidence,
+      },
+      updatedPolicyJson: {
+        ...defaultPolicy,
+        lastStatus: "pending",
+      },
+      monitorType: "semantic_assertion",
+    };
   }
 }
 
@@ -523,6 +840,10 @@ export async function evaluateServiceContract(
       },
       monitorType,
     };
+  }
+
+  if (monitorType === "semantic_assertion") {
+    return evaluateSemanticAssertion(device, contract, defaultPolicy);
   }
 
   if (monitorType === "shell_assertion") {

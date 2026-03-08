@@ -1,6 +1,6 @@
 # World-Class System Program
 
-Last updated: 2026-03-06
+Last updated: 2026-03-08
 
 Purpose:
 - Turn Steward from a strong prototype into a world-class autonomous IT operator.
@@ -10,10 +10,22 @@ Purpose:
 Status:
 - Initial program backlog persisted.
 - First implementation tranche started on 2026-03-06.
+- Backlog reconciled against the current repo on 2026-03-08.
+- Continuous monitoring should now be treated as deterministic-first with a wake coordinator and notification outbox, not as one monolithic interval loop.
+
+## 0. Continuous Monitoring, Wake-Ups, and Notifications
+
+- [ ] Split the current interval loop into signal collection, finding routing, remediation planning, and notification delivery workers.
+- [ ] Add a wake coordinator that converts schedules, state transitions, protocol-session events, and webhooks into durable jobs.
+- [ ] Add a normalized finding router with dedupe, hysteresis, suppression, and incident-promotion rules.
+- [ ] Keep deterministic checks as the default path; reserve LLM usage for ambiguous diagnosis, monitor synthesis, and Lane B/C planning.
+- [ ] Add a notification outbox with Telegram-first delivery, then webhooks, email, Slack, Teams, and SMS/push.
+
+Reference: `docs/continuous-monitoring-architecture-analysis.md`, `docs/continuous-monitoring-cutover-task-register.md`
 
 ## 1. Execution Safety and Control Plane
 
-- [ ] Replace shell-template-first execution with protocol-native brokers for SSH, WinRM, SNMP, HTTP/API, Docker, and network-device operations.
+- [ ] Replace shell-template-first execution with protocol-native brokers for SSH, WinRM, SNMP, HTTP/API, Docker, and network-device operations. SSH/HTTP baseline exists; other protocol families still need migration.
 - [ ] Eliminate password injection into command strings for normal execution paths.
 - [ ] Add connection pooling, host identity validation, timeout policy, retry policy, and typed protocol results.
 - [ ] Add per-operation capability scoping with durable audit linkage to playbook runs.
@@ -23,9 +35,9 @@ Status:
 
 ## 2. Credentials, Vault, and Secret Governance
 
-- [ ] Tighten credential usability rules so execution depends on validated credentials, not merely stored secrets.
-- [ ] Add protocol-aware credential validation workflows with real handshakes where supported.
-- [ ] Add per-action credential access audit logs linked to `playbookRunId`, `operationId`, and device.
+- [x] Tighten credential usability rules so execution depends on validated credentials, not merely stored secrets.
+- [x] Add protocol-aware credential validation workflows with real handshakes where supported.
+- [x] Add per-action credential access audit logs linked to `playbookRunId`, `operationId`, and device.
 - [ ] Add scoped credential leases / ephemeral execution grants instead of long-lived raw secret use.
 - [ ] Add credential rotation workflows and last-used / last-verified timestamps.
 - [ ] Add multi-user vault access policy and just-in-time elevation for sensitive credentials.
@@ -33,7 +45,7 @@ Status:
 
 ## 3. Policy, Risk, and Autonomy
 
-- [ ] Add quantitative policy risk scoring using blast radius, criticality, failure history, maintenance context, and rollback confidence.
+- [x] Add quantitative policy risk scoring using blast radius, criticality, failure history, maintenance context, and rollback confidence.
 - [ ] Persist risk context alongside policy evaluations for every playbook run.
 - [ ] Add freeze-window, change-budget, and failure-budget policy inputs.
 - [ ] Add site-aware and tenant-aware policy inheritance.
@@ -41,10 +53,10 @@ Status:
 
 ## 4. Detection, Findings, and Incident Coverage
 
-- [ ] Expand deterministic scanner findings far beyond offline / Telnet / monitor drift.
+- [ ] Expand deterministic scanner findings far beyond offline / Telnet / assurance drift / TLS expiry.
 - [ ] Add storage findings: SMART drift, RAID degradation, filesystem pressure, replication lag.
 - [ ] Add backup findings: failed jobs, stale jobs, restore verification gaps.
-- [ ] Add certificate findings: expiration, chain issues, weak TLS, hostname mismatch.
+- [ ] Expand certificate findings from current expiry coverage to chain issues, weak TLS, and hostname mismatch.
 - [ ] Add network findings: interface errors, CRC/drop spikes, PoE exhaustion, STP drift, rogue AP indicators, DHCP exhaustion.
 - [ ] Add workload findings: container crash loops, failed services, unhealthy scheduled tasks, patch drift, config drift.
 - [ ] Add security findings: insecure management surfaces, exposed admin UIs, firmware/CVE drift, weak/default credential indicators, anomalous auth behavior.
@@ -68,7 +80,7 @@ Status:
 
 ## 7. Onboarding and Device Adoption
 
-- [ ] Persist and drive the full onboarding state machine end-to-end.
+- [ ] Finish the onboarding lifecycle as the only supported path. Run/draft/access/profile persistence exists today, but the workflow is still split across draft state and chat guidance.
 - [ ] Persist and answer onboarding questions generated by adoption profiling.
 - [ ] Preserve answers across non-forced reprofiling when question keys remain stable.
 - [ ] Add profile-driven findings/check packs by device class.
@@ -86,7 +98,7 @@ Status:
 
 ## 9. Notifications, Reporting, and Escalation
 
-- [ ] Add outbound notification channels: email, Slack, Teams, SMS/push, webhooks.
+- [ ] Add outbound notification channels: Telegram, email, Slack, Teams, SMS/push, webhooks.
 - [ ] Add escalation rules, delegate paths, reminder flows, and quiet hours.
 - [ ] Add weekly executive summary generation.
 - [ ] Add approval escalation and routing by action class, severity, and site.
@@ -97,6 +109,7 @@ Status:
 - [ ] Replace full-state polling/streaming with projection-based and delta-based streaming.
 - [ ] Replace whole-table rewrite patterns with incremental updates where possible.
 - [ ] Add workerized durable job processing instead of write-only queue APIs.
+- [ ] Route wakes, notifications, and monitor executions through durable workers instead of inline loop side effects.
 - [ ] Add paginated read models for large installations and evidence-heavy incidents.
 - [ ] Add control-plane self-observability for queue lag, DB contention, loop time, and provider health.
 
@@ -118,7 +131,9 @@ Status:
 ## 13. Current Implementation Tranche
 
 - [x] Persist the world-class program into repo planning artifacts and cross-reference it from `AGENTS.md`.
-- [x] Persist onboarding questions generated by adoption profiles.
+- [x] Add adoption orchestrator state, draft-backed onboarding snapshots, and chat session bootstrap.
+- [x] Add per-device credential records backed by vault refs plus validation endpoints.
+- [ ] Wire first-class onboarding question records and answer reuse; generated prompts currently live only in onboarding draft state.
 - [x] Add quantitative `riskScore` data to policy evaluations.
 - [x] Add credential access audit logging linked to playbook execution.
 - [x] Tighten runtime credential availability to require validated credentials.

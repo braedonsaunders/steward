@@ -15,6 +15,12 @@ import {
   defaultSystemSettings,
   ensureDefaults,
 } from "@/lib/state/defaults";
+import {
+  findDashboardWidgetGridPlacement,
+  normalizeDashboardWidgetColumnSpan,
+  normalizeDashboardWidgetRowSpan,
+  resolveDashboardWidgetGridLayout,
+} from "@/lib/dashboard-widget-grid";
 import type {
   AccessMethod,
   AccessSurface,
@@ -28,6 +34,11 @@ import type {
   ChatMessage,
   ChatSession,
   CredentialAccessLog,
+  DashboardWidgetInventoryEntry,
+  DashboardWidgetPage,
+  DashboardWidgetPageItem,
+  DashboardWidgetPageItemRecord,
+  DashboardWidgetPageRecord,
   DailyDigest,
   Device,
   DeviceAdapterBinding,
@@ -35,6 +46,8 @@ import type {
   DeviceCredential,
   DeviceFinding,
   DeviceProfileBinding,
+  DeviceAutomation,
+  DeviceAutomationRun,
   DeviceWidget,
   DeviceWidgetOperationRun,
   DeviceWidgetRuntimeState,
@@ -46,6 +59,8 @@ import type {
   LocalToolApproval,
   LocalToolRecord,
   MaintenanceWindow,
+  NotificationChannel,
+  NotificationDelivery,
   OAuthState,
   PlaybookRun,
   PolicyRule,
@@ -365,6 +380,39 @@ function adoptionQuestionFromRow(row: Record<string, unknown>): AdoptionQuestion
   };
 }
 
+function notificationChannelFromRow(row: Record<string, unknown>): NotificationChannel {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    kind: row.kind as NotificationChannel["kind"],
+    enabled: Boolean(row.enabled),
+    target: String(row.target),
+    eventKinds: JSON.parse(String(row.eventKinds ?? "[]")) as NotificationChannel["eventKinds"],
+    minimumSeverity: row.minimumSeverity ? row.minimumSeverity as NotificationChannel["minimumSeverity"] : undefined,
+    vaultSecretRef: row.vaultSecretRef ? String(row.vaultSecretRef) : undefined,
+    configJson: JSON.parse(String(row.configJson ?? "{}")) as Record<string, unknown>,
+    createdAt: String(row.createdAt),
+    updatedAt: String(row.updatedAt),
+  };
+}
+
+function notificationDeliveryFromRow(row: Record<string, unknown>): NotificationDelivery {
+  return {
+    id: String(row.id),
+    channelId: String(row.channelId),
+    eventKind: row.eventKind as NotificationDelivery["eventKind"],
+    eventRef: String(row.eventRef),
+    summary: String(row.summary),
+    payloadJson: JSON.parse(String(row.payloadJson ?? "{}")) as Record<string, unknown>,
+    status: row.status as NotificationDelivery["status"],
+    attempts: Number(row.attempts ?? 0),
+    lastError: row.lastError ? String(row.lastError) : undefined,
+    deliveredAt: row.deliveredAt ? String(row.deliveredAt) : undefined,
+    createdAt: String(row.createdAt),
+    updatedAt: String(row.updatedAt),
+  };
+}
+
 function deviceCredentialFromRow(row: Record<string, unknown>): DeviceCredential {
   return {
     id: String(row.id),
@@ -632,6 +680,7 @@ function deviceWidgetFromRow(row: Record<string, unknown>): DeviceWidget {
     css: String(row.css ?? ""),
     js: String(row.js ?? ""),
     capabilities: JSON.parse(String(row.capabilitiesJson ?? "[]")) as DeviceWidget["capabilities"],
+    controls: JSON.parse(String(row.controlsJson ?? "[]")) as DeviceWidget["controls"],
     sourcePrompt: row.sourcePrompt ? String(row.sourcePrompt) : undefined,
     createdBy: row.createdBy as DeviceWidget["createdBy"],
     revision: Number(row.revision ?? 1),
@@ -645,6 +694,71 @@ function deviceWidgetRuntimeStateFromRow(row: Record<string, unknown>): DeviceWi
     widgetId: String(row.widgetId),
     deviceId: String(row.deviceId),
     stateJson: JSON.parse(String(row.stateJson ?? "{}")) as Record<string, unknown>,
+    updatedAt: String(row.updatedAt),
+  };
+}
+
+function dashboardWidgetPageRecordFromRow(row: Record<string, unknown>): DashboardWidgetPageRecord {
+  return {
+    id: String(row.id),
+    slug: String(row.slug),
+    name: String(row.name),
+    sortOrder: Number(row.sortOrder ?? 0),
+    createdAt: String(row.createdAt),
+    updatedAt: String(row.updatedAt),
+  };
+}
+
+function dashboardWidgetInventoryEntryFromRow(row: Record<string, unknown>): DashboardWidgetInventoryEntry {
+  return {
+    widgetId: String(row.widgetId),
+    deviceId: String(row.deviceId),
+    deviceName: String(row.deviceName ?? row.deviceHostname ?? row.deviceId),
+    deviceIp: String(row.deviceIp ?? ""),
+    deviceStatus: row.deviceStatus as DashboardWidgetInventoryEntry["deviceStatus"],
+    widgetSlug: String(row.widgetSlug),
+    widgetName: String(row.widgetName),
+    widgetDescription: row.widgetDescription ? String(row.widgetDescription) : undefined,
+    widgetStatus: row.widgetStatus as DashboardWidgetInventoryEntry["widgetStatus"],
+    widgetRevision: Number(row.widgetRevision ?? 1),
+    capabilities: JSON.parse(String(row.capabilitiesJson ?? "[]")) as DashboardWidgetInventoryEntry["capabilities"],
+    updatedAt: String(row.widgetUpdatedAt),
+  };
+}
+
+function dashboardWidgetPageItemFromRow(row: Record<string, unknown>): DashboardWidgetPageItem {
+  const item: DashboardWidgetPageItemRecord = {
+    id: String(row.id),
+    pageId: String(row.pageId),
+    widgetId: String(row.widgetId),
+    title: row.title ? String(row.title) : undefined,
+    columnStart: Number(row.columnStart ?? 1),
+    columnSpan: Number(row.columnSpan ?? 6),
+    rowStart: Number(row.rowStart ?? 1),
+    rowSpan: Number(row.rowSpan ?? 4),
+    sortOrder: Number(row.sortOrder ?? 0),
+    createdAt: String(row.createdAt),
+    updatedAt: String(row.updatedAt),
+  };
+
+  return {
+    ...item,
+    widget: dashboardWidgetInventoryEntryFromRow(row),
+  };
+}
+
+function dashboardWidgetPageItemRecordFromRow(row: Record<string, unknown>): DashboardWidgetPageItemRecord {
+  return {
+    id: String(row.id),
+    pageId: String(row.pageId),
+    widgetId: String(row.widgetId),
+    title: row.title ? String(row.title) : undefined,
+    columnStart: Number(row.columnStart ?? 1),
+    columnSpan: Number(row.columnSpan ?? 6),
+    rowStart: Number(row.rowStart ?? 1),
+    rowSpan: Number(row.rowSpan ?? 4),
+    sortOrder: Number(row.sortOrder ?? 0),
+    createdAt: String(row.createdAt),
     updatedAt: String(row.updatedAt),
   };
 }
@@ -671,6 +785,53 @@ function deviceWidgetOperationRunFromRow(row: Record<string, unknown>): DeviceWi
     operationJson: JSON.parse(String(row.operationJson ?? "{}")) as Record<string, unknown>,
     detailsJson: JSON.parse(String(row.detailsJson ?? "{}")) as Record<string, unknown>,
     createdAt: String(row.createdAt),
+  };
+}
+
+function deviceAutomationFromRow(row: Record<string, unknown>): DeviceAutomation {
+  return {
+    id: String(row.id),
+    deviceId: String(row.deviceId),
+    targetKind: row.targetKind as DeviceAutomation["targetKind"],
+    widgetId: String(row.widgetId),
+    controlId: String(row.controlId),
+    targetJson: JSON.parse(String(row.targetJson ?? "{}")) as Record<string, unknown>,
+    name: String(row.name),
+    description: row.description ? String(row.description) : undefined,
+    enabled: Number(row.enabled ?? 0) > 0,
+    scheduleKind: row.scheduleKind as DeviceAutomation["scheduleKind"],
+    intervalMinutes: row.intervalMinutes === null || typeof row.intervalMinutes === "undefined"
+      ? undefined
+      : Number(row.intervalMinutes),
+    hourLocal: row.hourLocal === null || typeof row.hourLocal === "undefined"
+      ? undefined
+      : Number(row.hourLocal),
+    minuteLocal: row.minuteLocal === null || typeof row.minuteLocal === "undefined"
+      ? undefined
+      : Number(row.minuteLocal),
+    inputJson: JSON.parse(String(row.inputJson ?? "{}")) as Record<string, unknown>,
+    lastRunAt: row.lastRunAt ? String(row.lastRunAt) : undefined,
+    nextRunAt: row.nextRunAt ? String(row.nextRunAt) : undefined,
+    lastRunStatus: row.lastRunStatus ? row.lastRunStatus as DeviceAutomation["lastRunStatus"] : undefined,
+    lastRunSummary: row.lastRunSummary ? String(row.lastRunSummary) : undefined,
+    createdBy: row.createdBy as DeviceAutomation["createdBy"],
+    createdAt: String(row.createdAt),
+    updatedAt: String(row.updatedAt),
+  };
+}
+
+function deviceAutomationRunFromRow(row: Record<string, unknown>): DeviceAutomationRun {
+  return {
+    id: String(row.id),
+    automationId: String(row.automationId),
+    deviceId: String(row.deviceId),
+    widgetId: String(row.widgetId),
+    controlId: String(row.controlId),
+    status: row.status as DeviceAutomationRun["status"],
+    summary: String(row.summary ?? ""),
+    resultJson: JSON.parse(String(row.resultJson ?? "{}")) as Record<string, unknown>,
+    createdAt: String(row.createdAt),
+    completedAt: row.completedAt ? String(row.completedAt) : undefined,
   };
 }
 
@@ -1297,6 +1458,7 @@ class StateStore {
       const localToolApprovals = (db.prepare("SELECT * FROM local_tool_approvals ORDER BY requestedAt DESC").all() as Record<string, unknown>[]).map(localToolApprovalFromRow);
       const protocolSessions = (db.prepare("SELECT * FROM protocol_sessions ORDER BY updatedAt DESC").all() as Record<string, unknown>[]).map(protocolSessionRecordFromRow);
       const protocolSessionLeases = (db.prepare("SELECT * FROM protocol_session_leases ORDER BY requestedAt DESC").all() as Record<string, unknown>[]).map(protocolSessionLeaseFromRow);
+      const dashboardWidgetPages = this.getDashboardWidgetPages(db);
 
       return {
         version: this.getVersion(db),
@@ -1321,6 +1483,7 @@ class StateStore {
         localToolApprovals,
         protocolSessions,
         protocolSessionLeases,
+        dashboardWidgetPages,
       };
     });
 
@@ -2426,7 +2589,7 @@ class StateStore {
     });
   }
 
-  claimDurableJobs(limit = 100): Array<{
+  claimDurableJobs(limit = 100, options?: { kinds?: string[] }): Array<{
     id: string;
     kind: string;
     payload: Record<string, unknown>;
@@ -2435,13 +2598,26 @@ class StateStore {
   }> {
     return this.withAuditDbRecovery("StateStore.claimDurableJobs", (auditDb) => {
       const now = new Date().toISOString();
-      const rows = auditDb.prepare(`
-        SELECT id, kind, payload, attempts, idempotencyKey
-        FROM durable_jobs
-        WHERE status = 'pending' AND runAfter <= ?
-        ORDER BY createdAt ASC
-        LIMIT ?
-      `).all(now, Math.max(1, Math.min(500, limit))) as Array<Record<string, unknown>>;
+      const kinds = Array.from(new Set((options?.kinds ?? []).map((kind) => kind.trim()).filter(Boolean)));
+      const rows = kinds.length > 0
+        ? auditDb.prepare(`
+          SELECT id, kind, payload, attempts, idempotencyKey
+          FROM durable_jobs
+          WHERE status = 'pending' AND runAfter <= ? AND kind IN (${kinds.map(() => "?").join(", ")})
+          ORDER BY createdAt ASC
+          LIMIT ?
+        `).all(
+          now,
+          ...kinds,
+          Math.max(1, Math.min(500, limit)),
+        ) as Array<Record<string, unknown>>
+        : auditDb.prepare(`
+          SELECT id, kind, payload, attempts, idempotencyKey
+          FROM durable_jobs
+          WHERE status = 'pending' AND runAfter <= ?
+          ORDER BY createdAt ASC
+          LIMIT ?
+        `).all(now, Math.max(1, Math.min(500, limit))) as Array<Record<string, unknown>>;
 
       const tx = auditDb.transaction((jobIds: string[]) => {
         for (const id of jobIds) {
@@ -3373,6 +3549,105 @@ class StateStore {
     });
   }
 
+  /* ---------- Notifications ---------- */
+
+  getNotificationChannels(): NotificationChannel[] {
+    return this.withDbRecovery("StateStore.getNotificationChannels", (db) => {
+      const rows = db.prepare(`
+        SELECT * FROM notification_channels
+        ORDER BY enabled DESC, kind ASC, name ASC, updatedAt DESC
+      `).all() as Record<string, unknown>[];
+      return rows.map(notificationChannelFromRow);
+    });
+  }
+
+  getNotificationChannelById(id: string): NotificationChannel | null {
+    return this.withDbRecovery("StateStore.getNotificationChannelById", (db) => {
+      const row = db.prepare("SELECT * FROM notification_channels WHERE id = ? LIMIT 1").get(id) as Record<string, unknown> | undefined;
+      return row ? notificationChannelFromRow(row) : null;
+    });
+  }
+
+  upsertNotificationChannel(channel: NotificationChannel): NotificationChannel {
+    return this.withDbRecovery("StateStore.upsertNotificationChannel", (db) => {
+      db.prepare(`
+        INSERT OR REPLACE INTO notification_channels (
+          id, name, kind, enabled, target, eventKinds, minimumSeverity, vaultSecretRef, configJson, createdAt, updatedAt
+        )
+        VALUES (
+          @id, @name, @kind, @enabled, @target, @eventKinds, @minimumSeverity, @vaultSecretRef, @configJson, @createdAt, @updatedAt
+        )
+      `).run({
+        id: channel.id,
+        name: channel.name,
+        kind: channel.kind,
+        enabled: channel.enabled ? 1 : 0,
+        target: channel.target,
+        eventKinds: JSON.stringify(channel.eventKinds ?? []),
+        minimumSeverity: channel.minimumSeverity ?? null,
+        vaultSecretRef: channel.vaultSecretRef ?? null,
+        configJson: JSON.stringify(channel.configJson ?? {}),
+        createdAt: channel.createdAt,
+        updatedAt: channel.updatedAt,
+      });
+      return channel;
+    });
+  }
+
+  deleteNotificationChannel(id: string): boolean {
+    return this.withDbRecovery("StateStore.deleteNotificationChannel", (db) => {
+      const result = db.prepare("DELETE FROM notification_channels WHERE id = ?").run(id);
+      return result.changes > 0;
+    });
+  }
+
+  getNotificationDeliveries(limit = 200): NotificationDelivery[] {
+    return this.withDbRecovery("StateStore.getNotificationDeliveries", (db) => {
+      const rows = db.prepare(`
+        SELECT * FROM notification_deliveries
+        ORDER BY createdAt DESC
+        LIMIT ?
+      `).all(Math.max(1, Math.min(2_000, limit))) as Record<string, unknown>[];
+      return rows.map(notificationDeliveryFromRow);
+    });
+  }
+
+  getNotificationDeliveryById(id: string): NotificationDelivery | null {
+    return this.withDbRecovery("StateStore.getNotificationDeliveryById", (db) => {
+      const row = db.prepare("SELECT * FROM notification_deliveries WHERE id = ? LIMIT 1").get(id) as Record<string, unknown> | undefined;
+      return row ? notificationDeliveryFromRow(row) : null;
+    });
+  }
+
+  upsertNotificationDelivery(delivery: NotificationDelivery): NotificationDelivery {
+    return this.withDbRecovery("StateStore.upsertNotificationDelivery", (db) => {
+      db.prepare(`
+        INSERT OR REPLACE INTO notification_deliveries (
+          id, channelId, eventKind, eventRef, summary, payloadJson, status, attempts,
+          lastError, deliveredAt, createdAt, updatedAt
+        )
+        VALUES (
+          @id, @channelId, @eventKind, @eventRef, @summary, @payloadJson, @status, @attempts,
+          @lastError, @deliveredAt, @createdAt, @updatedAt
+        )
+      `).run({
+        id: delivery.id,
+        channelId: delivery.channelId,
+        eventKind: delivery.eventKind,
+        eventRef: delivery.eventRef,
+        summary: delivery.summary,
+        payloadJson: JSON.stringify(delivery.payloadJson ?? {}),
+        status: delivery.status,
+        attempts: delivery.attempts,
+        lastError: delivery.lastError ?? null,
+        deliveredAt: delivery.deliveredAt ?? null,
+        createdAt: delivery.createdAt,
+        updatedAt: delivery.updatedAt,
+      });
+      return delivery;
+    });
+  }
+
   /* ---------- Access Methods ---------- */
 
   getAccessMethods(deviceId: string): AccessMethod[] {
@@ -3990,6 +4265,484 @@ class StateStore {
     });
   }
 
+  /* ---------- Dashboard Widget Pages ---------- */
+
+  private buildDashboardWidgetPageSlug(
+    db: Database.Database,
+    name: string,
+    pageIdToIgnore?: string,
+  ): string {
+    const base = slugifyKey(name) || "widget-page";
+    let candidate = base;
+    let suffix = 2;
+
+    while (true) {
+      const existing = db.prepare(`
+        SELECT id FROM dashboard_widget_pages
+        WHERE slug = ?
+        LIMIT 1
+      `).get(candidate) as { id?: string } | undefined;
+      if (!existing || existing.id === pageIdToIgnore) {
+        return candidate;
+      }
+      const suffixText = `-${suffix++}`;
+      candidate = `${base.slice(0, Math.max(1, 64 - suffixText.length))}${suffixText}`;
+    }
+  }
+
+  private readDashboardWidgetInventory(db: Database.Database): DashboardWidgetInventoryEntry[] {
+    const rows = db.prepare(`
+      SELECT
+        w.id AS widgetId,
+        w.deviceId AS deviceId,
+        COALESCE(NULLIF(d.name, ''), NULLIF(d.hostname, ''), w.deviceId) AS deviceName,
+        d.ip AS deviceIp,
+        d.status AS deviceStatus,
+        w.slug AS widgetSlug,
+        w.name AS widgetName,
+        w.description AS widgetDescription,
+        w.status AS widgetStatus,
+        w.revision AS widgetRevision,
+        w.capabilitiesJson AS capabilitiesJson,
+        w.updatedAt AS widgetUpdatedAt
+      FROM device_widgets w
+      INNER JOIN devices d ON d.id = w.deviceId
+      ORDER BY LOWER(COALESCE(NULLIF(d.name, ''), NULLIF(d.hostname, ''), w.deviceId)) ASC,
+        w.updatedAt DESC,
+        LOWER(w.name) ASC
+    `).all() as Record<string, unknown>[];
+
+    return rows.map(dashboardWidgetInventoryEntryFromRow);
+  }
+
+  private readDashboardWidgetPageItemRecords(
+    db: Database.Database,
+    pageId: string,
+  ): DashboardWidgetPageItemRecord[] {
+    return (db.prepare(`
+      SELECT
+        id,
+        pageId,
+        widgetId,
+        title,
+        columnStart,
+        columnSpan,
+        rowStart,
+        rowSpan,
+        sortOrder,
+        createdAt,
+        updatedAt
+      FROM dashboard_widget_page_items
+      WHERE pageId = ?
+      ORDER BY rowStart ASC, columnStart ASC, sortOrder ASC, createdAt ASC
+    `).all(pageId) as Record<string, unknown>[]).map(dashboardWidgetPageItemRecordFromRow);
+  }
+
+  private persistDashboardWidgetPageItemLayout(
+    db: Database.Database,
+    items: DashboardWidgetPageItemRecord[],
+  ): void {
+    const update = db.prepare(`
+      UPDATE dashboard_widget_page_items
+      SET title = @title,
+        columnStart = @columnStart,
+        columnSpan = @columnSpan,
+        rowStart = @rowStart,
+        rowSpan = @rowSpan,
+        sortOrder = @sortOrder,
+        updatedAt = @updatedAt
+      WHERE id = @id
+    `);
+
+    items.forEach((record) => {
+      update.run({
+        id: record.id,
+        title: record.title?.trim() ? record.title.trim() : null,
+        columnStart: record.columnStart,
+        columnSpan: record.columnSpan,
+        rowStart: record.rowStart,
+        rowSpan: record.rowSpan,
+        sortOrder: record.sortOrder,
+        updatedAt: record.updatedAt,
+      });
+    });
+  }
+
+  private readDashboardWidgetPages(db: Database.Database): DashboardWidgetPage[] {
+    const pages = (db.prepare(`
+      SELECT * FROM dashboard_widget_pages
+      ORDER BY sortOrder ASC, updatedAt DESC, createdAt ASC
+    `).all() as Record<string, unknown>[]).map((row) => ({
+      ...dashboardWidgetPageRecordFromRow(row),
+      items: [] as DashboardWidgetPageItem[],
+    }));
+
+    if (pages.length === 0) {
+      return [];
+    }
+
+    const pageMap = new Map(pages.map((page) => [page.id, page]));
+    const itemRows = db.prepare(`
+      SELECT
+        i.id,
+        i.pageId,
+        i.widgetId,
+        i.title,
+        i.columnStart,
+        i.columnSpan,
+        i.rowStart,
+        i.rowSpan,
+        i.sortOrder,
+        i.createdAt,
+        i.updatedAt,
+        w.deviceId AS deviceId,
+        COALESCE(NULLIF(d.name, ''), NULLIF(d.hostname, ''), w.deviceId) AS deviceName,
+        d.ip AS deviceIp,
+        d.status AS deviceStatus,
+        w.slug AS widgetSlug,
+        w.name AS widgetName,
+        w.description AS widgetDescription,
+        w.status AS widgetStatus,
+        w.revision AS widgetRevision,
+        w.capabilitiesJson AS capabilitiesJson,
+        w.updatedAt AS widgetUpdatedAt
+      FROM dashboard_widget_page_items i
+      INNER JOIN device_widgets w ON w.id = i.widgetId
+      INNER JOIN devices d ON d.id = w.deviceId
+      ORDER BY i.pageId ASC, i.rowStart ASC, i.columnStart ASC, i.sortOrder ASC, i.createdAt ASC
+    `).all() as Record<string, unknown>[];
+
+    for (const row of itemRows) {
+      const page = pageMap.get(String(row.pageId));
+      if (!page) {
+        continue;
+      }
+      page.items.push(dashboardWidgetPageItemFromRow(row));
+    }
+
+    return pages.map((page) => ({
+      ...page,
+      items: resolveDashboardWidgetGridLayout(page.items),
+    }));
+  }
+
+  getDashboardWidgetInventory(): DashboardWidgetInventoryEntry[] {
+    return this.withDbRecovery("StateStore.getDashboardWidgetInventory", (db) => (
+      this.readDashboardWidgetInventory(db)
+    ));
+  }
+
+  getDashboardWidgetPages(db?: Database.Database): DashboardWidgetPage[] {
+    if (db) {
+      return this.readDashboardWidgetPages(db);
+    }
+    return this.withDbRecovery("StateStore.getDashboardWidgetPages", (database) => (
+      this.readDashboardWidgetPages(database)
+    ));
+  }
+
+  getDashboardWidgetPageById(pageId: string): DashboardWidgetPage | null {
+    return this.withDbRecovery("StateStore.getDashboardWidgetPageById", (db) => (
+      this.readDashboardWidgetPages(db).find((page) => page.id === pageId) ?? null
+    ));
+  }
+
+  createDashboardWidgetPage(input: {
+    id: string;
+    name: string;
+    sortOrder?: number;
+    createdAt: string;
+    updatedAt?: string;
+  }): DashboardWidgetPage {
+    return this.withDbRecovery("StateStore.createDashboardWidgetPage", (db) => {
+      const name = input.name.trim() || "Widget page";
+      const sortOrder = Number.isFinite(Number(input.sortOrder))
+        ? Number(input.sortOrder)
+        : Number(
+          (db.prepare("SELECT COALESCE(MAX(sortOrder), -1) + 1 AS sortOrder FROM dashboard_widget_pages").get() as {
+            sortOrder?: number;
+          }).sortOrder ?? 0,
+        );
+      const record: DashboardWidgetPageRecord = {
+        id: input.id,
+        slug: this.buildDashboardWidgetPageSlug(db, name),
+        name,
+        sortOrder,
+        createdAt: input.createdAt,
+        updatedAt: input.updatedAt ?? input.createdAt,
+      };
+
+      db.prepare(`
+        INSERT INTO dashboard_widget_pages (
+          id, slug, name, sortOrder, createdAt, updatedAt
+        )
+        VALUES (
+          @id, @slug, @name, @sortOrder, @createdAt, @updatedAt
+        )
+      `).run(record);
+
+      return this.readDashboardWidgetPages(db).find((page) => page.id === record.id) ?? { ...record, items: [] };
+    });
+  }
+
+  updateDashboardWidgetPage(
+    pageId: string,
+    updates: {
+      name?: string;
+      sortOrder?: number;
+    },
+  ): DashboardWidgetPage | null {
+    return this.withDbRecovery("StateStore.updateDashboardWidgetPage", (db) => {
+      const existingRow = db.prepare(`
+        SELECT * FROM dashboard_widget_pages
+        WHERE id = ?
+        LIMIT 1
+      `).get(pageId) as Record<string, unknown> | undefined;
+
+      if (!existingRow) {
+        return null;
+      }
+
+      const existing = dashboardWidgetPageRecordFromRow(existingRow);
+      const next: DashboardWidgetPageRecord = {
+        ...existing,
+        name: typeof updates.name === "string" ? updates.name.trim() || existing.name : existing.name,
+        sortOrder: Number.isFinite(Number(updates.sortOrder)) ? Number(updates.sortOrder) : existing.sortOrder,
+        updatedAt: new Date().toISOString(),
+      };
+
+      db.prepare(`
+        UPDATE dashboard_widget_pages
+        SET name = @name,
+          sortOrder = @sortOrder,
+          updatedAt = @updatedAt
+        WHERE id = @id
+      `).run(next);
+
+      return this.readDashboardWidgetPages(db).find((page) => page.id === pageId) ?? null;
+    });
+  }
+
+  deleteDashboardWidgetPage(pageId: string): boolean {
+    return this.withDbRecovery("StateStore.deleteDashboardWidgetPage", (db) => {
+      const result = db.prepare("DELETE FROM dashboard_widget_pages WHERE id = ?").run(pageId);
+      return result.changes > 0;
+    });
+  }
+
+  addDashboardWidgetPageItem(input: {
+    id: string;
+    pageId: string;
+    widgetId: string;
+    title?: string;
+    columnStart?: number;
+    columnSpan?: number;
+    rowStart?: number;
+    rowSpan?: number;
+    createdAt: string;
+    updatedAt?: string;
+  }): DashboardWidgetPage | null {
+    return this.withDbRecovery("StateStore.addDashboardWidgetPageItem", (db) => {
+      const pageExists = db.prepare("SELECT 1 FROM dashboard_widget_pages WHERE id = ? LIMIT 1").get(input.pageId);
+      const widgetExists = db.prepare("SELECT 1 FROM device_widgets WHERE id = ? LIMIT 1").get(input.widgetId);
+      if (!pageExists || !widgetExists) {
+        return null;
+      }
+
+      const existingItems = this.readDashboardWidgetPageItemRecords(db, input.pageId);
+      const columnSpan = normalizeDashboardWidgetColumnSpan(input.columnSpan ?? 6);
+      const rowSpan = normalizeDashboardWidgetRowSpan(input.rowSpan ?? 4);
+      const placement = typeof input.columnStart === "number" && typeof input.rowStart === "number"
+        ? {
+          columnStart: input.columnStart,
+          rowStart: input.rowStart,
+        }
+        : findDashboardWidgetGridPlacement(existingItems, columnSpan, rowSpan);
+      const nextItem: DashboardWidgetPageItemRecord = {
+        id: input.id,
+        pageId: input.pageId,
+        widgetId: input.widgetId,
+        title: input.title?.trim() ? input.title.trim() : undefined,
+        columnStart: placement.columnStart,
+        columnSpan,
+        rowStart: placement.rowStart,
+        rowSpan,
+        sortOrder: existingItems.length,
+        createdAt: input.createdAt,
+        updatedAt: input.updatedAt ?? input.createdAt,
+      };
+      const nextItems = resolveDashboardWidgetGridLayout(
+        [...existingItems, nextItem],
+        [nextItem.id],
+      ).map((item) => ({
+        ...item,
+        pageId: item.pageId,
+        widgetId: item.widgetId,
+        title: item.title,
+        updatedAt: item.id === nextItem.id ? nextItem.updatedAt : item.updatedAt,
+      }));
+
+      const insertedItem = nextItems.find((item) => item.id === nextItem.id) ?? nextItem;
+
+      const tx = db.transaction(() => {
+        db.prepare(`
+          INSERT INTO dashboard_widget_page_items (
+            id, pageId, widgetId, title, columnStart, columnSpan, rowStart, rowSpan, sortOrder, createdAt, updatedAt
+          )
+          VALUES (
+            @id, @pageId, @widgetId, @title, @columnStart, @columnSpan, @rowStart, @rowSpan, @sortOrder, @createdAt, @updatedAt
+          )
+        `).run({
+          id: insertedItem.id,
+          pageId: insertedItem.pageId,
+          widgetId: insertedItem.widgetId,
+          title: insertedItem.title ?? null,
+          columnStart: insertedItem.columnStart,
+          columnSpan: insertedItem.columnSpan,
+          rowStart: insertedItem.rowStart,
+          rowSpan: insertedItem.rowSpan,
+          sortOrder: insertedItem.sortOrder,
+          createdAt: insertedItem.createdAt,
+          updatedAt: insertedItem.updatedAt,
+        });
+        this.persistDashboardWidgetPageItemLayout(db, nextItems);
+      });
+      tx();
+
+      return this.readDashboardWidgetPages(db).find((page) => page.id === input.pageId) ?? null;
+    });
+  }
+
+  updateDashboardWidgetPageItem(
+    itemId: string,
+    updates: {
+      title?: string | null;
+      columnStart?: number;
+      columnSpan?: number;
+      rowStart?: number;
+      rowSpan?: number;
+      sortOrder?: number;
+    },
+  ): DashboardWidgetPage | null {
+    return this.withDbRecovery("StateStore.updateDashboardWidgetPageItem", (db) => {
+      const existing = db.prepare(`
+        SELECT * FROM dashboard_widget_page_items
+        WHERE id = ?
+        LIMIT 1
+      `).get(itemId) as Record<string, unknown> | undefined;
+
+      if (!existing) {
+        return null;
+      }
+
+      const pageId = String(existing.pageId);
+      const pageItems = this.readDashboardWidgetPageItemRecords(db, pageId);
+      const nextUpdatedAt = new Date().toISOString();
+      const title = typeof updates.title === "undefined"
+        ? (existing.title ? String(existing.title) : undefined)
+        : (typeof updates.title === "string" && updates.title.trim().length > 0 ? updates.title.trim() : undefined);
+      const currentColumnSpan = normalizeDashboardWidgetColumnSpan(Number(existing.columnSpan ?? 6));
+      const currentRowSpan = normalizeDashboardWidgetRowSpan(Number(existing.rowSpan ?? 4));
+      const nextColumnSpan = typeof updates.columnSpan === "undefined"
+        ? currentColumnSpan
+        : normalizeDashboardWidgetColumnSpan(updates.columnSpan);
+      const nextRowSpan = typeof updates.rowSpan === "undefined"
+        ? currentRowSpan
+        : normalizeDashboardWidgetRowSpan(updates.rowSpan);
+      const nextItems = pageItems.map((item) => (
+        item.id === itemId
+          ? {
+            ...item,
+            title,
+            columnStart: typeof updates.columnStart === "undefined"
+              ? Number(existing.columnStart ?? item.columnStart ?? 1)
+              : updates.columnStart,
+            columnSpan: nextColumnSpan,
+            rowStart: typeof updates.rowStart === "undefined"
+              ? Number(existing.rowStart ?? item.rowStart ?? 1)
+              : updates.rowStart,
+            rowSpan: nextRowSpan,
+            sortOrder: Number.isFinite(Number(updates.sortOrder))
+              ? Math.max(0, Math.round(Number(updates.sortOrder)))
+              : item.sortOrder,
+            updatedAt: nextUpdatedAt,
+          }
+          : item
+      ));
+      const shouldResolveLayout = typeof updates.columnStart !== "undefined"
+        || typeof updates.columnSpan !== "undefined"
+        || typeof updates.rowStart !== "undefined"
+        || typeof updates.rowSpan !== "undefined"
+        || typeof updates.sortOrder !== "undefined";
+      const persistedItems = shouldResolveLayout
+        ? resolveDashboardWidgetGridLayout(nextItems, [itemId]).map((item) => ({
+          ...item,
+          updatedAt: item.id === itemId || item.updatedAt === nextUpdatedAt ? nextUpdatedAt : item.updatedAt,
+        }))
+        : nextItems;
+
+      db.transaction((items: DashboardWidgetPageItemRecord[]) => {
+        this.persistDashboardWidgetPageItemLayout(db, items);
+      })(persistedItems);
+
+      return this.readDashboardWidgetPages(db).find((page) => page.id === pageId) ?? null;
+    });
+  }
+
+  reorderDashboardWidgetPageItems(pageId: string, itemIds: string[]): DashboardWidgetPage | null {
+    return this.withDbRecovery("StateStore.reorderDashboardWidgetPageItems", (db) => {
+      const existingRows = db.prepare(`
+        SELECT id FROM dashboard_widget_page_items
+        WHERE pageId = ?
+        ORDER BY sortOrder ASC, createdAt ASC
+      `).all(pageId) as Array<{ id: string }>;
+
+      if (existingRows.length === 0) {
+        return this.readDashboardWidgetPages(db).find((page) => page.id === pageId) ?? null;
+      }
+
+      const existingIds = existingRows.map((row) => String(row.id));
+      const requestedIds = itemIds.filter((id, index) => existingIds.includes(id) && itemIds.indexOf(id) === index);
+      const orderedIds = [...requestedIds, ...existingIds.filter((id) => !requestedIds.includes(id))];
+      const updatedAt = new Date().toISOString();
+      const update = db.prepare(`
+        UPDATE dashboard_widget_page_items
+        SET sortOrder = ?, updatedAt = ?
+        WHERE id = ?
+      `);
+
+      const tx = db.transaction(() => {
+        orderedIds.forEach((id, index) => {
+          update.run(index, updatedAt, id);
+        });
+      });
+      tx();
+
+      return this.readDashboardWidgetPages(db).find((page) => page.id === pageId) ?? null;
+    });
+  }
+
+  deleteDashboardWidgetPageItem(itemId: string): { pageId: string; page: DashboardWidgetPage | null } | null {
+    return this.withDbRecovery("StateStore.deleteDashboardWidgetPageItem", (db) => {
+      const existing = db.prepare(`
+        SELECT pageId FROM dashboard_widget_page_items
+        WHERE id = ?
+        LIMIT 1
+      `).get(itemId) as { pageId?: string } | undefined;
+
+      if (!existing?.pageId) {
+        return null;
+      }
+
+      db.prepare("DELETE FROM dashboard_widget_page_items WHERE id = ?").run(itemId);
+
+      return {
+        pageId: existing.pageId,
+        page: this.readDashboardWidgetPages(db).find((candidate) => candidate.id === existing.pageId) ?? null,
+      };
+    });
+  }
+
   /* ---------- Device Widgets ---------- */
 
   getDeviceWidgets(deviceId: string): DeviceWidget[] {
@@ -4036,11 +4789,11 @@ class StateStore {
       db.prepare(`
         INSERT OR REPLACE INTO device_widgets (
           id, deviceId, slug, name, description, status, html, css, js, capabilitiesJson,
-          sourcePrompt, createdBy, revision, createdAt, updatedAt
+          controlsJson, sourcePrompt, createdBy, revision, createdAt, updatedAt
         )
         VALUES (
           @id, @deviceId, @slug, @name, @description, @status, @html, @css, @js, @capabilitiesJson,
-          @sourcePrompt, @createdBy, @revision, @createdAt, @updatedAt
+          @controlsJson, @sourcePrompt, @createdBy, @revision, @createdAt, @updatedAt
         )
       `).run({
         id: next.id,
@@ -4053,6 +4806,7 @@ class StateStore {
         css: next.css,
         js: next.js,
         capabilitiesJson: JSON.stringify(next.capabilities ?? []),
+        controlsJson: JSON.stringify(next.controls ?? []),
         sourcePrompt: next.sourcePrompt ?? null,
         createdBy: next.createdBy,
         revision: next.revision,
@@ -4172,6 +4926,142 @@ class StateStore {
               LIMIT 250
             )
         `).run(next.widgetId, next.widgetId);
+      });
+
+      tx(run);
+      return run;
+    });
+  }
+
+  getDeviceAutomations(deviceId: string): DeviceAutomation[] {
+    return this.withDbRecovery("StateStore.getDeviceAutomations", (db) => {
+      const rows = db.prepare(`
+        SELECT * FROM device_automations
+        WHERE deviceId = ?
+        ORDER BY updatedAt DESC, createdAt DESC
+      `).all(deviceId) as Record<string, unknown>[];
+      return rows.map(deviceAutomationFromRow);
+    });
+  }
+
+  getDeviceAutomationById(automationId: string): DeviceAutomation | null {
+    return this.withDbRecovery("StateStore.getDeviceAutomationById", (db) => {
+      const row = db.prepare(`
+        SELECT * FROM device_automations
+        WHERE id = ?
+        LIMIT 1
+      `).get(automationId) as Record<string, unknown> | undefined;
+      return row ? deviceAutomationFromRow(row) : null;
+    });
+  }
+
+  getDueDeviceAutomations(nowIso: string, limit = 50): DeviceAutomation[] {
+    return this.withDbRecovery("StateStore.getDueDeviceAutomations", (db) => {
+      const rows = db.prepare(`
+        SELECT * FROM device_automations
+        WHERE enabled = 1
+          AND scheduleKind != 'manual'
+          AND nextRunAt IS NOT NULL
+          AND nextRunAt <= ?
+        ORDER BY nextRunAt ASC, updatedAt ASC
+        LIMIT ?
+      `).all(nowIso, Math.max(1, Math.min(limit, 200))) as Record<string, unknown>[];
+      return rows.map(deviceAutomationFromRow);
+    });
+  }
+
+  upsertDeviceAutomation(automation: DeviceAutomation): DeviceAutomation {
+    return this.withDbRecovery("StateStore.upsertDeviceAutomation", (db) => {
+      db.prepare(`
+        INSERT OR REPLACE INTO device_automations (
+          id, deviceId, targetKind, widgetId, controlId, targetJson, name, description, enabled, scheduleKind,
+          intervalMinutes, hourLocal, minuteLocal, inputJson, lastRunAt, nextRunAt, lastRunStatus,
+          lastRunSummary, createdBy, createdAt, updatedAt
+        )
+        VALUES (
+          @id, @deviceId, @targetKind, @widgetId, @controlId, @targetJson, @name, @description, @enabled, @scheduleKind,
+          @intervalMinutes, @hourLocal, @minuteLocal, @inputJson, @lastRunAt, @nextRunAt, @lastRunStatus,
+          @lastRunSummary, @createdBy, @createdAt, @updatedAt
+        )
+      `).run({
+        id: automation.id,
+        deviceId: automation.deviceId,
+        targetKind: automation.targetKind,
+        widgetId: automation.widgetId,
+        controlId: automation.controlId,
+        targetJson: JSON.stringify(automation.targetJson ?? {}),
+        name: automation.name,
+        description: automation.description ?? null,
+        enabled: automation.enabled ? 1 : 0,
+        scheduleKind: automation.scheduleKind,
+        intervalMinutes: automation.intervalMinutes ?? null,
+        hourLocal: automation.hourLocal ?? null,
+        minuteLocal: automation.minuteLocal ?? null,
+        inputJson: JSON.stringify(automation.inputJson ?? {}),
+        lastRunAt: automation.lastRunAt ?? null,
+        nextRunAt: automation.nextRunAt ?? null,
+        lastRunStatus: automation.lastRunStatus ?? null,
+        lastRunSummary: automation.lastRunSummary ?? null,
+        createdBy: automation.createdBy,
+        createdAt: automation.createdAt,
+        updatedAt: automation.updatedAt,
+      });
+      return automation;
+    });
+  }
+
+  deleteDeviceAutomation(automationId: string): boolean {
+    return this.withDbRecovery("StateStore.deleteDeviceAutomation", (db) => {
+      const result = db.prepare("DELETE FROM device_automations WHERE id = ?").run(automationId);
+      return result.changes > 0;
+    });
+  }
+
+  getDeviceAutomationRuns(automationId: string, limit = 20): DeviceAutomationRun[] {
+    return this.withDbRecovery("StateStore.getDeviceAutomationRuns", (db) => {
+      const rows = db.prepare(`
+        SELECT * FROM device_automation_runs
+        WHERE automationId = ?
+        ORDER BY createdAt DESC
+        LIMIT ?
+      `).all(automationId, Math.max(1, Math.min(limit, 100))) as Record<string, unknown>[];
+      return rows.map(deviceAutomationRunFromRow);
+    });
+  }
+
+  addDeviceAutomationRun(run: DeviceAutomationRun): DeviceAutomationRun {
+    return this.withDbRecovery("StateStore.addDeviceAutomationRun", (db) => {
+      const tx = db.transaction((next: DeviceAutomationRun) => {
+        db.prepare(`
+          INSERT INTO device_automation_runs (
+            id, automationId, deviceId, widgetId, controlId, status, summary, resultJson, createdAt, completedAt
+          )
+          VALUES (
+            @id, @automationId, @deviceId, @widgetId, @controlId, @status, @summary, @resultJson, @createdAt, @completedAt
+          )
+        `).run({
+          id: next.id,
+          automationId: next.automationId,
+          deviceId: next.deviceId,
+          widgetId: next.widgetId,
+          controlId: next.controlId,
+          status: next.status,
+          summary: next.summary,
+          resultJson: JSON.stringify(next.resultJson ?? {}),
+          createdAt: next.createdAt,
+          completedAt: next.completedAt ?? null,
+        });
+
+        db.prepare(`
+          DELETE FROM device_automation_runs
+          WHERE automationId = ?
+            AND id NOT IN (
+              SELECT id FROM device_automation_runs
+              WHERE automationId = ?
+              ORDER BY createdAt DESC
+              LIMIT 250
+            )
+        `).run(next.automationId, next.automationId);
       });
 
       tx(run);

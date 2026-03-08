@@ -1,6 +1,6 @@
 # Steward Spec Checklist (Compared to `AGENTS.md`)
 
-Last audited: 2026-03-05
+Last audited: 2026-03-08
 
 Legend:
 - `[x]` Implemented
@@ -79,11 +79,12 @@ Legend:
 
 ## 7) Incident Response Pipeline
 
-- [x] Detection creates incidents from heuristic conditions (offline/telnet)
+- [x] Detection creates incidents from heuristic conditions (offline/telnet/assurance drift)
 - [x] Incident timeline model exists
 - [x] Recommendation model/feed exists
 - [x] Incident status updates supported via API
 - [x] Policy-gated remediation execution path via playbooks
+- [x] Deterministic TLS certificate expiry findings and renewal recommendations exist
 - [ ] Correlation across multi-device dependencies/events (advanced)
 - [ ] Root-cause diagnosis engine with targeted probes (advanced)
 - [ ] Recurrence analytics driving improvement recommendations
@@ -125,7 +126,7 @@ Legend:
 - [x] Daily digest generation endpoint
 - [x] Daily digest scheduler (DB-backed system settings)
 - [ ] Weekly executive report generation
-- [ ] Notification channel integrations (email/Slack/Teams/SMS/push)
+- [ ] Notification channel integrations (Telegram/email/Slack/Teams/SMS/push/webhooks)
 - [x] Approval inbox with TTL/escalation rules
 
 ## 12) Deployment Model
@@ -151,7 +152,7 @@ Legend:
 - [x] Playbook resources
 - [x] Audit export endpoint (`/api/audit-events`, JSON/JSONL)
 - [x] Settings endpoints for runtime/system/auth + history
-- [ ] Streaming event API for live status updates
+- [ ] Streaming event API for live status updates (full-state SSE exists, but not delta/projection events)
 
 ## 14) UX and Information Architecture
 
@@ -213,27 +214,27 @@ Legend:
 - [ ] TASK-09: Implement multi-site federation/cloud relay
 - [x] TASK-10: Clear all lint warnings and re-validate build/lint gates
 
-## 20) Device Adoption Autonomy Program (2026-03-05)
+## 20) Device Adoption Autonomy Program (2026-03-08)
 
 - [x] ADP-BASE-01: Discovery + classification + protocol inference baseline exists
 - [x] ADP-BASE-02: Adoption status model exists (`discovered|adopted|ignored`)
 - [x] ADP-BASE-03: LLM discovery advisor exists (lightweight should-manage signal)
 - [x] ADP-BASE-04: Adapter registry + capability enrichment baseline exists
 - [x] ADP-BASE-05: Policy/approval/playbook runtime safety pipeline exists
-- [ ] ADP-001: Add first-class adoption workflow state machine and persistence
-- [ ] ADP-002: Trigger deep LLM endpoint profiling on adoption transition
-- [ ] ADP-003: Add onboarding question loop for service intent and watchlist capture
-- [ ] ADP-004: Add per-device credential broker (vault refs only, no secrets in DB/logs/prompts)
-- [ ] ADP-005: Add adapter scoring and device binding lifecycle (primary/fallback)
-- [ ] ADP-006: Enforce credential preconditions in playbook execution path
+- [x] ADP-001: First-class adoption workflow state machine and persistence exists (`adoption_runs`, orchestrator stages, draft sync)
+- [ ] ADP-002: Trigger deep LLM endpoint profiling on adoption transition (current profiling reuses discovery evidence and adoption drafts)
+- [ ] ADP-003: Replace draft-only onboarding prompts with a completed structured Q&A loop or fully standardize chat-native onboarding
+- [x] ADP-004: Per-device credential broker exists (vault refs only, redacted metadata, validation flow)
+- [ ] ADP-005: Adapter scoring and device binding persistence baseline exists, but primary/fallback lifecycle hardening remains
+- [x] ADP-006: Credential preconditions are enforced in playbook execution
 - [ ] ADP-007: Implement profile-driven issue detection packs per device class
 - [ ] ADP-008: Map findings to deterministic remediation, then gated Lane B fallback
-- [ ] ADP-009: Add onboarding UX in device detail/discovery flows
+- [ ] ADP-009: Onboarding session/draft UX exists, but the dedicated onboarding flow and discovery quick-start are incomplete
 - [ ] ADP-010: Add audit/telemetry hardening for onboarding and credential flows
 
 Reference: `docs/device-adoption-autonomy-task-register.md`
 
-## 21) World-Class Systems Program (2026-03-06)
+## 21) World-Class Systems Program (2026-03-08)
 
 - [x] WCX-001: Land the detailed world-class backlog document and keep it current
 - [ ] WCX-002: Replace shell-template-first execution with protocol-native execution brokers
@@ -247,7 +248,7 @@ Reference: `docs/device-adoption-autonomy-task-register.md`
 - [ ] WCX-010: Replace full-state streaming and table rewrites with scalable projections/deltas/workers
 - [ ] WCX-011: Add federation, site boundaries, and tenant-safe multi-site architecture
 - [ ] WCX-012: Add integration/certification/restore-drill coverage for Steward itself
-- [x] WCX-T1-001: Persist onboarding questions from adoption profiles and preserve answers across non-forced re-profiling
+- [ ] WCX-T1-001: Wire first-class onboarding question persistence and answer reuse (current prompts live only in onboarding draft state)
 - [x] WCX-T1-002: Require validated credentials for runtime protocol availability checks
 - [x] WCX-T1-003: Add credential access audit logging tied to device / operation / playbook run
 - [x] WCX-T1-004: Add quantitative `riskScore` and `riskFactors` to policy evaluations
@@ -256,3 +257,16 @@ Reference: `docs/device-adoption-autonomy-task-register.md`
 - [x] WCX-T3-001: Add protocol-aware SSH/HTTP credential validation instead of reachability-only checks
 
 Reference: `docs/world-class-system-program.md`
+
+## 22) Continuous Monitoring Architecture Program (2026-03-08)
+
+- [ ] CM-001: Split deterministic signal collection and finding evaluation from agentic diagnosis/remediation
+- [ ] CM-002: Add a wake coordinator backed by durable jobs for both schedule-driven and event-driven execution
+- [ ] CM-003: Add a finding router that dedupes, correlates, suppresses noise, and promotes incidents
+- [ ] CM-004: Add an outbound notification outbox and channel adapters (Telegram first, then webhooks/email/Slack/Teams)
+- [ ] CM-005: Move assurances and scanners onto typed monitor jobs with per-check cadence/SLOs instead of one monolithic `act` phase
+- [ ] CM-006: Add an event/time-series store for baselines, anomalies, thresholds, and escalation windows
+- [ ] CM-007: Replace full-state SSE with projection/delta streams for live monitoring UX
+- [ ] CM-008: Reserve the LLM agent for ambiguous diagnosis, monitor synthesis, and Lane B remediation planning
+
+Reference: `docs/continuous-monitoring-architecture-analysis.md`, `docs/continuous-monitoring-cutover-task-register.md`

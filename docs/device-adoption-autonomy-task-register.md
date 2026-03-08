@@ -1,6 +1,6 @@
 # Steward Device Adoption + Autonomous Ops Task Register
 
-Last validated: 2026-03-05
+Last validated: 2026-03-08
 
 ## Program Statement
 
@@ -17,35 +17,41 @@ When a device is adopted, Steward should immediately run an LLM-assisted onboard
 - Discovery pipeline: passive + active + multicast + fingerprinting (`src/lib/discovery/*`).
 - Device classification and protocol inference (`src/lib/discovery/classify.ts`).
 - Adoption status model (`discovered|adopted|ignored`) in device metadata.
+- Adoption orchestrator with persisted runs/stages/drafts (`src/lib/adoption/orchestrator.ts`).
+- Chat-native onboarding session bootstrap for adopted devices (`src/lib/adoption/conversation.ts`).
 - LLM discovery advisor for basic manageability recommendation (`src/lib/discovery/advisor.ts`).
+- LLM + deterministic adoption profile generation with safe fallback (`src/lib/adoption/profile.ts`).
 - Management-surface generation and protocol negotiation (`src/lib/protocols/negotiator.ts`).
 - Adapter registry + dynamic capabilities + adapter playbooks (`src/lib/adapters/*`).
+- Access-method and device-profile persistence/selection for onboarding decisions.
+- Per-device credential storage with vault refs, redacted reads, and validation flows.
 - Policy engine, approvals, playbook runtime safety gates (`src/lib/policy/*`, `src/lib/playbooks/*`).
+- Credential-aware playbook blocking for missing or unusable credentials.
+- Workload/assurance persistence and assurance run history (`workloads`, `assurances`, `assurance_runs`).
 - Vault for encrypted secret storage (OS-keystore protected, AES-256-GCM) (`src/lib/security/vault.ts`).
 
 ## Gaps to Close
 
-- No first-class adoption workflow state machine.
-- No device onboarding Q&A (critical services, uptime expectations, watchlist).
-- No per-device credential intent/binding model (only generic vault keys today).
-- No adapter selection score/binding lifecycle persisted per adopted device.
-- No credential-precondition enforcement before remediation execution.
+- Structured onboarding questions are generated, but they are not persisted/answered as first-class records; the current supported path is chat + draft editing.
+- No dedicated deep endpoint profiling pass on adoption transition beyond current discovery evidence and profile synthesis.
+- Adapter selection/binding persistence exists, but fallback lifecycle, verification, and override semantics still need hardening.
+- No durable job worker executes onboarding stages or monitor activation work yet.
 - Incident detection logic is still basic and not profile-driven.
 
 ## Target Architecture
 
-### 1) Adoption Orchestrator (new)
+### 1) Adoption Orchestrator (upgrade existing baseline)
 
 - Trigger: device adoption transition (`discovered -> adopted`) in `PATCH /api/devices/[id]`.
 - Stages:
   - `profile`: LLM + deterministic evidence synthesis.
-  - `questions`: generate only unresolved user questions.
+  - `questions`: either persist structured questions or fully standardize chat-native onboarding as the only supported answer path.
   - `credentials`: compute required credential intents by protocol/adapter.
   - `adapter_binding`: score/select adapters and persist binding plan.
   - `activation`: enable checks/playbooks for this device.
 - Execution model: queued durable jobs (audit DB durable_jobs) with idempotency keys.
 
-### 2) Credential Broker (new)
+### 2) Credential Broker (upgrade existing baseline)
 
 - Store only secret references in state DB; secret values live in vault.
 - Credential records include:
@@ -53,7 +59,7 @@ When a device is adopted, Steward should immediately run an LLM-assisted onboard
 - LLM and chat prompts receive only redacted metadata, never secret material.
 - Playbook execution resolves a vault secret at runtime through a broker API.
 
-### 3) Service Intent Contract (new)
+### 3) Service Intent Contract (upgrade existing baseline)
 
 - Persist user-confirmed "what must stay running" contracts:
   - service/container/process identifier
@@ -62,7 +68,7 @@ When a device is adopted, Steward should immediately run an LLM-assisted onboard
   - monitoring cadence
   - escalation policy
 
-### 4) Adapter Selection Engine (new)
+### 4) Adapter Selection Engine (upgrade existing baseline)
 
 - Scoring inputs:
   - inferred protocols
@@ -86,7 +92,7 @@ When a device is adopted, Steward should immediately run an LLM-assisted onboard
   - suggested deterministic playbook(s)
   - fallback Lane B Plan IR flow when no deterministic playbook exists.
 
-## DB Model Additions (SQLite)
+## DB Model Status (SQLite)
 
 All DB-backed, no env-based runtime config.
 
@@ -103,28 +109,31 @@ All DB-backed, no env-based runtime config.
 - `device_findings`
   - `id`, `deviceId`, `dedupeKey`, `findingType`, `severity`, `title`, `summary`, `evidenceJson`, `status`, `firstSeenAt`, `lastSeenAt`
 
-## API Additions
+Note:
+- these tables already exist in the repo baseline
+- the main remaining gap is wiring them into a durable workerized onboarding/monitoring flow rather than adding schema
 
-- `POST /api/devices/:id/adoption/start`
-- `GET /api/devices/:id/adoption`
-- `POST /api/devices/:id/adoption/questions/:questionId/answer`
-- `POST /api/devices/:id/credentials`
-- `GET /api/devices/:id/credentials` (redacted metadata only)
-- `POST /api/devices/:id/credentials/:credentialId/validate`
-- `GET /api/devices/:id/adapters/recommendations`
-- `POST /api/devices/:id/adapters/bind`
-- `GET /api/devices/:id/findings`
+## API Surface Status
 
-## UI Additions
+- [x] `POST /api/devices/:id/adoption`
+- [x] `GET /api/devices/:id/adoption`
+- [ ] `POST /api/devices/:id/adoption/questions/:questionId/answer`
+  - currently returns `410`; chat-native onboarding plus draft editing is the supported path
+- [x] `POST /api/devices/:id/credentials`
+- [x] `GET /api/devices/:id/credentials` (redacted metadata only)
+- [x] `POST /api/devices/:id/credentials/:credentialId/validate`
+- [x] `GET /api/devices/:id/adapters/recommendations`
+- [x] `POST /api/devices/:id/adapters/bind`
+- [x] `GET /api/devices/:id/findings`
+
+## UI Status
 
 - Device detail onboarding panel:
-  - adoption stage progress
-  - unresolved onboarding questions
-  - credential intents + secure submit controls
-  - adapter recommendation and bind/override action
-  - service contract editor
-- Discovery table quick action:
-  - "Adopt + Start Onboarding" (single action instead of status flip only)
+  - current baseline includes onboarding nudges, chat session bootstrap, workload/assurance editing, and credential/profile visibility
+  - remaining work is a tighter guided flow for onboarding completion and follow-up actions
+- Discovery/inventory quick actions:
+  - current baseline includes adoption controls
+  - remaining work is a single end-to-end "Adopt + Start Onboarding" path with less context switching
 
 ## LLM Contracts
 
@@ -147,31 +156,32 @@ All DB-backed, no env-based runtime config.
 
 | ID | Scope | Status | Definition of Done |
 |---|---|---|---|
-| ADP-001 | Adoption workflow state machine | TODO | Adoption run lifecycle persisted and visible per device |
-| ADP-002 | Adoption profile generator (LLM + deterministic fusion) | TODO | `profileJson` generated with confidence and fallback path |
-| ADP-003 | Onboarding Q&A loop | TODO | Unresolved service-intent questions are persisted and answerable in UI/API |
-| ADP-004 | Credential broker + per-device credential records | TODO | Secrets stored in vault, DB stores only refs/metadata, validation flow works |
-| ADP-005 | Adapter scoring + binding persistence | TODO | Ranked candidates + selected bindings persisted and editable |
-| ADP-006 | Credential-aware playbook preconditions | TODO | Runs requiring missing creds stop before execution with clear policy reason |
+| ADP-001 | Adoption workflow state machine | DONE | Adoption run lifecycle is persisted and visible per device |
+| ADP-002 | Adoption profile generator (LLM + deterministic fusion) | IN PROGRESS | `profileJson` exists; next step is deeper active profiling on transition to adoption |
+| ADP-003 | Onboarding Q&A loop | IN PROGRESS | Either first-class question records + answers exist, or chat-native onboarding is the only supported path and the stale question API is removed from the plan |
+| ADP-004 | Credential broker + per-device credential records | DONE | Secrets are in the vault, DB stores refs/metadata, and validation flow works |
+| ADP-005 | Adapter scoring + binding persistence | IN PROGRESS | Ranked candidates/bindings exist; primary/fallback lifecycle and verification need hardening |
+| ADP-006 | Credential-aware playbook preconditions | DONE | Runs requiring missing creds stop before execution with clear policy reason |
 | ADP-007 | Profile-driven checks engine | TODO | Adopted devices receive typed findings beyond basic offline/telnet |
 | ADP-008 | Finding-to-remediation mapping | TODO | Findings map to deterministic playbooks or gated Lane B plan flow |
-| ADP-009 | Device onboarding UX | TODO | Device page supports full onboarding lifecycle and status visibility |
+| ADP-009 | Device onboarding UX | IN PROGRESS | Device page supports onboarding context; remaining work is a tighter guided flow and discovery quick-start |
 | ADP-010 | Audit and telemetry hardening | TODO | All onboarding/credential/binding actions emit audit events; no secrets in logs |
 
 ## Recommended Delivery Sequence
 
-1. `ADP-001` + `ADP-002` (create adoption orchestrator and profile output).
-2. `ADP-003` + `ADP-004` (close user intent and credential loop).
-3. `ADP-005` + `ADP-006` (adapter binding + execution enforcement).
-4. `ADP-007` + `ADP-008` (agentic scan/remediation expansion).
-5. `ADP-009` + `ADP-010` (UX + trust hardening).
+1. `ADP-003` (decide and complete the supported onboarding answer path).
+2. `ADP-005` (finish adapter binding lifecycle and verification).
+3. `ADP-007` + `ADP-008` (make adoption materially improve monitoring/remediation coverage).
+4. `ADP-009` + `ADP-010` (tighten UX and trust/audit semantics).
+5. `ADP-002` follow-on (deeper active profiling once the workflow boundaries are stable).
 
 ## Immediate Build Start (First Vertical Slice)
 
-- Implement `ADP-001` through `ADP-003` first:
-  - add DB tables + state store methods
-  - trigger onboarding job on adoption transition
-  - generate and persist profile + unresolved questions
-  - surface onboarding state in `/devices/[id]`
+- Finish `ADP-003` first:
+  - either persist structured question records and answers end-to-end
+  - or remove the stale question-answer route from the plan and fully standardize chat/draft onboarding
+- Then finish `ADP-005`:
+  - verify and harden primary/fallback profile selection
+  - activate monitoring/remediation according to the selected binding
 
-This provides a real end-to-end onboarding loop before adding credential and adapter binding depth.
+This closes the current mismatch between onboarding scaffolding and the actual supported operator path.

@@ -66,13 +66,23 @@ import { getDataDir } from "@/lib/state/db";
 import { stateStore } from "@/lib/state/store";
 import { vault } from "@/lib/security/vault";
 import { runShell } from "@/lib/utils/shell";
+import {
+  automationTargetControlId,
+  automationTargetWidgetId,
+  runDeviceAutomation,
+  computeAutomationNextRunAt,
+} from "@/lib/widgets/automations";
+import { executeWidgetControl, getWidgetControl } from "@/lib/widgets/controls";
 import { generateAndStoreDeviceWidget } from "@/lib/widgets/generator";
 import { DEVICE_TYPE_VALUES, type DeviceType } from "@/lib/state/types";
 import type {
   ActionClass,
   Assurance,
+  DeviceAutomation,
   Device,
   DeviceCredential,
+  DeviceWidget,
+  DeviceWidgetControl,
   DiscoveryObservation,
   LLMProvider,
   OnboardingDraftAssurance,
@@ -6013,6 +6023,512 @@ export async function buildAdapterSkillTools(
     },
   });
 
+  const summarizeWidgetControlEntry = (control: DeviceWidgetControl): Record<string, unknown> => ({
+    id: control.id,
+    label: control.label,
+    description: control.description ?? null,
+    kind: control.kind,
+    parameterCount: control.parameters.length,
+    parameters: control.parameters.map((parameter) => ({
+      key: parameter.key,
+      label: parameter.label,
+      type: parameter.type,
+      required: parameter.required ?? false,
+      defaultValue: parameter.defaultValue ?? null,
+      options: parameter.options?.map((option) => ({
+        label: option.label,
+        value: option.value,
+      })) ?? [],
+    })),
+    executionKind: control.execution.kind,
+    danger: control.danger ?? false,
+    confirmation: control.confirmation ?? null,
+  });
+
+  const summarizeWidgetEntry = (widget: DeviceWidget): Record<string, unknown> => ({
+    id: widget.id,
+    slug: widget.slug,
+    name: widget.name,
+    description: widget.description ?? null,
+    status: widget.status,
+    revision: widget.revision,
+    capabilities: widget.capabilities,
+    controlCount: widget.controls.length,
+    controls: widget.controls.map(summarizeWidgetControlEntry),
+    updatedAt: widget.updatedAt,
+  });
+
+  const summarizeDeviceAutomationEntry = (automation: DeviceAutomation): Record<string, unknown> => {
+    const widget = automation.targetKind === "widget-control"
+      ? stateStore.getDeviceWidgetById(automationTargetWidgetId(automation))
+      : null;
+    const control = widget && automation.targetKind === "widget-control"
+      ? getWidgetControl(widget, automationTargetControlId(automation))
+      : null;
+    return {
+      id: automation.id,
+      name: automation.name,
+      description: automation.description ?? null,
+      enabled: automation.enabled,
+      targetKind: automation.targetKind,
+      scheduleKind: automation.scheduleKind,
+      intervalMinutes: automation.intervalMinutes ?? null,
+      hourLocal: automation.hourLocal ?? null,
+      minuteLocal: automation.minuteLocal ?? null,
+      widgetId: automationTargetWidgetId(automation),
+      widgetName: widget?.name ?? null,
+      widgetSlug: widget?.slug ?? null,
+      controlId: automationTargetControlId(automation),
+      controlLabel: control?.label ?? null,
+      target: automation.targetJson,
+      input: automation.inputJson,
+      lastRunAt: automation.lastRunAt ?? null,
+      nextRunAt: automation.nextRunAt ?? null,
+      lastRunStatus: automation.lastRunStatus ?? null,
+      lastRunSummary: automation.lastRunSummary ?? null,
+      createdBy: automation.createdBy,
+      updatedAt: automation.updatedAt,
+    };
+  };
+
+  const resolveWidgetForDevice = (
+    deviceId: string,
+    widgetId?: string,
+    widgetSlug?: string,
+  ): DeviceWidget | null => {
+    const widget = widgetId
+      ? stateStore.getDeviceWidgetById(widgetId)
+      : widgetSlug
+        ? stateStore.getDeviceWidgetBySlug(deviceId, widgetSlug)
+        : null;
+    if (!widget || widget.deviceId !== deviceId) {
+      return null;
+    }
+    return widget;
+  };
+
+  tools.steward_control_widget = dynamicTool({
+    description: "Inspect and execute first-class widget controls exposed by persistent device widgets. Use this when the user wants to operate a widget, trigger a button, toggle a setting, set a value, or inspect what controls a widget exposes.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["list", "get", "execute"],
+        },
+        device_id: {
+          type: "string",
+          description: "Target device id, name, or IP. Optional when chat is already attached to a device.",
+        },
+        widget_id: {
+          type: "string",
+          description: "Optional widget id. Required for get and execute unless widget_slug is provided.",
+        },
+        widget_slug: {
+          type: "string",
+          description: "Optional widget slug. Required for get and execute unless widget_id is provided.",
+        },
+        control_id: {
+          type: "string",
+          description: "Control id for get or execute.",
+        },
+        input_values: {
+          type: "object",
+          description: "Control parameter values keyed by parameter id.",
+          additionalProperties: true,
+        },
+        approved: {
+          type: "boolean",
+          description: "Retry an approval-gated control after explicit user approval.",
+        },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const action = inputString(args, "action");
+      if (!action) {
+        return { ok: false, error: "action is required." };
+      }
+
+      const device = await resolveDeviceByTarget(
+        inputString(args, "device_id"),
+        options?.attachedDeviceId,
+      );
+      if (!device) {
+        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+      }
+
+      if (action === "list") {
+        const widget = resolveWidgetForDevice(
+          device.id,
+          inputString(args, "widget_id"),
+          inputString(args, "widget_slug"),
+        );
+        if (widget) {
+          return {
+            ok: true,
+            deviceId: device.id,
+            deviceName: device.name,
+            widget: summarizeWidgetEntry(widget),
+            controls: widget.controls.map(summarizeWidgetControlEntry),
+          };
+        }
+
+        const widgets = stateStore.getDeviceWidgets(device.id)
+          .filter((candidate) => candidate.controls.length > 0);
+        return {
+          ok: true,
+          deviceId: device.id,
+          deviceName: device.name,
+          widgetCount: widgets.length,
+          widgets: widgets.map(summarizeWidgetEntry),
+        };
+      }
+
+      const widget = resolveWidgetForDevice(
+        device.id,
+        inputString(args, "widget_id"),
+        inputString(args, "widget_slug"),
+      );
+      if (!widget) {
+        return { ok: false, error: "Existing widget not found for this device." };
+      }
+
+      const controlId = inputString(args, "control_id");
+      if (!controlId) {
+        return { ok: false, error: "control_id is required." };
+      }
+
+      const control = getWidgetControl(widget, controlId);
+      if (!control) {
+        return {
+          ok: false,
+          error: `Control ${controlId} was not found on widget ${widget.name}.`,
+          availableControls: widget.controls.map(summarizeWidgetControlEntry),
+        };
+      }
+
+      if (action === "get") {
+        return {
+          ok: true,
+          deviceId: device.id,
+          deviceName: device.name,
+          widget: summarizeWidgetEntry(widget),
+          control: summarizeWidgetControlEntry(control),
+        };
+      }
+
+      if (action !== "execute") {
+        return { ok: false, error: `Unsupported action: ${action}` };
+      }
+
+      if (control.execution.kind === "operation") {
+        const readiness = validateDeviceReadyForToolUse(device);
+        if (!readiness.ok) {
+          return { ok: false, error: readiness.reason };
+        }
+      }
+
+      try {
+        const result = await executeWidgetControl({
+          device,
+          widget,
+          control,
+          inputValues: isRecord(args.input_values) ? args.input_values : undefined,
+          approved: inputBoolean(args, "approved") === true,
+          actor: "steward",
+        });
+        return {
+          ok: result.ok,
+          deviceId: device.id,
+          deviceName: device.name,
+          widget: summarizeWidgetEntry(widget),
+          control: summarizeWidgetControlEntry(control),
+          result,
+          summary: result.summary,
+        };
+      } catch (error) {
+        return {
+          ok: false,
+          deviceId: device.id,
+          deviceName: device.name,
+          widget: summarizeWidgetEntry(widget),
+          control: summarizeWidgetControlEntry(control),
+          error: error instanceof Error ? error.message : "Widget control failed.",
+        };
+      }
+    },
+  });
+
+  tools.steward_manage_automation = dynamicTool({
+    description: "Create, inspect, list, update, delete, or run device automations. Widget controls are the current first supported target type, but the automation model is intentionally broader than widgets.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["list", "get", "create", "update", "delete", "run"],
+        },
+        device_id: {
+          type: "string",
+          description: "Target device id, name, or IP. Optional when chat is already attached to a device.",
+        },
+        automation_id: {
+          type: "string",
+          description: "Existing automation id for get, update, delete, or run.",
+        },
+        widget_id: {
+          type: "string",
+          description: "Target widget id for create.",
+        },
+        widget_slug: {
+          type: "string",
+          description: "Target widget slug for create.",
+        },
+        control_id: {
+          type: "string",
+          description: "Target control id for create.",
+        },
+        name: {
+          type: "string",
+          description: "Automation display name.",
+        },
+        description: {
+          type: "string",
+          description: "Automation description.",
+        },
+        enabled: {
+          type: "boolean",
+          description: "Whether the automation should run automatically.",
+        },
+        schedule_kind: {
+          type: "string",
+          enum: ["manual", "interval", "daily"],
+        },
+        interval_minutes: {
+          type: "number",
+          description: "Required when schedule_kind=interval.",
+        },
+        hour_local: {
+          type: "number",
+          description: "0-23 local hour for schedule_kind=daily.",
+        },
+        minute_local: {
+          type: "number",
+          description: "0-59 local minute for schedule_kind=daily.",
+        },
+        input_values: {
+          type: "object",
+          description: "Default control input values.",
+          additionalProperties: true,
+        },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const action = inputString(args, "action");
+      if (!action) {
+        return { ok: false, error: "action is required." };
+      }
+
+      const device = await resolveDeviceByTarget(
+        inputString(args, "device_id"),
+        options?.attachedDeviceId,
+      );
+      if (!device) {
+        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+      }
+
+      if (action === "list") {
+        const automations = stateStore.getDeviceAutomations(device.id);
+        return {
+          ok: true,
+          deviceId: device.id,
+          deviceName: device.name,
+          count: automations.length,
+          automations: automations.map(summarizeDeviceAutomationEntry),
+        };
+      }
+
+      const automationId = inputString(args, "automation_id");
+      const existingAutomation = automationId ? stateStore.getDeviceAutomationById(automationId) : null;
+      if (automationId && (!existingAutomation || existingAutomation.deviceId !== device.id)) {
+        return { ok: false, error: "Existing automation not found for this device." };
+      }
+
+      if (action === "get") {
+        if (!existingAutomation) {
+          return { ok: false, error: "automation_id is required for get." };
+        }
+        return {
+          ok: true,
+          deviceId: device.id,
+          deviceName: device.name,
+          automation: summarizeDeviceAutomationEntry(existingAutomation),
+          runs: stateStore.getDeviceAutomationRuns(existingAutomation.id, 10),
+        };
+      }
+
+      if (action === "delete") {
+        if (!existingAutomation) {
+          return { ok: false, error: "automation_id is required for delete." };
+        }
+        const deleted = stateStore.deleteDeviceAutomation(existingAutomation.id);
+        if (deleted) {
+          await stateStore.addAction({
+            actor: "steward",
+            kind: "config",
+            message: `Deleted automation ${existingAutomation.name} for ${device.name}`,
+            context: {
+              deviceId: device.id,
+              automationId: existingAutomation.id,
+            },
+          });
+        }
+        return {
+          ok: deleted,
+          deviceId: device.id,
+          deviceName: device.name,
+          deletedAutomationId: existingAutomation.id,
+          summary: deleted
+            ? `Deleted automation ${existingAutomation.name} for ${device.name}.`
+            : `Failed to delete automation ${existingAutomation.name}.`,
+        };
+      }
+
+      if (action === "run") {
+        if (!existingAutomation) {
+          return { ok: false, error: "automation_id is required for run." };
+        }
+        const result = await runDeviceAutomation({
+          automationId: existingAutomation.id,
+          trigger: "manual",
+        });
+        return {
+          ok: result.run.status === "succeeded",
+          deviceId: device.id,
+          deviceName: device.name,
+          automation: summarizeDeviceAutomationEntry(result.automation),
+          run: result.run,
+          summary: result.run.summary,
+        };
+      }
+
+      const widget = resolveWidgetForDevice(
+        device.id,
+        inputString(args, "widget_id"),
+        inputString(args, "widget_slug"),
+      ) ?? (existingAutomation ? stateStore.getDeviceWidgetById(existingAutomation.widgetId) : null);
+      if (!widget || widget.deviceId !== device.id) {
+        return { ok: false, error: "Target widget not found for this device." };
+      }
+
+      const control = getWidgetControl(
+        widget,
+        inputString(args, "control_id") ?? existingAutomation?.controlId ?? "",
+      );
+      if (!control) {
+        return {
+          ok: false,
+          error: "Target control not found for this widget.",
+          availableControls: widget.controls.map(summarizeWidgetControlEntry),
+        };
+      }
+
+      const requestedScheduleKind = inputString(args, "schedule_kind");
+      if (
+        requestedScheduleKind
+        && !["manual", "interval", "daily"].includes(requestedScheduleKind)
+      ) {
+        return { ok: false, error: "schedule_kind must be manual, interval, or daily." };
+      }
+      const scheduleKind = (
+        requestedScheduleKind
+        ?? existingAutomation?.scheduleKind
+        ?? "manual"
+      ) as DeviceAutomation["scheduleKind"];
+      const enabled = typeof args.enabled === "boolean"
+        ? args.enabled
+        : existingAutomation?.enabled ?? true;
+      const intervalMinutes = typeof args.interval_minutes === "number"
+        ? Math.round(args.interval_minutes)
+        : existingAutomation?.intervalMinutes;
+      const hourLocal = typeof args.hour_local === "number"
+        ? Math.round(args.hour_local)
+        : existingAutomation?.hourLocal;
+      const minuteLocal = typeof args.minute_local === "number"
+        ? Math.round(args.minute_local)
+        : existingAutomation?.minuteLocal;
+
+      if (scheduleKind === "interval" && typeof intervalMinutes !== "number") {
+        return { ok: false, error: "interval_minutes is required for interval automations." };
+      }
+      if (scheduleKind === "daily" && (typeof hourLocal !== "number" || typeof minuteLocal !== "number")) {
+        return { ok: false, error: "hour_local and minute_local are required for daily automations." };
+      }
+
+      const now = new Date().toISOString();
+      const name = inputString(args, "name")
+        ?? existingAutomation?.name
+        ?? `${widget.name} · ${control.label}`;
+
+      const automation: DeviceAutomation = {
+        id: existingAutomation?.id ?? `device-automation-${randomUUID()}`,
+        deviceId: device.id,
+        targetKind: "widget-control",
+        widgetId: widget.id,
+        controlId: control.id,
+        targetJson: {
+          widgetId: widget.id,
+          controlId: control.id,
+          widgetSlug: widget.slug,
+          controlLabel: control.label,
+        },
+        name,
+        description: inputString(args, "description") ?? existingAutomation?.description,
+        enabled,
+        scheduleKind,
+        intervalMinutes: scheduleKind === "interval" ? intervalMinutes : undefined,
+        hourLocal: scheduleKind === "daily" ? hourLocal : undefined,
+        minuteLocal: scheduleKind === "daily" ? minuteLocal : undefined,
+        inputJson: isRecord(args.input_values)
+          ? args.input_values
+          : existingAutomation?.inputJson ?? {},
+        lastRunAt: existingAutomation?.lastRunAt,
+        nextRunAt: undefined,
+        lastRunStatus: existingAutomation?.lastRunStatus,
+        lastRunSummary: existingAutomation?.lastRunSummary,
+        createdBy: existingAutomation?.createdBy ?? "steward",
+        createdAt: existingAutomation?.createdAt ?? now,
+        updatedAt: now,
+      };
+      automation.nextRunAt = computeAutomationNextRunAt(automation, new Date(now));
+      const saved = stateStore.upsertDeviceAutomation(automation);
+      await stateStore.addAction({
+        actor: "steward",
+        kind: "config",
+        message: `${existingAutomation ? "Updated" : "Created"} automation ${saved.name} for ${device.name}`,
+        context: {
+          deviceId: device.id,
+          automationId: saved.id,
+          widgetId: widget.id,
+          controlId: control.id,
+        },
+      });
+      return {
+        ok: true,
+        deviceId: device.id,
+        deviceName: device.name,
+        automation: summarizeDeviceAutomationEntry(saved),
+        summary: `${existingAutomation ? "Updated" : "Created"} automation ${saved.name} for ${device.name}.`,
+      };
+    },
+  });
+
   if (options?.includeWidgetManagementTool) {
     tools.steward_manage_widget = dynamicTool({
       description: "Create, inspect, revise, save, list, or delete persistent device widgets for a device page, but only when the user explicitly asks for widget work. If a widget would merely be helpful, suggest it in prose instead. When a relevant widget already exists, inspect or revise it instead of creating a duplicate unless the user explicitly asks for a new one.",
@@ -6072,6 +6588,14 @@ export async function buildAdapterSkillTools(
             },
             description: "Widget runtime capabilities for save.",
           },
+          controls: {
+            type: "array",
+            description: "Standard control manifest for save.",
+            items: {
+              type: "object",
+              additionalProperties: true,
+            },
+          },
         },
         required: ["action"],
         additionalProperties: false,
@@ -6112,16 +6636,7 @@ export async function buildAdapterSkillTools(
             deviceId: device.id,
             deviceName: device.name,
             count: widgets.length,
-            widgets: widgets.map((widget) => ({
-              id: widget.id,
-              slug: widget.slug,
-              name: widget.name,
-              description: widget.description,
-              status: widget.status,
-              revision: widget.revision,
-              capabilities: widget.capabilities,
-              updatedAt: widget.updatedAt,
-            })),
+            widgets: widgets.map(summarizeWidgetEntry),
           };
         }
 
@@ -6134,7 +6649,7 @@ export async function buildAdapterSkillTools(
             ok: true,
             deviceId: device.id,
             deviceName: device.name,
-            widget,
+            widget: summarizeWidgetEntry(widget),
             runtimeState: stateStore.getDeviceWidgetRuntimeState(widget.id)?.stateJson ?? {},
             recentOperationRuns: stateStore.getDeviceWidgetOperationRuns(widget.id, 15),
           };
@@ -6190,6 +6705,11 @@ export async function buildAdapterSkillTools(
               typeof value === "string" && ["context", "state", "device-control"].includes(value),
             )
             : existing?.capabilities;
+          const controlsRaw = Array.isArray(args.controls)
+            ? args.controls.filter((value): value is DeviceWidget["controls"][number] =>
+              typeof value === "object" && value !== null && !Array.isArray(value),
+            )
+            : existing?.controls;
 
           if (!name || !html || !js || !capabilitiesRaw || capabilitiesRaw.length === 0) {
             return {
@@ -6211,6 +6731,7 @@ export async function buildAdapterSkillTools(
             css: inputString(args, "css") ?? existing?.css ?? "",
             js,
             capabilities: capabilitiesRaw as Array<"context" | "state" | "device-control">,
+            controls: controlsRaw ?? [],
             sourcePrompt: existing?.sourcePrompt,
             createdBy: existing?.createdBy ?? "steward",
             revision: existing?.revision ?? 1,
@@ -6242,7 +6763,7 @@ export async function buildAdapterSkillTools(
             deviceId: device.id,
             deviceName: device.name,
             updatedExisting: Boolean(existing),
-            widget: saved,
+            widget: summarizeWidgetEntry(saved),
           };
         }
 

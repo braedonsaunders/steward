@@ -19,6 +19,7 @@ const createAssuranceSchema = z.object({
   monitorType: z.string().trim().max(160).nullish(),
   requiredProtocols: z.array(z.string().trim().min(1).max(80)).max(12).optional(),
   rationale: z.string().trim().max(1200).nullish(),
+  configJson: z.record(z.string(), z.unknown()).optional(),
 });
 
 export async function GET(
@@ -76,6 +77,7 @@ export async function POST(
     monitorType: payload.data.monitorType ?? undefined,
     requiredProtocols: payload.data.requiredProtocols,
     rationale: payload.data.rationale ?? undefined,
+    configJson: payload.data.configJson,
     metadata: {
       actor: "user",
       workloadSource: "operator",

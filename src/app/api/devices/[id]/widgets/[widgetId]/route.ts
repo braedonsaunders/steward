@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { isAuthorized } from "@/lib/auth/guard";
 import { stateStore } from "@/lib/state/store";
+import { DeviceWidgetControlListSchema } from "@/lib/widgets/controls";
 
 export const runtime = "nodejs";
 
@@ -16,6 +17,7 @@ const updateWidgetSchema = z.object({
   css: z.string().max(24_000).optional(),
   js: z.string().min(1).max(48_000).optional(),
   capabilities: z.array(CapabilitySchema).min(1).max(3).optional(),
+  controls: DeviceWidgetControlListSchema.optional(),
   sourcePrompt: z.string().max(8_000).nullable().optional(),
 });
 
@@ -67,6 +69,7 @@ export async function PATCH(
     css: payload.data.css ?? widget.css,
     js: payload.data.js ?? widget.js,
     capabilities: payload.data.capabilities ?? widget.capabilities,
+    controls: payload.data.controls ?? widget.controls,
     sourcePrompt: payload.data.sourcePrompt === undefined
       ? widget.sourcePrompt
       : payload.data.sourcePrompt ?? undefined,

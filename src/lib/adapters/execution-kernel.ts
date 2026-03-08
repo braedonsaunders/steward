@@ -391,13 +391,56 @@ const ADAPTER_ALIASES: Record<string, string[]> = {
   shell: ["ssh", "winrm", "docker", "http-api"],
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function collectSemanticProtocols(device: Device): Set<string> {
+  const protocols = new Set(device.protocols.map((protocol) => protocol.toLowerCase()));
+
+  for (const protocol of stateStore.getValidatedCredentialProtocols(device.id)) {
+    const normalized = protocol.trim().toLowerCase();
+    if (normalized) {
+      protocols.add(normalized);
+    }
+  }
+
+  const metadata = isRecord(device.metadata) ? device.metadata : null;
+  const managementSurface = metadata && isRecord(metadata.managementSurface)
+    ? metadata.managementSurface
+    : null;
+  const preferredProtocol = typeof managementSurface?.preferredProtocol === "string"
+    ? managementSurface.preferredProtocol.trim().toLowerCase()
+    : "";
+
+  if (preferredProtocol) {
+    protocols.add(preferredProtocol);
+  }
+
+  const capabilities = Array.isArray(managementSurface?.capabilities)
+    ? managementSurface.capabilities
+    : [];
+  for (const capability of capabilities) {
+    if (!isRecord(capability) || typeof capability.protocol !== "string") {
+      continue;
+    }
+    const normalized = capability.protocol.trim().toLowerCase();
+    if (normalized) {
+      protocols.add(normalized);
+    }
+  }
+
+  return protocols;
+}
+
 function adapterMatchesDevice(operation: OperationSpec, device: Device): boolean {
   if (operation.brokerRequest?.protocol === "local-tool" || operation.adapterId.startsWith("local-tool")) {
     return true;
   }
 
   const aliases = ADAPTER_ALIASES[operation.adapterId] ?? [operation.adapterId];
-  if (aliases.some((alias) => device.protocols.includes(alias))) {
+  const semanticProtocols = collectSemanticProtocols(device);
+  if (aliases.some((alias) => semanticProtocols.has(alias))) {
     return true;
   }
 

@@ -27,6 +27,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DeviceWorkloadsPanel } from "@/components/device-workloads-panel";
 import { DeviceAccessPanel } from "@/components/device-access-panel";
+import { DeviceAutomationsPanel } from "@/components/device-automations-panel";
 import { DeviceSettingsPanel } from "@/components/device-settings-panel";
 import { DeviceWidgetsPanel } from "@/components/device-widgets-panel";
 import { getDeviceIdentityDescription } from "@/lib/devices/identity";
@@ -529,6 +530,7 @@ export default function DeviceDetailPage() {
             <TabsTrigger className="h-8 px-3 text-xs sm:h-9 sm:text-sm" value="overview">Overview</TabsTrigger>
             <TabsTrigger className="h-8 px-3 text-xs sm:h-9 sm:text-sm" value="workloads">Workloads</TabsTrigger>
             <TabsTrigger className="h-8 px-3 text-xs sm:h-9 sm:text-sm" value="access">Access</TabsTrigger>
+            <TabsTrigger className="h-8 px-3 text-xs sm:h-9 sm:text-sm" value="automations">Automations</TabsTrigger>
             <TabsTrigger className="h-8 px-3 text-xs sm:h-9 sm:text-sm" value="widgets">Widgets</TabsTrigger>
             <TabsTrigger className="h-8 px-3 text-xs sm:h-9 sm:text-sm" value="steward">Chat</TabsTrigger>
             <TabsTrigger className="h-8 px-3 text-xs sm:h-9 sm:text-sm" value="activity">Activity</TabsTrigger>
@@ -796,6 +798,14 @@ export default function DeviceDetailPage() {
           <AnimatedTabPanel active={activeTab === "access"} persistent className="overflow-auto">
             <div className="h-full min-h-0 overflow-auto">
               <DeviceAccessPanel deviceId={device.id} active={activeTab === "access"} className="h-full" />
+            </div>
+          </AnimatedTabPanel>
+        </TabsContent>
+
+        <TabsContent value="automations" forceMount className="mt-3 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
+          <AnimatedTabPanel active={activeTab === "automations"} persistent className="overflow-hidden">
+            <div className="h-full min-h-0 overflow-hidden">
+              <DeviceAutomationsPanel deviceId={device.id} active={activeTab === "automations"} className="h-full" />
             </div>
           </AnimatedTabPanel>
         </TabsContent>

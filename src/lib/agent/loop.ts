@@ -19,6 +19,7 @@ import { adapterRegistry } from "@/lib/adapters/registry";
 import { ensureDigestScheduler, stopDigestScheduler } from "@/lib/digest/scheduler";
 import { localToolRuntime } from "@/lib/local-tools/runtime";
 import { getAdoptionRecord, getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
+import { enqueueNotificationEvent, processNotificationJobs } from "@/lib/notifications/manager";
 import {
   evaluateServiceContract,
   getRequiredProtocolsForServiceContract,
@@ -28,6 +29,7 @@ import { protocolSessionManager } from "@/lib/protocol-sessions/manager";
 import { graphStore } from "@/lib/state/graph";
 import { stateStore } from "@/lib/state/store";
 import { runShell } from "@/lib/utils/shell";
+import { ensureDeviceAutomationScheduler, stopDeviceAutomationScheduler } from "@/lib/widgets/automations";
 import type {
   AgentRunRecord,
   Device,
@@ -188,7 +190,7 @@ const dedupeRecommendations = (recommendations: Recommendation[]): Recommendatio
 const upsertIncident = (
   incidents: Incident[],
   incoming: Omit<Incident, "id" | "detectedAt" | "updatedAt" | "timeline" | "autoRemediated">,
-): { next: Incident[]; opened: boolean } => {
+): { next: Incident[]; opened: boolean; incident: Incident } => {
   const key = String(incoming.metadata.key ?? `${incoming.severity}:${incoming.title}:${incoming.deviceIds.join(",")}`);
   const idx = incidents.findIndex((incident) => incidentKey(incident) === key);
 
@@ -207,10 +209,11 @@ const upsertIncident = (
       ...incoming,
     };
 
-    return { next: [created, ...incidents], opened: true };
+    return { next: [created, ...incidents], opened: true, incident: created };
   }
 
   const existing = incidents[idx];
+  const reopened = existing.status === "resolved" && incoming.status !== "resolved";
   const unchanged =
     existing.title === incoming.title &&
     existing.summary === incoming.summary &&
@@ -224,21 +227,29 @@ const upsertIncident = (
   const updated: Incident = {
     ...existing,
     ...incoming,
-    updatedAt: unchanged && !shouldAppendHeartbeat ? existing.updatedAt : new Date().toISOString(),
-    timeline: shouldAppendHeartbeat
+    updatedAt: unchanged && !shouldAppendHeartbeat && !reopened ? existing.updatedAt : new Date().toISOString(),
+    timeline: reopened
       ? [
+          {
+            at: new Date().toISOString(),
+            message: "Incident reopened",
+          },
+          ...existing.timeline,
+        ].slice(0, 30)
+      : shouldAppendHeartbeat
+        ? [
           {
             at: new Date().toISOString(),
             message: "Incident condition persisted",
           },
           ...existing.timeline,
         ].slice(0, 30)
-      : existing.timeline,
+        : existing.timeline,
   };
 
   const next = [...incidents];
   next[idx] = updated;
-  return { next, opened: false };
+  return { next, opened: reopened, incident: updated };
 };
 
 const ensureRecommendation = (
@@ -536,6 +547,21 @@ const evaluateAssurancesForDevice = async (
     });
     nextIncidents = incidentResult.next;
     incidentsOpened += incidentResult.opened ? 1 : 0;
+    if (incidentResult.opened) {
+      void enqueueNotificationEvent({
+        kind: "incident.opened",
+        eventRef: incidentResult.incident.id,
+        dedupeKey: `incident-opened:${incidentResult.incident.id}`,
+        title: `Incident opened: ${incidentResult.incident.title}`,
+        body: incidentResult.incident.summary,
+        severity: incidentResult.incident.severity,
+        metadata: {
+          deviceId: device.id,
+          assuranceId: contract.id,
+          incidentType: ASSURANCE_FAILURE_INCIDENT_TYPE,
+        },
+      });
+    }
 
     stateStore.upsertDeviceFindingByDedupe({
       deviceId: device.id,
@@ -1007,6 +1033,20 @@ const actPhase = async (devices: Device[]): Promise<{
         });
         incidents = upserted.next;
         incidentsOpened += upserted.opened ? 1 : 0;
+        if (upserted.opened) {
+          void enqueueNotificationEvent({
+            kind: "incident.opened",
+            eventRef: upserted.incident.id,
+            dedupeKey: `incident-opened:${upserted.incident.id}`,
+            title: `Incident opened: ${upserted.incident.title}`,
+            body: upserted.incident.summary,
+            severity: upserted.incident.severity,
+            metadata: {
+              deviceId: device.id,
+              incidentType: AVAILABILITY_OFFLINE_INCIDENT_TYPE,
+            },
+          });
+        }
 
         stateStore.upsertDeviceFindingByDedupe({
           deviceId: device.id,
@@ -1081,6 +1121,20 @@ const actPhase = async (devices: Device[]): Promise<{
         });
         incidents = upserted.next;
         incidentsOpened += upserted.opened ? 1 : 0;
+        if (upserted.opened) {
+          void enqueueNotificationEvent({
+            kind: "incident.opened",
+            eventRef: upserted.incident.id,
+            dedupeKey: `incident-opened:${upserted.incident.id}`,
+            title: `Incident opened: ${upserted.incident.title}`,
+            body: upserted.incident.summary,
+            severity: upserted.incident.severity,
+            metadata: {
+              deviceId: device.id,
+              incidentType: SECURITY_TELNET_INCIDENT_TYPE,
+            },
+          });
+        }
 
         stateStore.upsertDeviceFindingByDedupe({
           deviceId: device.id,
@@ -1591,6 +1645,7 @@ export const runStewardCycle = async (
 
 export const ensureStewardLoop = (): void => {
   ensureDigestScheduler();
+  ensureDeviceAutomationScheduler();
   const runtimeSettings = stateStore.getRuntimeSettings();
   const intervalMs = runtimeSettings.agentIntervalMs;
   const sessionSweepIntervalMs = runtimeSettings.protocolSessionSweepIntervalMs;
@@ -1619,12 +1674,20 @@ export const ensureStewardLoop = (): void => {
     void protocolSessionManager.sweep().catch((error) => {
       console.error("Protocol session sweep failed", error);
     });
+    void processNotificationJobs().catch((error) => {
+      console.error("Notification worker failed", error);
+    });
     localToolRuntime.expireStaleApprovals();
   }, sessionSweepIntervalMs);
+
+  void processNotificationJobs().catch((error) => {
+    console.error("Notification worker startup failed", error);
+  });
 };
 
 export const stopStewardLoop = (): void => {
   stopDigestScheduler();
+  stopDeviceAutomationScheduler();
   if (loopHandle) {
     clearInterval(loopHandle);
     loopHandle = undefined;

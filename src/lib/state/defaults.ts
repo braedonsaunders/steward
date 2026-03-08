@@ -296,6 +296,7 @@ export const defaultState = (): StewardState => ({
   localToolApprovals: [],
   protocolSessions: [],
   protocolSessionLeases: [],
+  dashboardWidgetPages: [],
 });
 
 export const providerPriority: LLMProvider[] = [

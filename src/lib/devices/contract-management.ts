@@ -351,6 +351,7 @@ export async function createAssurance(args: {
   monitorType?: string;
   requiredProtocols?: string[];
   rationale?: string;
+  configJson?: Record<string, unknown>;
   metadata?: ContractMutationMetadata;
 }): Promise<Assurance> {
   const now = nowIso();
@@ -372,6 +373,7 @@ export async function createAssurance(args: {
     requiredProtocols,
     rationale: args.rationale?.trim() || undefined,
     configJson: {
+      ...(args.configJson ?? {}),
       source: sourceForMutation(args.metadata),
       method: methodForMutation(args.metadata),
       updatedAt: now,
@@ -379,6 +381,7 @@ export async function createAssurance(args: {
     },
     serviceKey: assuranceKey,
     policyJson: {
+      ...(args.configJson ?? {}),
       requiredProtocols,
       monitorType: args.monitorType?.trim() || undefined,
       updatedAt: now,
@@ -419,6 +422,7 @@ export async function updateAssurance(args: {
   clearRequiredProtocols?: boolean;
   rationale?: string;
   clearRationale?: boolean;
+  configJson?: Record<string, unknown>;
   metadata?: ContractMutationMetadata;
 }): Promise<Assurance> {
   const now = nowIso();
@@ -446,6 +450,7 @@ export async function updateAssurance(args: {
     rationale,
     configJson: {
       ...(args.assurance.configJson ?? {}),
+      ...(args.configJson ?? {}),
       source: sourceForMutation(args.metadata),
       method: methodForMutation(args.metadata),
       updatedAt: now,
@@ -453,6 +458,7 @@ export async function updateAssurance(args: {
     },
     policyJson: {
       ...(args.assurance.policyJson ?? {}),
+      ...(args.configJson ?? {}),
       requiredProtocols,
       monitorType,
       updatedAt: now,

@@ -58,6 +58,9 @@ export type WidgetRoutePlan = z.infer<typeof WidgetRoutePlanSchema>;
 const DIRECT_WIDGET_KEYWORD_PATTERN = /\b(widget|dashboard|control panel|control surface|remote control)\b/i;
 const REMOTE_PANEL_HINT_PATTERN = /\b(remote|panel|ui|interface|screen)\b/i;
 const REMOTE_PANEL_ACTION_PATTERN = /\b(build|create|make|generate|design|open|show|fix|repair|update|edit|change|revise|modify|restyle|redesign|delete|remove|inspect|list|use)\b/i;
+const WIDGET_AUTHORING_ACTION_PATTERN = /\b(build|create|make|generate|design|fix|repair|update|edit|change|revise|modify|restyle|redesign|delete|remove|inspect|list|show|open)\b/i;
+const WIDGET_CONTROL_OR_AUTOMATION_PATTERN = /\b(press|click|trigger|run|execute|toggle|turn|set|enable|disable|automation|automate|schedule|scheduled|every|hourly|daily|recurring|repeat)\b/i;
+const WIDGET_CONTROL_SURFACE_PATTERN = /\b(control|controls|automation|automations)\b/i;
 const FOLLOW_UP_CONFIRM_PATTERN = /\b(yes|yeah|yep|go ahead|do it|please do|proceed|sounds good|that works|make it|build it|create it)\b/i;
 const FOLLOW_UP_STRONG_WIDGET_ACTION_PATTERN = /\b(fix|repair|debug|restyle|redesign|rename|resize|rebuild|regenerate|refresh|delete|remove)\b/i;
 const FOLLOW_UP_GENERIC_WIDGET_EDIT_PATTERN = /\b(change|update|edit|modify|add|move|make|keep|reuse)\b/i;
@@ -102,6 +105,14 @@ export function shouldPlanWidgetRouteTurn(args: {
 }): boolean {
   const text = normalizeWidgetIntentText(args.userInput);
   if (!text) {
+    return false;
+  }
+
+  if (messageMentionsWidgetConcept(text) && WIDGET_CONTROL_SURFACE_PATTERN.test(text)) {
+    return false;
+  }
+
+  if (messageMentionsWidgetConcept(text) && WIDGET_CONTROL_OR_AUTOMATION_PATTERN.test(text) && !WIDGET_AUTHORING_ACTION_PATTERN.test(text)) {
     return false;
   }
 
@@ -210,6 +221,18 @@ function buildFallbackWidgetRoutePlan(args: {
   widgets: WidgetInventoryEntry[];
 }): WidgetRoutePlan {
   const text = normalizeWidgetIntentText(args.userInput);
+  if (WIDGET_CONTROL_SURFACE_PATTERN.test(text)) {
+    return {
+      route: "none",
+      reason: "Widget control or automation request should be handled by first-class control/automation tools.",
+    };
+  }
+  if (WIDGET_CONTROL_OR_AUTOMATION_PATTERN.test(text) && !WIDGET_AUTHORING_ACTION_PATTERN.test(text)) {
+    return {
+      route: "none",
+      reason: "Widget control or automation request should be handled by first-class tools, not widget authoring shortcuts.",
+    };
+  }
   const latestWidget = args.widgets[0];
   const mentionsSeparateNewWidget = /\b(new|another|separate|additional)\b/i.test(args.userInput);
   const wantsList = /\b(list|which|what)\b/.test(text) && /\bwidgets?\b/.test(text);

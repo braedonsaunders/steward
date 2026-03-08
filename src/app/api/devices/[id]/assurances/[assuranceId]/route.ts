@@ -21,6 +21,7 @@ const updateAssuranceSchema = z.object({
   monitorType: z.string().trim().max(160).nullable().optional(),
   requiredProtocols: z.array(z.string().trim().min(1).max(80)).max(12).optional(),
   rationale: z.string().trim().max(1200).nullable().optional(),
+  configJson: z.record(z.string(), z.unknown()).optional(),
 });
 
 export async function PATCH(
@@ -70,6 +71,7 @@ export async function PATCH(
     requiredProtocols: payload.data.requiredProtocols,
     rationale: payload.data.rationale ?? undefined,
     clearRationale: payload.data.rationale === null,
+    configJson: payload.data.configJson,
     metadata: {
       actor: "user",
       workloadSource: "operator",

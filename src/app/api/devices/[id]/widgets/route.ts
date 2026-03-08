@@ -4,6 +4,7 @@ import { z } from "zod";
 import { isAuthorized } from "@/lib/auth/guard";
 import { stateStore } from "@/lib/state/store";
 import type { DeviceWidget } from "@/lib/state/types";
+import { DeviceWidgetControlListSchema } from "@/lib/widgets/controls";
 
 export const runtime = "nodejs";
 
@@ -18,6 +19,7 @@ const createWidgetSchema = z.object({
   css: z.string().max(24_000).optional(),
   js: z.string().min(1).max(48_000),
   capabilities: z.array(CapabilitySchema).min(1).max(3),
+  controls: DeviceWidgetControlListSchema.optional(),
   sourcePrompt: z.string().max(8_000).optional(),
 });
 
@@ -70,6 +72,7 @@ export async function POST(
     css: payload.data.css ?? "",
     js: payload.data.js,
     capabilities: payload.data.capabilities,
+    controls: payload.data.controls ?? [],
     sourcePrompt: payload.data.sourcePrompt,
     createdBy: "user",
     revision: existing?.revision ?? 1,

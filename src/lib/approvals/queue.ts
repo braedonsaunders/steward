@@ -1,3 +1,4 @@
+import { enqueueNotificationEvent } from "@/lib/notifications/manager";
 import { stateStore } from "@/lib/state/store";
 import type { Device, PlaybookRun } from "@/lib/state/types";
 
@@ -37,6 +38,19 @@ export function createApproval(run: PlaybookRun, device: Device): PlaybookRun {
       actionClass: run.actionClass,
       deviceName: device.name,
       ttlMs,
+    },
+  });
+
+  void enqueueNotificationEvent({
+    kind: "approval.requested",
+    eventRef: updated.id,
+    dedupeKey: `approval-requested:${updated.id}`,
+    title: `Approval requested: ${updated.name}`,
+    body: `${device.name} requires approval for ${updated.name}.`,
+    metadata: {
+      deviceId: device.id,
+      actionClass: updated.actionClass,
+      expiresAt: updated.expiresAt ?? null,
     },
   });
 
@@ -141,6 +155,17 @@ export function expireStale(): number {
           message: `Approval escalated: "${run.name}" on device ${run.deviceId}`,
           context: { playbookRunId: run.id, escalationTtlMs },
         });
+        void enqueueNotificationEvent({
+          kind: "approval.escalated",
+          eventRef: escalated.id,
+          dedupeKey: `approval-escalated:${escalated.id}`,
+          title: `Approval escalated: ${escalated.name}`,
+          body: `Approval for ${escalated.name} was not answered and has been escalated.`,
+          metadata: {
+            deviceId: escalated.deviceId,
+            escalationTtlMs,
+          },
+        });
         continue;
       }
 
@@ -159,6 +184,17 @@ export function expireStale(): number {
         kind: "approval",
         message: `Approval expired: "${run.name}" on device ${run.deviceId}`,
         context: { playbookRunId: run.id },
+      });
+
+      void enqueueNotificationEvent({
+        kind: "approval.expired",
+        eventRef: updated.id,
+        dedupeKey: `approval-expired:${updated.id}`,
+        title: `Approval expired: ${updated.name}`,
+        body: `Approval TTL expired for ${updated.name}. Steward marked it denied.`,
+        metadata: {
+          deviceId: updated.deviceId,
+        },
       });
 
       expired++;

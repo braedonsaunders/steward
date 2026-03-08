@@ -552,6 +552,35 @@ function createSchema(database: Database.Database): void {
       lastSeenAt  TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS notification_channels (
+      id              TEXT PRIMARY KEY,
+      name            TEXT NOT NULL,
+      kind            TEXT NOT NULL,
+      enabled         INTEGER NOT NULL DEFAULT 1,
+      target          TEXT NOT NULL,
+      eventKinds      TEXT NOT NULL DEFAULT '[]',
+      minimumSeverity TEXT,
+      vaultSecretRef  TEXT,
+      configJson      TEXT NOT NULL DEFAULT '{}',
+      createdAt       TEXT NOT NULL,
+      updatedAt       TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS notification_deliveries (
+      id          TEXT PRIMARY KEY,
+      channelId   TEXT NOT NULL REFERENCES notification_channels(id) ON DELETE CASCADE,
+      eventKind   TEXT NOT NULL,
+      eventRef    TEXT NOT NULL,
+      summary     TEXT NOT NULL,
+      payloadJson TEXT NOT NULL DEFAULT '{}',
+      status      TEXT NOT NULL DEFAULT 'pending',
+      attempts    INTEGER NOT NULL DEFAULT 0,
+      lastError   TEXT,
+      deliveredAt TEXT,
+      createdAt   TEXT NOT NULL,
+      updatedAt   TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS device_widgets (
       id               TEXT PRIMARY KEY,
       deviceId         TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
@@ -563,6 +592,7 @@ function createSchema(database: Database.Database): void {
       css              TEXT NOT NULL DEFAULT '',
       js               TEXT NOT NULL DEFAULT '',
       capabilitiesJson TEXT NOT NULL DEFAULT '[]',
+      controlsJson     TEXT NOT NULL DEFAULT '[]',
       sourcePrompt     TEXT,
       createdBy        TEXT NOT NULL DEFAULT 'steward',
       revision         INTEGER NOT NULL DEFAULT 1,
@@ -598,6 +628,66 @@ function createSchema(database: Database.Database): void {
       operationJson    TEXT NOT NULL DEFAULT '{}',
       detailsJson      TEXT NOT NULL DEFAULT '{}',
       createdAt        TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS device_automations (
+      id              TEXT PRIMARY KEY,
+      deviceId        TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+      targetKind      TEXT NOT NULL DEFAULT 'widget-control',
+      widgetId        TEXT NOT NULL REFERENCES device_widgets(id) ON DELETE CASCADE,
+      controlId       TEXT NOT NULL,
+      targetJson      TEXT NOT NULL DEFAULT '{}',
+      name            TEXT NOT NULL,
+      description     TEXT,
+      enabled         INTEGER NOT NULL DEFAULT 1,
+      scheduleKind    TEXT NOT NULL DEFAULT 'manual',
+      intervalMinutes INTEGER,
+      hourLocal       INTEGER,
+      minuteLocal     INTEGER,
+      inputJson       TEXT NOT NULL DEFAULT '{}',
+      lastRunAt       TEXT,
+      nextRunAt       TEXT,
+      lastRunStatus   TEXT,
+      lastRunSummary  TEXT,
+      createdBy       TEXT NOT NULL DEFAULT 'steward',
+      createdAt       TEXT NOT NULL,
+      updatedAt       TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS device_automation_runs (
+      id           TEXT PRIMARY KEY,
+      automationId TEXT NOT NULL REFERENCES device_automations(id) ON DELETE CASCADE,
+      deviceId     TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+      widgetId     TEXT NOT NULL REFERENCES device_widgets(id) ON DELETE CASCADE,
+      controlId    TEXT NOT NULL,
+      status       TEXT NOT NULL,
+      summary      TEXT NOT NULL,
+      resultJson   TEXT NOT NULL DEFAULT '{}',
+      createdAt    TEXT NOT NULL,
+      completedAt  TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS dashboard_widget_pages (
+      id        TEXT PRIMARY KEY,
+      slug      TEXT NOT NULL,
+      name      TEXT NOT NULL,
+      sortOrder INTEGER NOT NULL DEFAULT 0,
+      createdAt TEXT NOT NULL,
+      updatedAt TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS dashboard_widget_page_items (
+      id         TEXT PRIMARY KEY,
+      pageId     TEXT NOT NULL REFERENCES dashboard_widget_pages(id) ON DELETE CASCADE,
+      widgetId   TEXT NOT NULL REFERENCES device_widgets(id) ON DELETE CASCADE,
+      title      TEXT,
+      columnStart INTEGER NOT NULL DEFAULT 1,
+      columnSpan INTEGER NOT NULL DEFAULT 6,
+      rowStart   INTEGER NOT NULL DEFAULT 1,
+      rowSpan    INTEGER NOT NULL DEFAULT 4,
+      sortOrder  INTEGER NOT NULL DEFAULT 0,
+      createdAt  TEXT NOT NULL,
+      updatedAt  TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS auth_users (
@@ -650,6 +740,10 @@ function createSchema(database: Database.Database): void {
   ensureColumn(database, "adapters", "config", "TEXT NOT NULL DEFAULT '{}'");
   ensureColumn(database, "adapters", "toolSkills", "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn(database, "adapters", "toolConfig", "TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn(database, "dashboard_widget_page_items", "columnStart", "INTEGER NOT NULL DEFAULT 1");
+  ensureColumn(database, "dashboard_widget_page_items", "rowStart", "INTEGER NOT NULL DEFAULT 1");
+  ensureColumn(database, "device_widgets", "controlsJson", "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn(database, "device_automations", "targetJson", "TEXT NOT NULL DEFAULT '{}'");
 
   // Indexes for frequently queried columns
   database.exec(`
@@ -741,6 +835,12 @@ function createSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_device_findings_device_status ON device_findings(deviceId, status);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_device_findings_dedupe_key
       ON device_findings(deviceId, dedupeKey);
+    CREATE INDEX IF NOT EXISTS idx_notification_channels_enabled
+      ON notification_channels(enabled, kind, updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_notification_deliveries_channel_created
+      ON notification_deliveries(channelId, createdAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_notification_deliveries_status_created
+      ON notification_deliveries(status, createdAt DESC);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_device_widgets_device_slug
       ON device_widgets(deviceId, slug);
     CREATE INDEX IF NOT EXISTS idx_device_widgets_device_updated
@@ -751,6 +851,26 @@ function createSchema(database: Database.Database): void {
       ON device_widget_operation_runs(widgetId, createdAt DESC);
     CREATE INDEX IF NOT EXISTS idx_device_widget_operation_runs_device_created
       ON device_widget_operation_runs(deviceId, createdAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_device_automations_device_updated
+      ON device_automations(deviceId, updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_device_automations_device_next
+      ON device_automations(deviceId, enabled, nextRunAt);
+    CREATE INDEX IF NOT EXISTS idx_device_automations_widget_control
+      ON device_automations(widgetId, controlId);
+    CREATE INDEX IF NOT EXISTS idx_device_automation_runs_automation_created
+      ON device_automation_runs(automationId, createdAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_device_automation_runs_device_created
+      ON device_automation_runs(deviceId, createdAt DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_dashboard_widget_pages_slug
+      ON dashboard_widget_pages(slug);
+    CREATE INDEX IF NOT EXISTS idx_dashboard_widget_pages_sort
+      ON dashboard_widget_pages(sortOrder ASC, updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_dashboard_widget_page_items_page_sort
+      ON dashboard_widget_page_items(pageId, sortOrder ASC, updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_dashboard_widget_page_items_page_grid
+      ON dashboard_widget_page_items(pageId, rowStart ASC, columnStart ASC, sortOrder ASC);
+    CREATE INDEX IF NOT EXISTS idx_dashboard_widget_page_items_widget
+      ON dashboard_widget_page_items(widgetId);
     CREATE INDEX IF NOT EXISTS idx_auth_sessions_userId ON auth_sessions(userId);
     CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiresAt ON auth_sessions(expiresAt);
     CREATE INDEX IF NOT EXISTS idx_auth_users_role ON auth_users(role);

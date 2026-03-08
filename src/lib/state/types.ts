@@ -447,6 +447,45 @@ export interface AssuranceRun {
   evaluatedAt: string;
 }
 
+export type NotificationChannelKind = "telegram" | "webhook";
+
+export type NotificationEventKind =
+  | "incident.opened"
+  | "approval.requested"
+  | "approval.escalated"
+  | "approval.expired";
+
+export type NotificationDeliveryStatus = "pending" | "delivered" | "failed";
+
+export interface NotificationChannel {
+  id: string;
+  name: string;
+  kind: NotificationChannelKind;
+  enabled: boolean;
+  target: string;
+  eventKinds: NotificationEventKind[];
+  minimumSeverity?: IncidentSeverity;
+  vaultSecretRef?: string;
+  configJson: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NotificationDelivery {
+  id: string;
+  channelId: string;
+  eventKind: NotificationEventKind;
+  eventRef: string;
+  summary: string;
+  payloadJson: Record<string, unknown>;
+  status: NotificationDeliveryStatus;
+  attempts: number;
+  lastError?: string;
+  deliveredAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface LocalToolBinarySpec {
   name: string;
   bin: string;
@@ -837,6 +876,65 @@ export type DeviceWidgetStatus = "active" | "disabled";
 
 export type DeviceWidgetCapability = "context" | "state" | "device-control";
 
+export type DeviceWidgetControlKind = "button" | "toggle" | "select" | "form";
+export type DeviceWidgetControlParameterType = "string" | "number" | "boolean" | "enum";
+export type DeviceWidgetControlStateMergeStrategy = "deep-merge" | "replace";
+
+export interface DeviceWidgetControlOption {
+  label: string;
+  value: string;
+  description?: string;
+}
+
+export interface DeviceWidgetControlParameter {
+  key: string;
+  label: string;
+  description?: string;
+  type: DeviceWidgetControlParameterType;
+  required?: boolean;
+  defaultValue?: string | number | boolean;
+  placeholder?: string;
+  options?: DeviceWidgetControlOption[];
+}
+
+export interface DeviceWidgetControlOperation {
+  mode: OperationMode;
+  kind: OperationKind;
+  adapterId?: string;
+  timeoutMs?: number;
+  commandTemplate?: string;
+  brokerRequest?: ProtocolBrokerRequest;
+  args?: Record<string, string | number | boolean>;
+  expectedSemanticTarget?: string;
+}
+
+export interface DeviceWidgetControlOperationExecution {
+  kind: "operation";
+  operation: DeviceWidgetControlOperation;
+}
+
+export interface DeviceWidgetControlStateExecution {
+  kind: "state";
+  patch: Record<string, unknown>;
+  mergeStrategy?: DeviceWidgetControlStateMergeStrategy;
+}
+
+export type DeviceWidgetControlExecution =
+  | DeviceWidgetControlOperationExecution
+  | DeviceWidgetControlStateExecution;
+
+export interface DeviceWidgetControl {
+  id: string;
+  label: string;
+  description?: string;
+  kind: DeviceWidgetControlKind;
+  parameters: DeviceWidgetControlParameter[];
+  execution: DeviceWidgetControlExecution;
+  confirmation?: string;
+  successMessage?: string;
+  danger?: boolean;
+}
+
 export interface DeviceWidget {
   id: string;
   deviceId: string;
@@ -848,6 +946,7 @@ export interface DeviceWidget {
   css: string;
   js: string;
   capabilities: DeviceWidgetCapability[];
+  controls: DeviceWidgetControl[];
   sourcePrompt?: string;
   createdBy: "steward" | "user";
   revision: number;
@@ -862,7 +961,54 @@ export interface DeviceWidgetRuntimeState {
   updatedAt: string;
 }
 
+export interface DashboardWidgetInventoryEntry {
+  widgetId: string;
+  deviceId: string;
+  deviceName: string;
+  deviceIp: string;
+  deviceStatus: DeviceStatus;
+  widgetSlug: string;
+  widgetName: string;
+  widgetDescription?: string;
+  widgetStatus: DeviceWidgetStatus;
+  widgetRevision: number;
+  capabilities: DeviceWidgetCapability[];
+  updatedAt: string;
+}
+
+export interface DashboardWidgetPageRecord {
+  id: string;
+  slug: string;
+  name: string;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DashboardWidgetPageItemRecord {
+  id: string;
+  pageId: string;
+  widgetId: string;
+  title?: string;
+  columnStart: number;
+  columnSpan: number;
+  rowStart: number;
+  rowSpan: number;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DashboardWidgetPageItem extends DashboardWidgetPageItemRecord {
+  widget: DashboardWidgetInventoryEntry;
+}
+
+export interface DashboardWidgetPage extends DashboardWidgetPageRecord {
+  items: DashboardWidgetPageItem[];
+}
+
 export type WidgetOperationStatus = OperationExecutionStatus | "requires-approval";
+export type DeviceWidgetControlExecutionStatus = WidgetOperationStatus | "succeeded";
 
 export interface WidgetOperationResult {
   ok: boolean;
@@ -903,6 +1049,74 @@ export interface DeviceWidgetOperationRun {
   operationJson: Record<string, unknown>;
   detailsJson: Record<string, unknown>;
   createdAt: string;
+}
+
+export interface DeviceWidgetControlResult {
+  ok: boolean;
+  status: DeviceWidgetControlExecutionStatus;
+  summary: string;
+  widgetId: string;
+  widgetName: string;
+  controlId: string;
+  controlLabel: string;
+  executionKind: DeviceWidgetControlExecution["kind"];
+  approvalRequired: boolean;
+  approved: boolean;
+  details: Record<string, unknown>;
+  stateJson?: Record<string, unknown>;
+  operationResult?: WidgetOperationResult;
+  startedAt: string;
+  completedAt: string;
+}
+
+export type DeviceAutomationTargetKind =
+  | "widget-control"
+  | "device-operation"
+  | "playbook"
+  | "local-tool";
+export type DeviceAutomationScheduleKind = "manual" | "interval" | "daily";
+export type DeviceAutomationRunStatus =
+  | "succeeded"
+  | "failed"
+  | "blocked"
+  | "skipped"
+  | "requires-approval";
+
+export interface DeviceAutomation {
+  id: string;
+  deviceId: string;
+  targetKind: DeviceAutomationTargetKind;
+  widgetId: string;
+  controlId: string;
+  targetJson: Record<string, unknown>;
+  name: string;
+  description?: string;
+  enabled: boolean;
+  scheduleKind: DeviceAutomationScheduleKind;
+  intervalMinutes?: number;
+  hourLocal?: number;
+  minuteLocal?: number;
+  inputJson: Record<string, unknown>;
+  lastRunAt?: string;
+  nextRunAt?: string;
+  lastRunStatus?: DeviceAutomationRunStatus;
+  lastRunSummary?: string;
+  createdBy: "steward" | "user";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DeviceAutomationRun {
+  id: string;
+  automationId: string;
+  deviceId: string;
+  widgetId: string;
+  controlId: string;
+  status: DeviceAutomationRunStatus;
+  summary: string;
+  resultJson: Record<string, unknown>;
+  createdAt: string;
+  completedAt?: string;
 }
 
 export interface DeviceBaseline {
@@ -948,7 +1162,7 @@ export interface ActionLog {
   id: string;
   at: string;
   actor: "steward" | "user";
-  kind: "discover" | "diagnose" | "remediate" | "learn" | "config" | "auth" | "policy" | "playbook" | "approval" | "digest";
+  kind: "discover" | "diagnose" | "remediate" | "learn" | "config" | "auth" | "policy" | "playbook" | "approval" | "digest" | "notification";
   message: string;
   context: Record<string, unknown>;
 }
@@ -1401,6 +1615,7 @@ export interface StewardState {
   localToolApprovals: LocalToolApproval[];
   protocolSessions: ProtocolSessionRecord[];
   protocolSessionLeases: ProtocolSessionLease[];
+  dashboardWidgetPages: DashboardWidgetPage[];
   systemSettings: SystemSettings;
   authSettings: AuthSettings;
 }

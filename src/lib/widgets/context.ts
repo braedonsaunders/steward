@@ -44,7 +44,13 @@ export interface DeviceWidgetContext {
   incidents: Incident[];
   recommendations: Recommendation[];
   playbookRuns: PlaybookRun[];
-  widgets: Array<Pick<DeviceWidget, "id" | "slug" | "name" | "description" | "status" | "revision" | "updatedAt">>;
+  widgets: Array<
+    Pick<DeviceWidget, "id" | "slug" | "name" | "description" | "status" | "revision" | "updatedAt">
+    & {
+      controlCount: number;
+      controls: Array<Pick<DeviceWidget["controls"][number], "id" | "label" | "kind">>;
+    }
+  >;
 }
 
 export async function buildDeviceWidgetContext(deviceId: string): Promise<DeviceWidgetContext | null> {
@@ -129,6 +135,12 @@ export async function buildDeviceWidgetContext(deviceId: string): Promise<Device
       status: widget.status,
       revision: widget.revision,
       updatedAt: widget.updatedAt,
+      controlCount: widget.controls.length,
+      controls: widget.controls.map((control) => ({
+        id: control.id,
+        label: control.label,
+        kind: control.kind,
+      })),
     })),
   };
 }

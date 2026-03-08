@@ -1,0 +1,229 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - img [ref=e7]
+          - generic [ref=e9]:
+            - heading "Steward" [level=1] [ref=e10]
+            - paragraph [ref=e11]: Network Operations
+          - button [ref=e12]:
+            - img [ref=e13]
+        - navigation [ref=e19]:
+          - generic [ref=e20]:
+            - paragraph [ref=e21]: Overview
+            - link "Dashboard" [ref=e23] [cursor=pointer]:
+              - /url: /
+              - generic [ref=e25]:
+                - img [ref=e26]
+                - generic [ref=e31]: Dashboard
+            - link "Digest" [ref=e33] [cursor=pointer]:
+              - /url: /digest
+              - generic [ref=e34]:
+                - img [ref=e35]
+                - generic [ref=e38]: Digest
+          - generic [ref=e39]:
+            - paragraph [ref=e40]: Network
+            - link "Devices" [ref=e42] [cursor=pointer]:
+              - /url: /devices
+              - generic [ref=e43]:
+                - img [ref=e44]
+                - generic [ref=e47]: Devices
+            - link "Discovery" [ref=e49] [cursor=pointer]:
+              - /url: /discovery
+              - generic [ref=e50]:
+                - img [ref=e51]
+                - generic [ref=e54]: Discovery
+            - link "Topology" [ref=e56] [cursor=pointer]:
+              - /url: /topology
+              - generic [ref=e57]:
+                - img [ref=e58]
+                - generic [ref=e63]: Topology
+          - generic [ref=e64]:
+            - paragraph [ref=e65]: Health
+            - link "Incidents 18" [ref=e157] [cursor=pointer]:
+              - /url: /incidents
+              - generic [ref=e68]:
+                - img [ref=e69]
+                - generic [ref=e71]: Incidents
+              - generic [ref=e158]: "18"
+            - link "Activity" [ref=e73] [cursor=pointer]:
+              - /url: /activity
+              - generic [ref=e74]:
+                - img [ref=e75]
+                - generic [ref=e77]: Activity
+          - generic [ref=e78]:
+            - paragraph [ref=e79]: Control
+            - link "Approvals" [ref=e81] [cursor=pointer]:
+              - /url: /approvals
+              - generic [ref=e82]:
+                - img [ref=e83]
+                - generic [ref=e86]: Approvals
+            - link "Policies" [ref=e88] [cursor=pointer]:
+              - /url: /policies
+              - generic [ref=e89]:
+                - img [ref=e90]
+                - generic [ref=e93]: Policies
+          - generic [ref=e94]:
+            - paragraph [ref=e95]: Assistant
+            - link "Chat" [ref=e97] [cursor=pointer]:
+              - /url: /chat
+              - generic [ref=e98]:
+                - img [ref=e99]
+                - generic [ref=e101]: Chat
+          - generic [ref=e102]:
+            - paragraph [ref=e103]: System
+            - link "Adapters" [ref=e105] [cursor=pointer]:
+              - /url: /adapters
+              - generic [ref=e106]:
+                - img [ref=e107]
+                - generic [ref=e109]: Adapters
+            - link "Access" [ref=e111] [cursor=pointer]:
+              - /url: /access
+              - generic [ref=e112]:
+                - img [ref=e113]
+                - generic [ref=e125]: Access
+            - link "Settings" [ref=e127] [cursor=pointer]:
+              - /url: /settings
+              - generic [ref=e128]:
+                - img [ref=e129]
+                - generic [ref=e132]: Settings
+        - generic [ref=e159]:
+          - img [ref=e160]
+          - generic [ref=e162]: "Vault: Unlocked"
+    - main [ref=e134]:
+      - main [ref=e586]:
+        - generic [ref=e587]:
+          - generic [ref=e589]:
+            - generic [ref=e590]:
+              - heading "asustek-computer-workstation-192-168-68-85" [level=1] [ref=e593]
+              - generic [ref=e594]:
+                - generic [ref=e595]: online
+                - generic [ref=e596]: workstation
+                - generic [ref=e597]:
+                  - img [ref=e598]
+                  - text: Tier 1
+                - generic [ref=e600]: Adopted
+            - generic [ref=e602]:
+              - paragraph [ref=e603]: "First seen: 3/4/2026, 9:21:23 PM"
+              - paragraph [ref=e604]: "Last seen: 6m ago"
+          - generic [ref=e605]:
+            - tablist [ref=e606]:
+              - tab "Overview" [selected] [ref=e607]
+              - tab "Workloads" [ref=e608]
+              - tab "Access" [ref=e609]
+              - tab "Automations" [ref=e610]
+              - tab "Widgets" [ref=e611]
+              - tab "Chat" [ref=e612]
+              - tab "Activity" [ref=e613]
+              - tab "Settings" [ref=e614]
+            - tabpanel "Overview" [ref=e615]:
+              - generic [ref=e617]:
+                - generic [ref=e618]:
+                  - generic [ref=e619]:
+                    - generic [ref=e620]:
+                      - img [ref=e621]
+                      - heading "Device Snapshot" [level=3] [ref=e624]
+                      - generic [ref=e625]: online
+                    - paragraph [ref=e626]: Steward onboarded asustek-computer-iot-192-168-68-85 and prepared management intents.
+                  - generic [ref=e627]:
+                    - generic [ref=e628]:
+                      - generic [ref=e629]:
+                        - paragraph [ref=e630]: 100%
+                        - paragraph [ref=e631]: Discovery
+                      - generic [ref=e632]:
+                        - paragraph [ref=e633]: "5"
+                        - paragraph [ref=e634]: Observations
+                      - generic [ref=e635]:
+                        - paragraph [ref=e636]: 23%
+                        - paragraph [ref=e637]: Classifier
+                      - generic [ref=e638]:
+                        - paragraph [ref=e639]: "2"
+                        - paragraph [ref=e640]: Endpoints
+                    - generic [ref=e641]:
+                      - generic [ref=e642]:
+                        - paragraph [ref=e643]: IP Address
+                        - paragraph [ref=e644]: 192.168.68.85
+                      - generic [ref=e645]:
+                        - paragraph [ref=e646]: MAC Address
+                        - paragraph [ref=e647]: 60:cf:84:84:36:c2
+                      - generic [ref=e648]:
+                        - paragraph [ref=e649]: Vendor
+                        - paragraph [ref=e650]: ASUSTek COMPUTER INC.,"15,Li-Te Rd., Peitou, Taipei 112, Taiwan Taipei Taiwan TW 112 "
+                    - generic [ref=e651]:
+                      - generic [ref=e652]:
+                        - paragraph [ref=e653]: Discovery Evidence
+                        - generic [ref=e654]:
+                          - generic [ref=e655]: arp resolved
+                          - generic [ref=e656]: browser observation
+                          - generic [ref=e657]: http banner
+                          - generic [ref=e658]: tcp open
+                        - generic [ref=e659]:
+                          - generic [ref=e660]:
+                            - generic [ref=e661]: fingerprint
+                            - generic [ref=e662]: "2"
+                          - generic [ref=e663]:
+                            - generic [ref=e664]: active
+                            - generic [ref=e665]: "2"
+                          - generic [ref=e666]:
+                            - generic [ref=e667]: passive
+                            - generic [ref=e668]: "1"
+                      - generic [ref=e669]:
+                        - paragraph [ref=e670]: Fingerprint Context
+                        - generic [ref=e671]:
+                          - generic [ref=e672]:
+                            - paragraph [ref=e673]: Version
+                            - paragraph [ref=e674]: v3
+                          - generic [ref=e675]:
+                            - paragraph [ref=e676]: Last Probe
+                            - paragraph [ref=e677]: 21m ago
+                        - paragraph [ref=e678]: "OS: unknown"
+                        - paragraph [ref=e679]: "Product: unknown"
+                    - generic [ref=e680]:
+                      - paragraph [ref=e681]: Latest Probe Signals
+                      - generic [ref=e682]:
+                        - generic [ref=e683]:
+                          - paragraph [ref=e684]: DNS
+                          - paragraph [ref=e685]: n/a
+                        - generic [ref=e686]:
+                          - paragraph [ref=e687]: WinRM
+                          - paragraph [ref=e688]: n/a
+                        - generic [ref=e689]:
+                          - paragraph [ref=e690]: MQTT
+                          - paragraph [ref=e691]: n/a
+                    - generic [ref=e692]:
+                      - paragraph [ref=e693]: Protocols
+                      - generic [ref=e694]:
+                        - generic [ref=e695]: winrm
+                        - generic [ref=e696]: windows
+                        - generic [ref=e697]: http-api
+                        - generic [ref=e698]: http
+                        - generic [ref=e699]: rdp
+                    - generic [ref=e700]:
+                      - paragraph [ref=e701]: Top Classification Signals
+                      - generic [ref=e703]:
+                        - generic [ref=e704]:
+                          - generic [ref=e705]: port
+                          - generic [ref=e706]: "35"
+                        - paragraph [ref=e707]: RDP without server ports
+                - generic [ref=e709]:
+                  - generic [ref=e710]:
+                    - generic [ref=e711]:
+                      - img [ref=e712]
+                      - heading "Recommendations" [level=3] [ref=e714]
+                      - generic [ref=e715]: "2"
+                    - paragraph [ref=e716]: Highest-impact next actions for this device
+                  - list [ref=e718]:
+                    - listitem [ref=e719]:
+                      - generic [ref=e720]:
+                        - paragraph [ref=e721]: Provide winrm credentials for asustek-computer-workstation-192-168-68-85
+                        - generic [ref=e722]: high
+                      - paragraph [ref=e723]: Remediation playbook "Restart stopped Windows service" is blocked by missing credentials.
+                      - paragraph [ref=e724]: "Impact: Enables automated diagnosis and recovery actions for this device."
+                    - listitem [ref=e725]:
+                      - generic [ref=e726]:
+                        - paragraph [ref=e727]: Provide winrm credentials for asustek-computer-iot-192-168-68-85
+                        - generic [ref=e728]: high
+                      - paragraph [ref=e729]: Remediation playbook "Restart stopped Windows service" is blocked by missing credentials.
+                      - paragraph [ref=e730]: "Impact: Enables automated diagnosis and recovery actions for this device."
+  - alert [ref=e156]
