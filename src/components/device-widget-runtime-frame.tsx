@@ -82,8 +82,13 @@ function buildWidgetDocument(args: {
     "#steward-widget-surface { display: flex; flex: 1 1 auto; min-width: 0; min-height: 100%; width: 100%; flex-direction: column; align-items: stretch; justify-content: stretch; }",
     "#steward-widget-root, #steward-widget-root * { box-sizing: border-box; }",
     args.widget.css,
-    "#steward-widget-surface { display: flex !important; flex: 1 1 auto !important; min-width: 0 !important; min-height: 100% !important; width: 100% !important; height: 100% !important; overflow: hidden !important; }",
-    "#steward-widget-surface > * { flex: 1 1 auto !important; min-width: 0 !important; min-height: 100% !important; width: 100% !important; height: 100% !important; max-width: none !important; }",
+    "html[data-steward-layout-mode='scroll'], html[data-steward-layout-mode='scroll'] body { height: auto !important; overflow-x: hidden !important; overflow-y: auto !important; }",
+    "#steward-widget-root[data-layout-mode='content'] { display: flex !important; flex: 1 1 auto !important; min-width: 0 !important; min-height: 100% !important; width: 100% !important; height: 100% !important; overflow: hidden !important; }",
+    "#steward-widget-root[data-layout-mode='scroll'] { display: block !important; width: 100% !important; height: auto !important; min-height: 100% !important; overflow: visible !important; }",
+    "#steward-widget-surface[data-layout-mode='content'] { display: flex !important; flex: 1 1 auto !important; min-width: 0 !important; min-height: 100% !important; width: 100% !important; height: 100% !important; overflow: hidden !important; }",
+    "#steward-widget-surface[data-layout-mode='content'] > * { flex: 1 1 auto !important; min-width: 0 !important; min-height: 100% !important; width: 100% !important; height: 100% !important; max-width: none !important; }",
+    "#steward-widget-surface[data-layout-mode='scroll'] { display: flex !important; flex-direction: column !important; width: 100% !important; height: auto !important; min-height: 100% !important; overflow: visible !important; }",
+    "#steward-widget-surface[data-layout-mode='scroll'] > * { flex: 0 0 auto !important; min-width: 0 !important; min-height: 0 !important; width: 100% !important; height: auto !important; max-width: none !important; }",
     "</style>",
     "</head>",
     "<body>",
@@ -97,6 +102,7 @@ function buildWidgetDocument(args: {
         let requestCounter = 0;
         let context = bootstrap.context;
         let persistedState = bootstrap.state;
+        let layoutMode = "content";
         const capabilities = Array.isArray(bootstrap.capabilities) ? bootstrap.capabilities : [];
         const controls = Array.isArray(bootstrap.controls) ? bootstrap.controls : [];
 
@@ -122,30 +128,66 @@ function buildWidgetDocument(args: {
           }
         };
 
-        const stretchSurface = () => {
+        const applyLayoutMode = (nextMode) => {
+          layoutMode = nextMode === "scroll" ? "scroll" : "content";
+          document.documentElement.dataset.stewardLayoutMode = layoutMode;
           const surface = document.getElementById("steward-widget-surface");
+          const root = document.getElementById("steward-widget-root");
           if (!(surface instanceof HTMLElement)) {
             return;
           }
+          const scrollMode = layoutMode === "scroll";
+          if (root instanceof HTMLElement) {
+            root.dataset.layoutMode = layoutMode;
+          }
+          surface.dataset.layoutMode = layoutMode;
+          Object.assign(document.documentElement.style, {
+            height: scrollMode ? "auto" : "100%",
+            minHeight: "100%",
+            overflowX: "hidden",
+            overflowY: scrollMode ? "auto" : "hidden",
+          });
+          Object.assign(document.body.style, {
+            display: scrollMode ? "block" : "flex",
+            width: "100%",
+            minWidth: "100%",
+            height: scrollMode ? "auto" : "100%",
+            minHeight: "100%",
+            overflowX: "hidden",
+            overflowY: scrollMode ? "auto" : "hidden",
+          });
+          if (root instanceof HTMLElement) {
+            Object.assign(root.style, {
+              display: scrollMode ? "block" : "flex",
+              flex: scrollMode ? "0 0 auto" : "1 1 auto",
+              width: "100%",
+              height: scrollMode ? "auto" : "100%",
+              minWidth: "0",
+              minHeight: "100%",
+              overflow: scrollMode ? "visible" : "hidden",
+            });
+          }
           Object.assign(surface.style, {
             display: "flex",
-            flex: "1 1 auto",
+            flexDirection: "column",
+            flex: scrollMode ? "0 0 auto" : "1 1 auto",
             width: "100%",
-            height: "100%",
+            height: scrollMode ? "auto" : "100%",
             minWidth: "0",
-            minHeight: "100%",
-            overflow: "hidden",
+            minHeight: scrollMode ? "0" : "100%",
+            overflowX: "hidden",
+            overflowY: scrollMode ? "visible" : "hidden",
           });
           for (const child of Array.from(surface.children)) {
             if (!(child instanceof HTMLElement)) {
               continue;
             }
             Object.assign(child.style, {
-              flex: "1 1 auto",
+              flex: scrollMode ? "0 0 auto" : "1 1 auto",
               width: "100%",
-              height: "100%",
+              height: scrollMode ? "auto" : "100%",
               minWidth: "0",
-              minHeight: "100%",
+              minHeight: scrollMode ? "0" : "100%",
               maxWidth: "none",
             });
           }
@@ -380,6 +422,7 @@ function buildWidgetDocument(args: {
           },
           setLayout(options) {
             const nextMode = options && options.mode === "scroll" ? "scroll" : "content";
+            applyLayoutMode(nextMode);
             postToHost({ type: "layout", mode: nextMode });
             scheduleResize();
             return { mode: nextMode };
@@ -424,19 +467,19 @@ function buildWidgetDocument(args: {
         const observer = new ResizeObserver(() => scheduleResize());
         observer.observe(document.documentElement);
         observer.observe(document.body);
-        const surfaceObserver = new MutationObserver(() => stretchSurface());
+        const surfaceObserver = new MutationObserver(() => applyLayoutMode(layoutMode));
         const surface = document.getElementById("steward-widget-surface");
         if (surface) {
           surfaceObserver.observe(surface, { childList: true });
         }
 
         window.addEventListener("load", () => {
-          stretchSurface();
+          applyLayoutMode(layoutMode);
           api.ready();
           scheduleResize();
         });
 
-        stretchSurface();
+        applyLayoutMode(layoutMode);
         scheduleResize();
       })();
     `),

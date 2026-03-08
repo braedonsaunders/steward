@@ -1,0 +1,415 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - img [ref=e7]
+          - generic [ref=e9]:
+            - heading "Steward" [level=1] [ref=e10]
+            - paragraph [ref=e11]: Network Operations
+          - button [ref=e12]:
+            - img [ref=e13]
+        - navigation [ref=e19]:
+          - generic [ref=e20]:
+            - paragraph [ref=e21]: Overview
+            - link "Dashboard" [ref=e23] [cursor=pointer]:
+              - /url: /
+              - generic [ref=e24]:
+                - img [ref=e25]
+                - generic [ref=e30]: Dashboard
+            - link "Digest" [ref=e32] [cursor=pointer]:
+              - /url: /digest
+              - generic [ref=e33]:
+                - img [ref=e34]
+                - generic [ref=e37]: Digest
+          - generic [ref=e38]:
+            - paragraph [ref=e39]: Network
+            - link "Devices" [ref=e41] [cursor=pointer]:
+              - /url: /devices
+              - generic [ref=e43]:
+                - img [ref=e44]
+                - generic [ref=e47]: Devices
+            - link "Discovery" [ref=e49] [cursor=pointer]:
+              - /url: /discovery
+              - generic [ref=e50]:
+                - img [ref=e51]
+                - generic [ref=e54]: Discovery
+            - link "Topology" [ref=e56] [cursor=pointer]:
+              - /url: /topology
+              - generic [ref=e57]:
+                - img [ref=e58]
+                - generic [ref=e63]: Topology
+          - generic [ref=e64]:
+            - paragraph [ref=e65]: Health
+            - link "Incidents 18" [ref=e147] [cursor=pointer]:
+              - /url: /incidents
+              - generic [ref=e68]:
+                - img [ref=e69]
+                - generic [ref=e71]: Incidents
+              - generic [ref=e148]: "18"
+            - link "Activity" [ref=e73] [cursor=pointer]:
+              - /url: /activity
+              - generic [ref=e74]:
+                - img [ref=e75]
+                - generic [ref=e77]: Activity
+          - generic [ref=e78]:
+            - paragraph [ref=e79]: Control
+            - link "Approvals" [ref=e81] [cursor=pointer]:
+              - /url: /approvals
+              - generic [ref=e82]:
+                - img [ref=e83]
+                - generic [ref=e86]: Approvals
+            - link "Policies" [ref=e88] [cursor=pointer]:
+              - /url: /policies
+              - generic [ref=e89]:
+                - img [ref=e90]
+                - generic [ref=e93]: Policies
+          - generic [ref=e94]:
+            - paragraph [ref=e95]: Assistant
+            - link "Chat" [ref=e97] [cursor=pointer]:
+              - /url: /chat
+              - generic [ref=e98]:
+                - img [ref=e99]
+                - generic [ref=e101]: Chat
+          - generic [ref=e102]:
+            - paragraph [ref=e103]: System
+            - link "Adapters" [ref=e105] [cursor=pointer]:
+              - /url: /adapters
+              - generic [ref=e106]:
+                - img [ref=e107]
+                - generic [ref=e109]: Adapters
+            - link "Access" [ref=e111] [cursor=pointer]:
+              - /url: /access
+              - generic [ref=e112]:
+                - img [ref=e113]
+                - generic [ref=e125]: Access
+            - link "Settings" [ref=e127] [cursor=pointer]:
+              - /url: /settings
+              - generic [ref=e128]:
+                - img [ref=e129]
+                - generic [ref=e132]: Settings
+        - generic [ref=e149]:
+          - img [ref=e150]
+          - generic [ref=e152]: "Vault: Unlocked"
+    - main [ref=e134]:
+      - main [ref=e137]:
+        - generic [ref=e153]:
+          - generic [ref=e155]:
+            - generic [ref=e156]:
+              - heading "Philips Hue Bridge" [level=1] [ref=e159]
+              - generic [ref=e160]:
+                - generic [ref=e161]: online
+                - generic [ref=e162]: iot
+                - generic [ref=e163]:
+                  - img [ref=e164]
+                  - text: Tier 1
+                - generic [ref=e166]: Adopted
+            - generic [ref=e168]:
+              - paragraph [ref=e169]: "First seen: 3/4/2026, 8:46:04 PM"
+              - paragraph [ref=e170]: "Last seen: 1h ago"
+          - generic [ref=e171]:
+            - tablist [ref=e172]:
+              - tab "Overview" [ref=e173]
+              - tab "Workloads" [ref=e174]
+              - tab "Access" [ref=e175]
+              - tab "Automations" [ref=e176]
+              - tab "Widgets" [active] [selected] [ref=e177]
+              - tab "Chat" [ref=e178]
+              - tab "Activity" [ref=e179]
+              - tab "Settings" [ref=e180]
+            - tabpanel "Widgets" [ref=e321]:
+              - generic [ref=e324]:
+                - generic [ref=e325]:
+                  - generic [ref=e326]:
+                    - generic [ref=e327]:
+                      - img [ref=e328]
+                      - heading "Saved Widgets" [level=3] [ref=e333]
+                      - generic [ref=e334]: "1"
+                    - paragraph [ref=e335]: Persistent, device-scoped UI surfaces generated in chat and stored with Steward.
+                    - generic [ref=e336]:
+                      - button "Refresh" [ref=e337]:
+                        - img [ref=e338]
+                        - text: Refresh
+                      - button "Delete" [ref=e343]:
+                        - img [ref=e344]
+                        - text: Delete
+                  - button "Philips Hue Bridge Dashboard CLIP v2 dashboard for Philips Hue Bridge with room groupings, per-light power, brightness, color, and bridge-wide controls. active 6 controls" [ref=e352]:
+                    - generic [ref=e353]:
+                      - generic [ref=e354]:
+                        - paragraph [ref=e355]: Philips Hue Bridge Dashboard
+                        - paragraph [ref=e356]: CLIP v2 dashboard for Philips Hue Bridge with room groupings, per-light power, brightness, color, and bridge-wide controls.
+                      - generic [ref=e357]: active
+                      - generic [ref=e358]: 6 controls
+                - generic [ref=e359]:
+                  - generic [ref=e361]:
+                    - generic [ref=e362]:
+                      - heading "Philips Hue Bridge Dashboard" [level=3] [ref=e363]
+                      - paragraph [ref=e364]: CLIP v2 dashboard for Philips Hue Bridge with room groupings, per-light power, brightness, color, and bridge-wide controls.
+                    - generic [ref=e365]: philips-hue-bridge-dashboard
+                  - generic [ref=e367]:
+                    - generic [ref=e368]:
+                      - generic [ref=e369]:
+                        - img [ref=e370]
+                        - text: Online - 23 lights
+                      - generic [ref=e372]: rev 3
+                      - generic [ref=e373]: 6 controls
+                      - generic [ref=e374]: context
+                      - generic [ref=e375]: state
+                      - generic [ref=e376]: device control
+                    - generic [ref=e377]:
+                      - button "Enter widget fullscreen" [ref=e378]:
+                        - img [ref=e379]
+                      - iframe [ref=e384]:
+                        - generic [ref=f1e4]:
+                          - banner [ref=f1e5]:
+                            - generic [ref=f1e6]:
+                              - generic [ref=f1e7]: 💡
+                              - generic [ref=f1e8]:
+                                - heading "Philips Hue Bridge" [level=1] [ref=f1e9]
+                                - generic [ref=f1e12]: CLIP v2 · 6 rooms · 23 lights · All lights 0%
+                            - generic [ref=f1e13]:
+                              - button "↻" [ref=f1e14] [cursor=pointer]
+                              - button "☀" [ref=f1e15] [cursor=pointer]
+                              - button "🌙" [ref=f1e16] [cursor=pointer]
+                          - generic [ref=f1e17]:
+                            - generic [ref=f1e18]:
+                              - generic [ref=f1e19] [cursor=pointer]:
+                                - generic [ref=f1e20]:
+                                  - generic [ref=f1e21]: 💡
+                                  - text: Backyard
+                                - generic [ref=f1e22]: 0/2 on
+                              - generic [ref=f1e23]:
+                                - generic [ref=f1e24]:
+                                  - generic [ref=f1e26]:
+                                    - generic [ref=f1e27]: Sunroom Floodlight Right
+                                    - generic [ref=f1e28]: Off · vintage_bulb
+                                  - generic [ref=f1e29]:
+                                    - slider [ref=f1e30] [cursor=pointer]: "38"
+                                    - generic [ref=f1e31]:
+                                      - checkbox
+                                - generic [ref=f1e33]:
+                                  - generic [ref=f1e35]:
+                                    - generic [ref=f1e36]: Sunroom Floodlight Left
+                                    - generic [ref=f1e37]: Off · vintage_bulb
+                                  - generic [ref=f1e38]:
+                                    - slider [ref=f1e39] [cursor=pointer]: "38"
+                                    - generic [ref=f1e40]:
+                                      - checkbox
+                            - generic [ref=f1e42]:
+                              - generic [ref=f1e43] [cursor=pointer]:
+                                - generic [ref=f1e44]:
+                                  - generic [ref=f1e45]: 💡
+                                  - text: Basement
+                                - generic [ref=f1e46]: 0/7 on
+                              - generic [ref=f1e47]:
+                                - generic [ref=f1e48]:
+                                  - generic [ref=f1e50]:
+                                    - generic [ref=f1e51]: Bar Pot Light 2
+                                    - generic [ref=f1e52]: Off · recessed_ceiling
+                                  - generic [ref=f1e53]:
+                                    - slider [ref=f1e54] [cursor=pointer]: "100"
+                                    - generic [ref=f1e55]:
+                                      - checkbox
+                                - generic [ref=f1e57]:
+                                  - generic [ref=f1e59]:
+                                    - generic [ref=f1e60]: Bar Pot Light 1
+                                    - generic [ref=f1e61]: Off · recessed_ceiling
+                                  - generic [ref=f1e62]:
+                                    - slider [ref=f1e63] [cursor=pointer]: "100"
+                                    - generic [ref=f1e64]:
+                                      - checkbox
+                                - generic [ref=f1e66]:
+                                  - generic [ref=f1e68]:
+                                    - generic [ref=f1e69]: Ceiling Light 1 Bulb 1
+                                    - generic [ref=f1e70]: Off · sultan_bulb
+                                  - generic [ref=f1e71]:
+                                    - textbox [ref=f1e72] [cursor=pointer]: "#201709"
+                                    - slider [ref=f1e73] [cursor=pointer]: "1"
+                                    - generic [ref=f1e74]:
+                                      - checkbox
+                                - generic [ref=f1e76]:
+                                  - generic [ref=f1e78]:
+                                    - generic [ref=f1e79]: Ceiling Light 2 Bulb 1
+                                    - generic [ref=f1e80]: Off · sultan_bulb
+                                  - generic [ref=f1e81]:
+                                    - textbox [ref=f1e82] [cursor=pointer]: "#201709"
+                                    - slider [ref=f1e83] [cursor=pointer]: "1"
+                                    - generic [ref=f1e84]:
+                                      - checkbox
+                                - generic [ref=f1e86]:
+                                  - generic [ref=f1e88]:
+                                    - generic [ref=f1e89]: Basement Bottom of Stairs
+                                    - generic [ref=f1e90]: Off · vintage_bulb
+                                  - generic [ref=f1e91]:
+                                    - slider [ref=f1e92] [cursor=pointer]: "100"
+                                    - generic [ref=f1e93]:
+                                      - checkbox
+                                - generic [ref=f1e95]:
+                                  - generic [ref=f1e97]:
+                                    - generic [ref=f1e98]: Ceiling Light 2 Bulb 2
+                                    - generic [ref=f1e99]: Off · sultan_bulb
+                                  - generic [ref=f1e100]:
+                                    - textbox [ref=f1e101] [cursor=pointer]: "#201709"
+                                    - slider [ref=f1e102] [cursor=pointer]: "1"
+                                    - generic [ref=f1e103]:
+                                      - checkbox
+                                - generic [ref=f1e105]:
+                                  - generic [ref=f1e107]:
+                                    - generic [ref=f1e108]: Ceiling Light 1 Bulb 2
+                                    - generic [ref=f1e109]: Off · sultan_bulb
+                                  - generic [ref=f1e110]:
+                                    - textbox [ref=f1e111] [cursor=pointer]: "#201709"
+                                    - slider [ref=f1e112] [cursor=pointer]: "1"
+                                    - generic [ref=f1e113]:
+                                      - checkbox
+                            - generic [ref=f1e115]:
+                              - generic [ref=f1e116] [cursor=pointer]:
+                                - generic [ref=f1e117]:
+                                  - generic [ref=f1e118]: 💻
+                                  - text: Computer
+                                - generic [ref=f1e119]: 0/2 on
+                              - generic [ref=f1e120]:
+                                - generic [ref=f1e121]:
+                                  - generic [ref=f1e123]:
+                                    - generic [ref=f1e124]: Computer - Left
+                                    - generic [ref=f1e125]: Off · classic_bulb
+                                  - generic [ref=f1e126]:
+                                    - textbox [ref=f1e127] [cursor=pointer]: "#ffcf79"
+                                    - slider [ref=f1e128] [cursor=pointer]: "100"
+                                    - generic [ref=f1e129]:
+                                      - checkbox
+                                - generic [ref=f1e131]:
+                                  - generic [ref=f1e133]:
+                                    - generic [ref=f1e134]: Computer - Right
+                                    - generic [ref=f1e135]: Off · classic_bulb
+                                  - generic [ref=f1e136]:
+                                    - textbox [ref=f1e137] [cursor=pointer]: "#ffcf79"
+                                    - slider [ref=f1e138] [cursor=pointer]: "100"
+                                    - generic [ref=f1e139]:
+                                      - checkbox
+                            - generic [ref=f1e141]:
+                              - generic [ref=f1e142] [cursor=pointer]:
+                                - generic [ref=f1e143]:
+                                  - generic [ref=f1e144]: 💡
+                                  - text: Entrance
+                                - generic [ref=f1e145]: 0/1 on
+                              - generic [ref=f1e147]:
+                                - generic [ref=f1e149]:
+                                  - generic [ref=f1e150]: Front Porch
+                                  - generic [ref=f1e151]: Off · sultan_bulb
+                                - generic [ref=f1e152]:
+                                  - slider [ref=f1e153] [cursor=pointer]: "25"
+                                  - generic [ref=f1e154]:
+                                    - checkbox
+                            - generic [ref=f1e156]:
+                              - generic [ref=f1e157] [cursor=pointer]:
+                                - generic [ref=f1e158]:
+                                  - generic [ref=f1e159]: 🍳
+                                  - text: Kitchen
+                                - generic [ref=f1e160]: 0/7 on
+                              - generic [ref=f1e161]:
+                                - generic [ref=f1e162]:
+                                  - generic [ref=f1e164]:
+                                    - generic [ref=f1e165]: Hallway
+                                    - generic [ref=f1e166]: Off · vintage_bulb
+                                  - generic [ref=f1e167]:
+                                    - slider [ref=f1e168] [cursor=pointer]: "26"
+                                    - generic [ref=f1e169]:
+                                      - checkbox
+                                - generic [ref=f1e171]:
+                                  - generic [ref=f1e173]:
+                                    - generic [ref=f1e174]: Kitchen Sink 3
+                                    - generic [ref=f1e175]: Off · spot_bulb
+                                  - generic [ref=f1e176]:
+                                    - textbox [ref=f1e177] [cursor=pointer]: "#ffb344"
+                                    - slider [ref=f1e178] [cursor=pointer]: "100"
+                                    - generic [ref=f1e179]:
+                                      - checkbox
+                                - generic [ref=f1e181]:
+                                  - generic [ref=f1e183]:
+                                    - generic [ref=f1e184]: Kitchen Aisle 1
+                                    - generic [ref=f1e185]: Off · spot_bulb
+                                  - generic [ref=f1e186]:
+                                    - textbox [ref=f1e187] [cursor=pointer]: "#ffb344"
+                                    - slider [ref=f1e188] [cursor=pointer]: "100"
+                                    - generic [ref=f1e189]:
+                                      - checkbox
+                                - generic [ref=f1e191]:
+                                  - generic [ref=f1e193]:
+                                    - generic [ref=f1e194]: Kitchen Aisle 2
+                                    - generic [ref=f1e195]: Off · spot_bulb
+                                  - generic [ref=f1e196]:
+                                    - textbox [ref=f1e197] [cursor=pointer]: "#ffb344"
+                                    - slider [ref=f1e198] [cursor=pointer]: "100"
+                                    - generic [ref=f1e199]:
+                                      - checkbox
+                                - generic [ref=f1e201]:
+                                  - generic [ref=f1e203]:
+                                    - generic [ref=f1e204]: Kitchen Sink 2
+                                    - generic [ref=f1e205]: Off · spot_bulb
+                                  - generic [ref=f1e206]:
+                                    - textbox [ref=f1e207] [cursor=pointer]: "#ffb344"
+                                    - slider [ref=f1e208] [cursor=pointer]: "100"
+                                    - generic [ref=f1e209]:
+                                      - checkbox
+                                - generic [ref=f1e211]:
+                                  - generic [ref=f1e213]:
+                                    - generic [ref=f1e214]: Kitchen Aisle 3
+                                    - generic [ref=f1e215]: Off · spot_bulb
+                                  - generic [ref=f1e216]:
+                                    - textbox [ref=f1e217] [cursor=pointer]: "#ffb344"
+                                    - slider [ref=f1e218] [cursor=pointer]: "100"
+                                    - generic [ref=f1e219]:
+                                      - checkbox
+                                - generic [ref=f1e221]:
+                                  - generic [ref=f1e223]:
+                                    - generic [ref=f1e224]: Kitchen Sink 1
+                                    - generic [ref=f1e225]: Off · spot_bulb
+                                  - generic [ref=f1e226]:
+                                    - textbox [ref=f1e227] [cursor=pointer]: "#ffb344"
+                                    - slider [ref=f1e228] [cursor=pointer]: "100"
+                                    - generic [ref=f1e229]:
+                                      - checkbox
+                            - generic [ref=f1e231]:
+                              - generic [ref=f1e232] [cursor=pointer]:
+                                - generic [ref=f1e233]:
+                                  - generic [ref=f1e234]: 🛋️
+                                  - text: Living room
+                                - generic [ref=f1e235]: 0/4 on
+                              - generic [ref=f1e236]:
+                                - generic [ref=f1e237]:
+                                  - generic [ref=f1e239]:
+                                    - generic [ref=f1e240]: Stairs
+                                    - generic [ref=f1e241]: Off · sultan_bulb
+                                  - generic [ref=f1e242]:
+                                    - slider [ref=f1e243] [cursor=pointer]: "35"
+                                    - generic [ref=f1e244]:
+                                      - checkbox
+                                - generic [ref=f1e246]:
+                                  - generic [ref=f1e248]:
+                                    - generic [ref=f1e249]: Front Door 3
+                                    - generic [ref=f1e250]: Off · spot_bulb
+                                  - generic [ref=f1e251]:
+                                    - textbox [ref=f1e252] [cursor=pointer]: "#ffb243"
+                                    - slider [ref=f1e253] [cursor=pointer]: "100"
+                                    - generic [ref=f1e254]:
+                                      - checkbox
+                                - generic [ref=f1e256]:
+                                  - generic [ref=f1e258]:
+                                    - generic [ref=f1e259]: Front Door 1
+                                    - generic [ref=f1e260]: Off · spot_bulb
+                                  - generic [ref=f1e261]:
+                                    - textbox [ref=f1e262] [cursor=pointer]: "#ffb243"
+                                    - slider [ref=f1e263] [cursor=pointer]: "100"
+                                    - generic [ref=f1e264]:
+                                      - checkbox
+                                - generic [ref=f1e266]:
+                                  - generic [ref=f1e268]:
+                                    - generic [ref=f1e269]: Front Door 2
+                                    - generic [ref=f1e270]: Off · spot_bulb
+                                  - generic [ref=f1e271]:
+                                    - textbox [ref=f1e272] [cursor=pointer]: "#ffb243"
+                                    - slider [ref=f1e273] [cursor=pointer]: "100"
+                                    - generic [ref=f1e274]:
+                                      - checkbox
+  - alert [ref=e146]

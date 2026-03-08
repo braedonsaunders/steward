@@ -61,6 +61,7 @@ export async function POST(
 
   const now = new Date().toISOString();
   const existing = stateStore.getDeviceWidgetBySlug(id, payload.data.slug);
+  const nextControls = (payload.data.controls as DeviceWidget["controls"] | undefined) ?? [];
   const widget: DeviceWidget = {
     id: existing?.id ?? `widget-${randomUUID()}`,
     deviceId: id,
@@ -72,7 +73,7 @@ export async function POST(
     css: payload.data.css ?? "",
     js: payload.data.js,
     capabilities: payload.data.capabilities,
-    controls: payload.data.controls ?? [],
+    controls: nextControls,
     sourcePrompt: payload.data.sourcePrompt,
     createdBy: "user",
     revision: existing?.revision ?? 1,

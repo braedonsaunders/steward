@@ -6,6 +6,23 @@ import { stateStore } from "@/lib/state/store";
 import type { DeviceWidget, DeviceWidgetOperationRun, LLMProvider } from "@/lib/state/types";
 import { buildDeviceWidgetContext } from "@/lib/widgets/context";
 import { DeviceWidgetControlListSchema } from "@/lib/widgets/controls";
+import { previewWidgetOperation } from "@/lib/widgets/operations";
+
+const WIDGET_GENERATOR_MAX_OUTPUT_TOKENS = 7_000;
+const WIDGET_GENERATOR_MAX_AUTO_CONTINUATIONS = 2;
+const WIDGET_GENERATOR_AUTO_CONTINUE_FINISH_REASONS = new Set(["length", "tool-calls", "max-steps"]);
+const WIDGET_JSON_RESPONSE_SHAPE = [
+  "{",
+  '  "name": "string",',
+  '  "description": "string",',
+  '  "capabilities": ["context", "state", "device-control"],',
+  '  "controls": [{ "id": "refresh-status", "label": "Refresh status", "kind": "button", "parameters": [], "execution": { "kind": "operation", "operation": { "mode": "read", "kind": "http.request", "adapterId": "http-api", "brokerRequest": { "protocol": "http", "method": "GET", "path": "/status" } } } }],',
+  '  "html": "<div>...</div>",',
+  '  "css": "string",',
+  '  "js": "string",',
+  '  "summary": "one short sentence for the operator"',
+  "}",
+].join("\n");
 
 const GeneratedWidgetSchema = z.object({
   name: z.string().min(2).max(80),
@@ -17,6 +34,9 @@ const GeneratedWidgetSchema = z.object({
   js: z.string().min(1).max(48_000),
   summary: z.string().min(1).max(320),
 });
+
+type GeneratedWidget = z.infer<typeof GeneratedWidgetSchema>;
+type DeviceWidgetGenerationContext = NonNullable<Awaited<ReturnType<typeof buildDeviceWidgetContext>>>;
 
 function slugifyWidgetName(value: string): string {
   return value
@@ -36,6 +56,357 @@ function extractFirstJsonObject(text: string): unknown {
     throw new Error("Widget generator did not return JSON.");
   }
   return JSON.parse(candidate.slice(firstBrace, lastBrace + 1));
+}
+
+function normalizeFinishReason(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value.trim().toLowerCase();
+  }
+  return undefined;
+}
+
+function shouldAutoContinueForFinishReason(value: unknown): boolean {
+  const reason = normalizeFinishReason(value);
+  return reason ? WIDGET_GENERATOR_AUTO_CONTINUE_FINISH_REASONS.has(reason) : false;
+}
+
+function tryExtractFirstJsonObject(text: string): { ok: true; value: unknown } | { ok: false; error: string } {
+  try {
+    return { ok: true, value: extractFirstJsonObject(text) };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      error: /did not return json/i.test(message)
+        ? message
+        : `Widget generator returned malformed JSON: ${message}`,
+    };
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isHttpBrokerRequest(value: unknown): value is {
+  protocol: "http";
+  path?: string;
+  body?: string;
+  scheme?: string;
+  insecureSkipVerify?: boolean;
+} {
+  return isRecord(value) && value.protocol === "http";
+}
+
+function collectGeneratedWidgetHttpRequests(widget: GeneratedWidget): Array<{
+  source: string;
+  path?: string;
+  body?: string;
+  scheme?: string;
+  insecureSkipVerify?: boolean;
+}> {
+  return widget.controls
+    .map((control) => {
+      if (control.execution.kind !== "operation") {
+        return null;
+      }
+      const request = control.execution.operation.brokerRequest;
+      if (!isHttpBrokerRequest(request)) {
+        return null;
+      }
+      return {
+        source: `controls.${control.id}`,
+        path: request.path,
+        body: request.body,
+        scheme: request.scheme,
+        insecureSkipVerify: request.insecureSkipVerify,
+      };
+    })
+    .filter((value): value is NonNullable<typeof value> => value !== null);
+}
+
+function isHueClipV2Context(
+  context: DeviceWidgetGenerationContext,
+): boolean {
+  const httpCredential = context.credentials.find((credential) => credential.protocol.toLowerCase() === "http-api");
+  const authMode = httpCredential?.auth?.mode?.toLowerCase();
+  const headerName = httpCredential?.auth?.headerName?.toLowerCase();
+  const deviceFingerprint = [
+    context.device.name,
+    context.device.vendor,
+    context.device.metadata.ssdpFriendlyName,
+    context.device.metadata.ssdpModelName,
+    context.device.metadata.ssdpManufacturer,
+  ]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .join(" ")
+    .toLowerCase();
+
+  return authMode === "api-key"
+    && headerName === "hue-application-key"
+    && /(philips hue|hue bridge|\bhue\b|signify)/i.test(deviceFingerprint);
+}
+
+function buildWidgetGenerationHints(context: DeviceWidgetGenerationContext): string[] {
+  const hints: string[] = [];
+  const httpCredential = context.credentials.find((credential) => credential.protocol.toLowerCase() === "http-api");
+
+  if (httpCredential?.auth?.appliedBySteward) {
+    hints.push("Use the stored http-api credential exactly as described in context.credentials. Steward injects authentication automatically.");
+    switch (httpCredential.auth.mode) {
+      case "api-key":
+        hints.push(`The device uses header-based API key auth (${httpCredential.auth.headerName ?? "X-API-Key"}). Do not put tokens in paths, query strings, HTML, JS, or control parameters.`);
+        break;
+      case "path-segment":
+        hints.push(`The device uses path-segment auth. Use the logical API path only; Steward inserts the token after ${httpCredential.auth.pathPrefix ?? "/api"} automatically.`);
+        break;
+      case "query-param":
+        hints.push(`The device uses query-param auth (${httpCredential.auth.queryParamName ?? "api_key"}). Do not hard-code tokens in widget code.`);
+        break;
+      default:
+        break;
+    }
+  }
+
+  if (isHueClipV2Context(context)) {
+    hints.push("This device is a Philips Hue Bridge using CLIP v2 header auth.");
+    hints.push("Use CLIP v2 endpoints only: /clip/v2/resource/light, /clip/v2/resource/room, and /clip/v2/resource/grouped_light.");
+    hints.push("Never use legacy Hue v1 endpoints such as /api/lights, /api/groups, /api/scenes, /api/sensors, or /api/config.");
+    hints.push("Use HTTPS on port 443 with brokerRequest.insecureSkipVerify=true for all Hue Bridge HTTP calls.");
+    hints.push("For light writes use PUT /clip/v2/resource/light/{light_id} with CLIP v2 bodies such as {\"on\":{\"on\":true}}, {\"dimming\":{\"brightness\":42}}, or {\"color\":{\"xy\":{\"x\":0.3,\"y\":0.3}}}.");
+    hints.push("For room grouping, match room.children[*].rid (device ids) to light.owner.rid. Room aggregate state lives under grouped_light where grouped_light.owner.rid equals the room id.");
+    hints.push("For Hue brightness controls use dimming.brightness percentages from 0 to 100, not legacy bri 1-254 values.");
+    hints.push("For Hue color controls use color.xy.x and color.xy.y values, not legacy hue/sat values.");
+  }
+
+  return hints;
+}
+
+function validateGeneratedWidgetAgainstContext(
+  widget: GeneratedWidget,
+  context: DeviceWidgetGenerationContext,
+): string[] {
+  const issues: string[] = [];
+  const httpRequests = collectGeneratedWidgetHttpRequests(widget);
+
+  for (const request of httpRequests) {
+    if (request.scheme === "https" && request.insecureSkipVerify !== true) {
+      issues.push(`${request.source} uses HTTPS without brokerRequest.insecureSkipVerify=true.`);
+    }
+  }
+
+  if (/\bskipCertChecks\s*:/.test(widget.js)) {
+    issues.push("Widget JavaScript uses skipCertChecks for HTTP requests; use insecureSkipVerify instead.");
+  }
+
+  if (!isHueClipV2Context(context)) {
+    return issues;
+  }
+
+  for (const request of httpRequests) {
+    const path = request.path ?? "";
+    const body = request.body ?? "";
+    if (path.startsWith("/api/")) {
+      issues.push(`${request.source} uses legacy Hue v1 path ${path}; use /clip/v2/resource/... instead.`);
+    }
+    if (path.length > 0 && !path.startsWith("/clip/v2/resource/")) {
+      issues.push(`${request.source} path ${path} is not a Hue CLIP v2 resource path.`);
+    }
+    if (/"bri"\s*:/.test(body)) {
+      issues.push(`${request.source} uses legacy Hue bri payloads; use dimming.brightness percentages instead.`);
+    }
+    if (/"hue"\s*:/.test(body) || /"sat"\s*:/.test(body)) {
+      issues.push(`${request.source} uses legacy Hue hue/sat payloads; use color.xy instead.`);
+    }
+  }
+
+  if (/\/api\/(?:lights|groups|scenes|sensors|config)\b/.test(widget.js)) {
+    issues.push("Widget JavaScript uses legacy Hue v1 /api/... paths.");
+  }
+  if (!/\/clip\/v2\/resource\//.test(widget.js)) {
+    issues.push("Widget JavaScript does not reference Hue CLIP v2 resource paths.");
+  }
+
+  return issues;
+}
+
+function canAutoVerifyControl(control: GeneratedWidget["controls"][number]): boolean {
+  return control.execution.kind === "operation"
+    && control.execution.operation.mode === "read"
+    && control.parameters.length === 0;
+}
+
+function buildDraftWidgetForVerification(args: {
+  context: DeviceWidgetGenerationContext;
+  widget: GeneratedWidget;
+  targetWidget?: DeviceWidget | null;
+}): DeviceWidget {
+  const now = new Date().toISOString();
+  return {
+    id: args.targetWidget?.id ?? `widget-preview-${randomUUID()}`,
+    deviceId: args.context.device.id,
+    slug: args.targetWidget?.slug ?? slugifyWidgetName(args.widget.name),
+    name: args.widget.name.trim(),
+    description: args.widget.description.trim(),
+    status: "active",
+    html: sanitizeHtml(args.widget.html),
+    css: sanitizeCss(args.widget.css),
+    js: sanitizeJs(args.widget.js),
+    capabilities: args.widget.capabilities,
+    controls: args.widget.controls as DeviceWidget["controls"],
+    sourcePrompt: "widget-generation-preview",
+    createdBy: "steward",
+    revision: args.targetWidget?.revision ?? 1,
+    createdAt: args.targetWidget?.createdAt ?? now,
+    updatedAt: now,
+  };
+}
+
+async function validateGeneratedWidgetOperationally(args: {
+  context: DeviceWidgetGenerationContext;
+  widget: GeneratedWidget;
+  targetWidget?: DeviceWidget | null;
+}): Promise<string[]> {
+  const verifiableControls = args.widget.controls.filter(canAutoVerifyControl).slice(0, 2);
+  if (verifiableControls.length === 0) {
+    return [];
+  }
+
+  const issues: string[] = [];
+  const draftWidget = buildDraftWidgetForVerification(args);
+  for (const control of verifiableControls) {
+    if (control.execution.kind !== "operation") {
+      continue;
+    }
+    const result = await previewWidgetOperation({
+      device: args.context.device,
+      widget: draftWidget,
+      input: control.execution.operation,
+    });
+    if (!result.ok) {
+      const detail = result.summary.trim().length > 0 ? result.summary.trim() : result.output.trim();
+      issues.push(`Live verification failed for control ${control.id}: ${detail || "unknown error"}`);
+    }
+  }
+  return issues;
+}
+
+async function autoContinueWidgetGeneration(args: {
+  model: Awaited<ReturnType<typeof buildLanguageModel>>;
+  systemPrompt: string;
+  userPrompt: string;
+  initialText: string;
+  initialFinishReason: unknown;
+}): Promise<{ text: string; truncated: boolean }> {
+  let text = args.initialText;
+  let finishReason = args.initialFinishReason;
+
+  for (let i = 0; i < WIDGET_GENERATOR_MAX_AUTO_CONTINUATIONS; i++) {
+    if (!shouldAutoContinueForFinishReason(finishReason)) {
+      return { text, truncated: false };
+    }
+
+    const continuation = await generateText({
+      model: args.model,
+      system: args.systemPrompt,
+      messages: [
+        { role: "user", content: args.userPrompt },
+        { role: "assistant", content: text },
+        {
+          role: "user",
+          content: "Continue exactly where you left off. Do not repeat prior content. Return only the continuation of the same JSON object.",
+        },
+      ],
+      temperature: 0.15,
+      maxOutputTokens: WIDGET_GENERATOR_MAX_OUTPUT_TOKENS,
+    });
+
+    if (continuation.text.trim().length === 0) {
+      return { text, truncated: true };
+    }
+
+    text += continuation.text;
+    finishReason = await Promise.resolve((continuation as { finishReason?: unknown }).finishReason);
+  }
+
+  return { text, truncated: shouldAutoContinueForFinishReason(finishReason) };
+}
+
+async function repairGeneratedWidgetJson(args: {
+  model: Awaited<ReturnType<typeof buildLanguageModel>>;
+  rawText: string;
+  parseError: string;
+}): Promise<{ text: string; truncated: boolean }> {
+  const repairSystemPrompt = [
+    "You repair malformed JSON for Steward device widgets.",
+    "Return JSON only. No markdown. No code fences.",
+    "Keep the widget behavior and intent as close as possible to the source.",
+    "If the source appears truncated, complete it conservatively so the JSON is valid and the widget remains usable.",
+    "Ensure every control parameter includes key, label, and type.",
+    "",
+    "Return this JSON shape:",
+    WIDGET_JSON_RESPONSE_SHAPE,
+  ].join("\n");
+
+  const repairUserPrompt = [
+    "The following widget-generation output failed to parse as JSON.",
+    `Parse error: ${args.parseError}`,
+    "Repair it into one valid JSON object.",
+    "",
+    "Malformed output:",
+    args.rawText,
+  ].join("\n");
+
+  const repairResult = await generateText({
+    model: args.model,
+    system: repairSystemPrompt,
+    prompt: repairUserPrompt,
+    temperature: 0,
+    maxOutputTokens: WIDGET_GENERATOR_MAX_OUTPUT_TOKENS,
+  });
+
+  const repairFinishReason = await Promise.resolve((repairResult as { finishReason?: unknown }).finishReason);
+  return autoContinueWidgetGeneration({
+    model: args.model,
+    systemPrompt: repairSystemPrompt,
+    userPrompt: repairUserPrompt,
+    initialText: repairResult.text,
+    initialFinishReason: repairFinishReason,
+  });
+}
+
+async function repairGeneratedWidgetForContextIssues(args: {
+  model: Awaited<ReturnType<typeof buildLanguageModel>>;
+  systemPrompt: string;
+  currentWidget: GeneratedWidget;
+  issues: string[];
+}): Promise<{ text: string; truncated: boolean }> {
+  const repairUserPrompt = [
+    "Revise this widget JSON so it fully satisfies the required device-specific rules below while preserving the requested functionality.",
+    "",
+    "Issues to fix:",
+    ...args.issues.map((issue) => `- ${issue}`),
+    "",
+    "Current widget JSON:",
+    JSON.stringify(args.currentWidget, null, 2),
+  ].join("\n");
+
+  const repairResult = await generateText({
+    model: args.model,
+    system: args.systemPrompt,
+    prompt: repairUserPrompt,
+    temperature: 0.05,
+    maxOutputTokens: WIDGET_GENERATOR_MAX_OUTPUT_TOKENS,
+  });
+
+  const repairFinishReason = await Promise.resolve((repairResult as { finishReason?: unknown }).finishReason);
+  return autoContinueWidgetGeneration({
+    model: args.model,
+    systemPrompt: args.systemPrompt,
+    userPrompt: repairUserPrompt,
+    initialText: repairResult.text,
+    initialFinishReason: repairFinishReason,
+  });
 }
 
 function stripWrapperTag(html: string, tag: string): string {
@@ -60,6 +431,16 @@ function sanitizeCss(css: string): string {
 
 function sanitizeJs(js: string): string {
   return js.replace(/<script[^>]*>/gi, "").replace(/<\/script>/gi, "").trim();
+}
+
+function summarizeSchemaIssues(error: z.ZodError): string {
+  return error.issues
+    .slice(0, 8)
+    .map((issue) => {
+      const path = issue.path.length > 0 ? issue.path.join(".") : "root";
+      return `${path}: ${issue.message}`;
+    })
+    .join("; ");
 }
 
 function summarizeWidgetRuns(runs: DeviceWidgetOperationRun[]): Array<Record<string, unknown>> {
@@ -117,13 +498,10 @@ export async function generateAndStoreDeviceWidget(
   const targetWidgetRuns = targetWidget
     ? summarizeWidgetRuns(stateStore.getDeviceWidgetOperationRuns(targetWidget.id, 12))
     : [];
+  const generationHints = buildWidgetGenerationHints(context);
 
   const model = await buildLanguageModel(input.provider, input.model);
-  const result = await generateText({
-    model,
-    temperature: 0.15,
-    maxOutputTokens: 7_000,
-    system: [
+  const systemPrompt = [
       "You generate persistent device widgets for Steward.",
       "Return JSON only. No markdown. No code fences.",
       "The widget will be stored and rendered in a sandboxed iframe on the device page.",
@@ -174,6 +552,7 @@ export async function generateAndStoreDeviceWidget(
       "Stored device credentials are applied by Steward inside the broker. Never embed credential secrets, usernames, bearer tokens, API keys, or placeholders such as {{apiKey}} in widget code.",
       "If context.credentials includes an http-api credential with auth.appliedBySteward=true, rely on the broker to attach auth automatically.",
       "For http-api auth.mode='path-segment', use the logical API path (for example '/api/groups'); Steward inserts the stored token after auth.pathPrefix automatically.",
+      "For HTTP broker requests, the TLS skip flag is brokerRequest.insecureSkipVerify. Do not use skipCertChecks for HTTP operations.",
       "Use verification-oriented flows. For opaque write operations, prefer runOperationDetailed() and verify with a follow-up read when possible.",
       "For WebSocket writes, brokerRequest.successStrategy controls what counts as success:",
       "- transport: opening the socket and sending messages is enough.",
@@ -201,25 +580,26 @@ export async function generateAndStoreDeviceWidget(
       "Control manifest rules:",
       "- controls is always required and may be [] only when the widget truly has no meaningful controls.",
       "- Use a stable control id such as 'power-toggle', 'refresh-status', or 'set-brightness'.",
+      "- If the widget displays live device data, include at least one no-parameter read control such as 'refresh-status' so Steward can verify and refresh it without DOM interaction.",
       "- kind is one of button, toggle, select, or form.",
       "- parameters must describe every input Steward needs to execute the control without the DOM.",
+      "- Every parameter object must include key, label, and type. Use key for the machine-readable input name. Do not substitute name or id for key.",
       "- execution.kind='operation' should be used for device actions via Steward's operation model.",
       "- execution.kind='state' should be used for persisted widget state changes only.",
       "- For toggles/selects/forms, the widget UI should call invokeControl/invokeControlDetailed instead of duplicating operation templates inline.",
+      ...(generationHints.length > 0
+        ? [
+          "",
+          "Device-specific generation hints:",
+          ...generationHints.map((hint) => `- ${hint}`),
+          "If any device-specific hint conflicts with a generic example, follow the device-specific hint.",
+        ]
+        : []),
       "",
       "Return this JSON shape:",
-      "{",
-      '  "name": "string",',
-      '  "description": "string",',
-      '  "capabilities": ["context", "state", "device-control"],',
-      '  "controls": [{ "id": "refresh-status", "label": "Refresh status", "kind": "button", "parameters": [], "execution": { "kind": "operation", "operation": { "mode": "read", "kind": "http.request", "adapterId": "http-api", "brokerRequest": { "protocol": "http", "method": "GET", "path": "/status" } } } }],',
-      '  "html": "<div>...</div>",',
-      '  "css": "string",',
-      '  "js": "string",',
-      '  "summary": "one short sentence for the operator"',
-      "}",
-    ].join("\n"),
-    prompt: [
+      WIDGET_JSON_RESPONSE_SHAPE,
+    ].join("\n");
+  const userPrompt = [
       `User request: ${input.prompt}`,
       "",
       "Device widget context JSON:",
@@ -251,13 +631,116 @@ export async function generateAndStoreDeviceWidget(
           JSON.stringify(targetWidgetRuns, null, 2),
         ].join("\n")
         : "Current target widget source: none",
-    ].join("\n"),
+    ].join("\n");
+
+  const result = await generateText({
+    model,
+    temperature: 0.15,
+    maxOutputTokens: WIDGET_GENERATOR_MAX_OUTPUT_TOKENS,
+    system: systemPrompt,
+    prompt: userPrompt,
   });
 
-  const parsed = GeneratedWidgetSchema.parse(extractFirstJsonObject(result.text));
+  const finishReason = await Promise.resolve((result as { finishReason?: unknown }).finishReason);
+  const generatedText = await autoContinueWidgetGeneration({
+    model,
+    systemPrompt,
+    userPrompt,
+    initialText: result.text,
+    initialFinishReason: finishReason,
+  });
+
+  let extracted = tryExtractFirstJsonObject(generatedText.text);
+  let jsonSourceWasTruncated = generatedText.truncated;
+  if (!extracted.ok) {
+    const repaired = await repairGeneratedWidgetJson({
+      model,
+      rawText: generatedText.text,
+      parseError: extracted.error,
+    });
+    extracted = tryExtractFirstJsonObject(repaired.text);
+    jsonSourceWasTruncated = jsonSourceWasTruncated || repaired.truncated;
+    if (!extracted.ok) {
+      const truncationNote = jsonSourceWasTruncated ? " The model response may have been truncated." : "";
+      throw new Error(`${extracted.error}${truncationNote}`);
+    }
+  }
+
+  const parsedResult = GeneratedWidgetSchema.safeParse(extracted.value);
+  if (!parsedResult.success) {
+    const truncationNote = jsonSourceWasTruncated ? " The model response may have been truncated." : "";
+    throw new Error(`Widget generator returned invalid JSON: ${summarizeSchemaIssues(parsedResult.error)}${truncationNote}`);
+  }
+  let parsed = parsedResult.data;
+
+  let contextIssues = validateGeneratedWidgetAgainstContext(parsed, context);
+  if (contextIssues.length > 0) {
+    const repaired = await repairGeneratedWidgetForContextIssues({
+      model,
+      systemPrompt,
+      currentWidget: parsed,
+      issues: contextIssues,
+    });
+    jsonSourceWasTruncated = jsonSourceWasTruncated || repaired.truncated;
+    const repairedExtracted = tryExtractFirstJsonObject(repaired.text);
+    if (!repairedExtracted.ok) {
+      const truncationNote = jsonSourceWasTruncated ? " The model response may have been truncated." : "";
+      throw new Error(`${repairedExtracted.error}${truncationNote}`);
+    }
+    const repairedParsed = GeneratedWidgetSchema.safeParse(repairedExtracted.value);
+    if (!repairedParsed.success) {
+      const truncationNote = jsonSourceWasTruncated ? " The model response may have been truncated." : "";
+      throw new Error(`Widget generator returned invalid JSON: ${summarizeSchemaIssues(repairedParsed.error)}${truncationNote}`);
+    }
+    parsed = repairedParsed.data;
+    contextIssues = validateGeneratedWidgetAgainstContext(parsed, context);
+    if (contextIssues.length > 0) {
+      throw new Error(`Widget generator returned context-incompatible JSON: ${contextIssues.slice(0, 8).join("; ")}`);
+    }
+  }
+
+  let operationalIssues = await validateGeneratedWidgetOperationally({
+    context,
+    widget: parsed,
+    targetWidget,
+  });
+  if (operationalIssues.length > 0) {
+    const repaired = await repairGeneratedWidgetForContextIssues({
+      model,
+      systemPrompt,
+      currentWidget: parsed,
+      issues: operationalIssues,
+    });
+    jsonSourceWasTruncated = jsonSourceWasTruncated || repaired.truncated;
+    const repairedExtracted = tryExtractFirstJsonObject(repaired.text);
+    if (!repairedExtracted.ok) {
+      const truncationNote = jsonSourceWasTruncated ? " The model response may have been truncated." : "";
+      throw new Error(`${repairedExtracted.error}${truncationNote}`);
+    }
+    const repairedParsed = GeneratedWidgetSchema.safeParse(repairedExtracted.value);
+    if (!repairedParsed.success) {
+      const truncationNote = jsonSourceWasTruncated ? " The model response may have been truncated." : "";
+      throw new Error(`Widget generator returned invalid JSON: ${summarizeSchemaIssues(repairedParsed.error)}${truncationNote}`);
+    }
+    parsed = repairedParsed.data;
+    contextIssues = validateGeneratedWidgetAgainstContext(parsed, context);
+    if (contextIssues.length > 0) {
+      throw new Error(`Widget generator returned context-incompatible JSON: ${contextIssues.slice(0, 8).join("; ")}`);
+    }
+    operationalIssues = await validateGeneratedWidgetOperationally({
+      context,
+      widget: parsed,
+      targetWidget,
+    });
+    if (operationalIssues.length > 0) {
+      throw new Error(`Widget generator failed live verification: ${operationalIssues.slice(0, 8).join("; ")}`);
+    }
+  }
+
   const slug = targetWidget?.slug ?? slugifyWidgetName(parsed.name);
   const existing = targetWidget ?? stateStore.getDeviceWidgetBySlug(input.deviceId, slug);
   const now = new Date().toISOString();
+  const nextControls = parsed.controls as DeviceWidget["controls"];
 
   const widget = stateStore.upsertDeviceWidget({
     id: existing?.id ?? `widget-${randomUUID()}`,
@@ -270,7 +753,7 @@ export async function generateAndStoreDeviceWidget(
     css: sanitizeCss(parsed.css),
     js: sanitizeJs(parsed.js),
     capabilities: parsed.capabilities,
-    controls: parsed.controls,
+    controls: nextControls,
     sourcePrompt: input.prompt,
     createdBy: input.actor ?? "steward",
     revision: existing?.revision ?? 1,

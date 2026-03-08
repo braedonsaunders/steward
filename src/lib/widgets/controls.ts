@@ -13,30 +13,89 @@ import { WidgetOperationSchema, executeWidgetOperation } from "@/lib/widgets/ope
 
 const ScalarValueSchema = z.union([z.string(), z.number(), z.boolean()]);
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function slugifyControlToken(value: string): string | undefined {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 64);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function humanizeControlToken(value: string): string {
+  return value
+    .split(/[_-]+/)
+    .filter((part) => part.length > 0)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function normalizeWidgetControlParameterInput(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  const explicitKey = readNonEmptyString(value.key)
+    ?? readNonEmptyString(value.name)
+    ?? readNonEmptyString(value.id)
+    ?? readNonEmptyString(value.paramKey)
+    ?? readNonEmptyString(value.parameterKey);
+  const label = readNonEmptyString(value.label)
+    ?? readNonEmptyString(value.title)
+    ?? readNonEmptyString(value.name);
+  const derivedKey = explicitKey
+    ? slugifyControlToken(explicitKey)
+    : label
+      ? slugifyControlToken(label)
+      : undefined;
+
+  return {
+    ...value,
+    key: derivedKey ?? value.key,
+    label: label ?? (derivedKey ? humanizeControlToken(derivedKey) : value.label),
+  };
+}
+
 export const DeviceWidgetControlOptionSchema = z.object({
   label: z.string().min(1).max(80),
   value: z.string().min(1).max(80),
   description: z.string().max(240).optional(),
 });
 
-export const DeviceWidgetControlParameterSchema = z.object({
-  key: z.string().min(1).max(64),
-  label: z.string().min(1).max(80),
-  description: z.string().max(240).optional(),
-  type: z.enum(["string", "number", "boolean", "enum"]),
-  required: z.boolean().optional(),
-  defaultValue: ScalarValueSchema.optional(),
-  placeholder: z.string().max(120).optional(),
-  options: z.array(DeviceWidgetControlOptionSchema).max(20).optional(),
-}).superRefine((value, ctx) => {
-  if (value.type === "enum" && (!value.options || value.options.length === 0)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["options"],
-      message: "enum controls require at least one option",
-    });
-  }
-});
+export const DeviceWidgetControlParameterSchema = z.preprocess(
+  normalizeWidgetControlParameterInput,
+  z.object({
+    key: z.string().min(1).max(64),
+    label: z.string().min(1).max(80),
+    description: z.string().max(240).optional(),
+    type: z.enum(["string", "number", "boolean", "enum"]),
+    required: z.boolean().optional(),
+    defaultValue: ScalarValueSchema.optional(),
+    placeholder: z.string().max(120).optional(),
+    options: z.array(DeviceWidgetControlOptionSchema).max(20).optional(),
+  }).superRefine((value, ctx) => {
+    if (value.type === "enum" && (!value.options || value.options.length === 0)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["options"],
+        message: "enum controls require at least one option",
+      });
+    }
+  }),
+);
 
 export const DeviceWidgetControlExecutionSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -63,10 +122,6 @@ export const DeviceWidgetControlSchema = z.object({
 });
 
 export const DeviceWidgetControlListSchema = z.array(DeviceWidgetControlSchema).max(40);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function normalizeScalarValue(
   raw: unknown,

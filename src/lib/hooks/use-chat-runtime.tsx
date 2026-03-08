@@ -82,6 +82,39 @@ function isAbortError(error: unknown): boolean {
   return false;
 }
 
+function collapseWhitespaceForMessageMerge(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function mergeAssistantContent(current: string, incoming?: string): string {
+  if (typeof incoming !== "string" || incoming.length === 0) {
+    return current;
+  }
+  if (current.length === 0) {
+    return incoming;
+  }
+  if (incoming === current) {
+    return incoming;
+  }
+  if (incoming.startsWith(current)) {
+    return incoming;
+  }
+  if (current.startsWith(incoming)) {
+    return current;
+  }
+
+  const normalizedCurrent = collapseWhitespaceForMessageMerge(current);
+  const normalizedIncoming = collapseWhitespaceForMessageMerge(incoming);
+  if (normalizedIncoming.startsWith(normalizedCurrent)) {
+    return incoming;
+  }
+  if (normalizedCurrent.startsWith(normalizedIncoming)) {
+    return current;
+  }
+
+  return incoming.length >= current.length ? incoming : current;
+}
+
 function mergeToolEvent(events: ChatToolEvent[] | undefined, incoming: ChatToolEvent): ChatToolEvent[] {
   const next = [...(events ?? [])];
   const existingIndex = next.findIndex((event) => event.id === incoming.id);
@@ -515,7 +548,7 @@ export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
                 message.id === assistantId
                   ? {
                       ...message,
-                      content: event.text ?? message.content,
+                      content: mergeAssistantContent(message.content, event.text),
                       reasoning: event.reasoning ?? message.reasoning,
                       metadata: event.metadata ?? message.metadata,
                       provider: event.provider ?? message.provider,

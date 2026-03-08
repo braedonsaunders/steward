@@ -20,6 +20,38 @@ import type {
 
 const ValueSchema = z.union([z.string(), z.number(), z.boolean()]);
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readBooleanAlias(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") return true;
+    if (normalized === "false") return false;
+  }
+  return undefined;
+}
+
+function normalizeHttpBrokerInput(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  const insecureSkipVerify = readBooleanAlias(value.insecureSkipVerify)
+    ?? readBooleanAlias(value.insecure_skip_verify)
+    ?? readBooleanAlias(value.skipCertChecks)
+    ?? readBooleanAlias(value.skip_cert_checks);
+
+  return {
+    ...value,
+    ...(typeof insecureSkipVerify === "boolean" ? { insecureSkipVerify } : {}),
+  };
+}
+
 const HttpBrokerSchema = z.object({
   protocol: z.literal("http"),
   method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
@@ -92,7 +124,18 @@ const MqttBrokerSchema = z.object({
   insecureSkipVerify: z.boolean().optional(),
 });
 
-export const WidgetOperationSchema = z.object({
+function normalizeWidgetOperationInput(value: unknown): unknown {
+  if (!isRecord(value) || !isRecord(value.brokerRequest) || value.brokerRequest.protocol !== "http") {
+    return value;
+  }
+
+  return {
+    ...value,
+    brokerRequest: normalizeHttpBrokerInput(value.brokerRequest),
+  };
+}
+
+export const WidgetOperationSchema = z.preprocess(normalizeWidgetOperationInput, z.object({
   mode: z.enum(["read", "mutate"]).default("read"),
   kind: z.enum([
     "shell.command",
@@ -121,13 +164,9 @@ export const WidgetOperationSchema = z.object({
   expectedSemanticTarget: z.string().max(240).optional(),
 }).refine((value) => Boolean(value.commandTemplate) || Boolean(value.brokerRequest), {
   message: "commandTemplate or brokerRequest is required",
-});
+}));
 
 export type WidgetOperationInput = z.infer<typeof WidgetOperationSchema>;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function stringifyParamValue(value: string | number | boolean | undefined): string | undefined {
   if (typeof value === "string") {
@@ -374,11 +413,12 @@ function createWidgetOperationRun(args: {
   };
 }
 
-export async function executeWidgetOperation(args: {
+async function runWidgetOperation(args: {
   device: Device;
   widget: DeviceWidget;
   input: WidgetOperationInput;
   approved?: boolean;
+  persist: boolean;
 }): Promise<WidgetOperationResult> {
   const operation = buildOperationSpec(args.device, args.input);
   const actionClass = actionClassForOperation(operation.kind, operation.mode);
@@ -421,15 +461,17 @@ export async function executeWidgetOperation(args: {
       startedAt: new Date().toISOString(),
       completedAt: new Date().toISOString(),
     };
-    stateStore.addDeviceWidgetOperationRun(createWidgetOperationRun({
-      device: args.device,
-      widget: args.widget,
-      operation,
-      policyDecision,
-      policyReason,
-      approved,
-      result,
-    }));
+    if (args.persist) {
+      stateStore.addDeviceWidgetOperationRun(createWidgetOperationRun({
+        device: args.device,
+        widget: args.widget,
+        operation,
+        policyDecision,
+        policyReason,
+        approved,
+        result,
+      }));
+    }
     return result;
   }
 
@@ -468,37 +510,62 @@ export async function executeWidgetOperation(args: {
     completedAt: execution.completedAt,
   };
 
-  stateStore.addDeviceWidgetOperationRun(createWidgetOperationRun({
-    device: args.device,
-    widget: args.widget,
-    operation,
-    policyDecision,
-    policyReason,
-    approved,
-    result,
-  }));
-
-  await stateStore.addAction({
-    actor: "user",
-    kind: "config",
-    message: `Widget operation executed from ${args.widget.name} on ${args.device.name}`,
-    context: {
-      deviceId: args.device.id,
-      widgetId: args.widget.id,
-      widgetSlug: args.widget.slug,
-      operationKind: operation.kind,
-      operationMode: operation.mode,
-      adapterId: operation.adapterId,
-      ok: result.ok,
-      status: result.status,
-      phase: result.phase,
-      proof: result.proof,
-      summary: result.summary,
-      approved,
+  if (args.persist) {
+    stateStore.addDeviceWidgetOperationRun(createWidgetOperationRun({
+      device: args.device,
+      widget: args.widget,
+      operation,
       policyDecision,
       policyReason,
-    },
-  });
+      approved,
+      result,
+    }));
+
+    await stateStore.addAction({
+      actor: "user",
+      kind: "config",
+      message: `Widget operation executed from ${args.widget.name} on ${args.device.name}`,
+      context: {
+        deviceId: args.device.id,
+        widgetId: args.widget.id,
+        widgetSlug: args.widget.slug,
+        operationKind: operation.kind,
+        operationMode: operation.mode,
+        adapterId: operation.adapterId,
+        ok: result.ok,
+        status: result.status,
+        phase: result.phase,
+        proof: result.proof,
+        summary: result.summary,
+        approved,
+        policyDecision,
+        policyReason,
+      },
+    });
+  }
 
   return result;
+}
+
+export async function previewWidgetOperation(args: {
+  device: Device;
+  widget: DeviceWidget;
+  input: WidgetOperationInput;
+}): Promise<WidgetOperationResult> {
+  return runWidgetOperation({
+    ...args,
+    persist: false,
+  });
+}
+
+export async function executeWidgetOperation(args: {
+  device: Device;
+  widget: DeviceWidget;
+  input: WidgetOperationInput;
+  approved?: boolean;
+}): Promise<WidgetOperationResult> {
+  return runWidgetOperation({
+    ...args,
+    persist: true,
+  });
 }

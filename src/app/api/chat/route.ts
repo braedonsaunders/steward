@@ -81,6 +81,47 @@ function clampText(value: string, maxChars = 1200): string {
   return `${value.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
 }
 
+function collapseWhitespaceForStreamMerge(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function reconcileStreamedAssistantText(streamed: string, candidate?: string): string {
+  const finalText = typeof candidate === "string" ? candidate : "";
+  if (streamed.length === 0) {
+    return finalText;
+  }
+  if (finalText.length === 0) {
+    return streamed;
+  }
+  if (finalText === streamed) {
+    return finalText;
+  }
+  if (finalText.startsWith(streamed)) {
+    return finalText;
+  }
+  if (streamed.startsWith(finalText)) {
+    return streamed;
+  }
+
+  const normalizedStreamed = collapseWhitespaceForStreamMerge(streamed);
+  const normalizedFinal = collapseWhitespaceForStreamMerge(finalText);
+  if (normalizedFinal.startsWith(normalizedStreamed)) {
+    return finalText;
+  }
+  if (normalizedStreamed.startsWith(normalizedFinal)) {
+    return streamed;
+  }
+
+  return finalText.length >= streamed.length ? finalText : streamed;
+}
+
+function appendedAssistantDelta(previous: string, next: string): string {
+  if (previous.length === 0) {
+    return next;
+  }
+  return next.startsWith(previous) ? next.slice(previous.length) : "";
+}
+
 function humanizeToolName(toolName: string): string {
   return toolName
     .replace(/^steward[_-]/, "")
@@ -514,6 +555,69 @@ function summarizeToolExecution(output: unknown, toolName?: string): {
       };
     }
 
+    if (toolName === "steward_control_widget") {
+      const failedText = typeof output.error === "string" ? output.error.trim() : "";
+      if (output.ok === false || failedText.length > 0) {
+        return {
+          status: "failed",
+          summary: failedText || "Widget control query failed.",
+          outputPreview: previewValue(output, 1200),
+        };
+      }
+
+      const explicitSummary = typeof output.summary === "string" ? output.summary.trim() : "";
+      if (explicitSummary.length > 0) {
+        return {
+          status: "completed",
+          summary: explicitSummary,
+          outputPreview: previewValue(output, 1200),
+        };
+      }
+
+      const widgetRecord = isRecord(output.widget) ? output.widget : null;
+      const widgetName = widgetRecord && typeof widgetRecord.name === "string"
+        ? widgetRecord.name.trim()
+        : "";
+      if (widgetName && Array.isArray(output.controls)) {
+        const controlCount = output.controls.length;
+        return {
+          status: "completed",
+          summary: `Loaded ${controlCount} control${controlCount === 1 ? "" : "s"} from ${widgetName}.`,
+          outputPreview: previewValue(output, 1200),
+        };
+      }
+
+      const widgetCount = typeof output.widgetCount === "number"
+        ? output.widgetCount
+        : Array.isArray(output.savedWidgets)
+          ? output.savedWidgets.length
+          : Array.isArray(output.widgets)
+            ? output.widgets.length
+            : 0;
+      const controllableWidgetCount = typeof output.controllableWidgetCount === "number"
+        ? output.controllableWidgetCount
+        : Array.isArray(output.widgets)
+          ? output.widgets.length
+          : 0;
+      if (
+        typeof output.widgetCount === "number"
+        || typeof output.controllableWidgetCount === "number"
+        || Array.isArray(output.savedWidgets)
+        || Array.isArray(output.widgets)
+      ) {
+        const summary = widgetCount === 0
+          ? "No saved widgets were found."
+          : controllableWidgetCount === widgetCount
+            ? `Found ${widgetCount} saved widget${widgetCount === 1 ? "" : "s"} with callable controls.`
+            : `Found ${widgetCount} saved widget${widgetCount === 1 ? "" : "s"}; ${controllableWidgetCount} expose callable controls.`;
+        return {
+          status: "completed",
+          summary,
+          outputPreview: previewValue(output, 1200),
+        };
+      }
+    }
+
     const widgetRecord = isRecord(output.widget) ? output.widget : null;
     const widgetName = widgetRecord && typeof widgetRecord.name === "string"
       ? widgetRecord.name.trim()
@@ -585,11 +689,12 @@ function summarizeToolExecution(output: unknown, toolName?: string): {
         : typeof output.adapterId === "string"
           ? output.adapterId
           : "adapter";
+      const explicitSummary = typeof output.summary === "string" ? output.summary.trim() : "";
       const verb = toolName === "steward_create_adapter_package" ? "Created" : "Updated";
       const failureVerb = toolName === "steward_create_adapter_package" ? "Failed to create" : "Failed to update";
       return {
         status: output.ok === false ? "failed" : "completed",
-        summary: `${output.ok === false ? failureVerb : verb} adapter ${adapterName}.`,
+        summary: explicitSummary || `${output.ok === false ? failureVerb : verb} adapter ${adapterName}.`,
         outputPreview: previewValue(output, 1200),
       };
     }
@@ -605,10 +710,11 @@ function summarizeToolExecution(output: unknown, toolName?: string): {
         : typeof output.skillId === "string"
           ? output.skillId
           : "tool";
+      const explicitSummary = typeof output.summary === "string" ? output.summary.trim() : "";
       const verb = output.replaced === true ? "Updated" : "Added";
       return {
         status: output.ok === false ? "failed" : "completed",
-        summary: `${output.ok === false ? "Failed to extend" : `${verb} adapter tool ${skillName} on ${adapterName}`}.`,
+        summary: explicitSummary || `${output.ok === false ? "Failed to extend" : `${verb} adapter tool ${skillName} on ${adapterName}`}.`,
         outputPreview: previewValue(output, 1200),
       };
     }
@@ -1348,7 +1454,7 @@ export async function POST(request: NextRequest) {
             return;
           }
 
-          let finalText = event.text || assistantText;
+          let finalText = reconcileStreamedAssistantText(assistantText, event.text);
           const finalReasoning = event.reasoningText ?? reasoningText;
 
           if (finalText.trim().length === 0) {
@@ -1370,12 +1476,13 @@ export async function POST(request: NextRequest) {
             abortSignal: streamAbortController.signal,
           });
 
-          if (autoContinued.text !== finalText) {
-            const extra = autoContinued.text.slice(finalText.length);
+          const mergedAutoContinuedText = reconcileStreamedAssistantText(finalText, autoContinued.text);
+          if (mergedAutoContinuedText !== finalText) {
+            const extra = appendedAssistantDelta(finalText, mergedAutoContinuedText);
             if (extra.trim().length > 0) {
               send({ type: "text-delta", text: extra });
             }
-            finalText = autoContinued.text;
+            finalText = mergedAutoContinuedText;
           }
 
           if (autoContinued.truncated) {

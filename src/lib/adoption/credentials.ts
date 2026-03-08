@@ -173,6 +173,33 @@ export async function validateDeviceCredential(
   if (!hasSecret) {
     throw new Error("Stored credential secret is missing");
   }
+
+  if (credential.protocol === "http-api") {
+    const updatedAt = nowIso();
+    const preservedStatus = credential.status === "validated" ? "validated" : "provided";
+    const preserved: DeviceCredential = {
+      ...credential,
+      status: preservedStatus,
+      updatedAt,
+    };
+    stateStore.upsertDeviceCredential(preserved);
+
+    await stateStore.addAction({
+      actor: "steward",
+      kind: "diagnose",
+      message: `Skipped generic HTTP API credential validation for ${device.name}`,
+      context: {
+        deviceId: device.id,
+        credentialId: credential.id,
+        protocol: credential.protocol,
+        status: preserved.status,
+        reason: "No protocol-specific verifier is configured for generic http-api credentials.",
+      },
+    });
+
+    return preserved;
+  }
+
   let validationMethod = "manual-status-mark";
   let validationDetails: Record<string, unknown> = {
     source: "user_or_agent_assertion",

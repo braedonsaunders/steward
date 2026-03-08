@@ -108,7 +108,11 @@ export function shouldPlanWidgetRouteTurn(args: {
     return false;
   }
 
-  if (messageMentionsWidgetConcept(text) && WIDGET_CONTROL_SURFACE_PATTERN.test(text)) {
+  if (
+    messageMentionsWidgetConcept(text)
+    && WIDGET_CONTROL_SURFACE_PATTERN.test(text)
+    && !WIDGET_AUTHORING_ACTION_PATTERN.test(text)
+  ) {
     return false;
   }
 
@@ -291,7 +295,8 @@ export async function planWidgetRoute(args: {
   history: ChatMessage[];
   userInput: string;
 }): Promise<WidgetRoutePlan> {
-  if (!shouldPlanWidgetRouteTurn({ history: args.history, userInput: args.userInput })) {
+  const shouldPlan = shouldPlanWidgetRouteTurn({ history: args.history, userInput: args.userInput });
+  if (!shouldPlan) {
     return {
       route: "none",
       reason: "No explicit widget request in the current turn.",
@@ -301,6 +306,14 @@ export async function planWidgetRoute(args: {
   const model = await buildLanguageModel(args.provider, args.model);
   const widgets = summarizeWidgets(args.attachedDevice.id);
   const recentWidgetToolEvents = summarizeRecentWidgetToolEvents(args.history);
+  const fallbackPlan = buildFallbackWidgetRoutePlan({
+    history: args.history,
+    userInput: args.userInput,
+    widgets,
+  });
+  const normalizedInput = normalizeWidgetIntentText(args.userInput);
+  const explicitWidgetAuthoringRequest = messageMentionsWidgetConcept(args.userInput)
+    && WIDGET_AUTHORING_ACTION_PATTERN.test(normalizedInput);
 
   try {
     const result = await generateText({
@@ -351,12 +364,12 @@ export async function planWidgetRoute(args: {
       ].join("\n"),
     });
 
-    return WidgetRoutePlanSchema.parse(extractFirstJsonObject(result.text));
+    const parsedPlan = WidgetRoutePlanSchema.parse(extractFirstJsonObject(result.text));
+    if (parsedPlan.route === "none" && explicitWidgetAuthoringRequest) {
+      return fallbackPlan;
+    }
+    return parsedPlan;
   } catch {
-    return buildFallbackWidgetRoutePlan({
-      history: args.history,
-      userInput: args.userInput,
-      widgets,
-    });
+    return fallbackPlan;
   }
 }

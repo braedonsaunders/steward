@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { isAuthorized } from "@/lib/auth/guard";
 import { stateStore } from "@/lib/state/store";
+import type { DeviceWidget } from "@/lib/state/types";
 import { DeviceWidgetControlListSchema } from "@/lib/widgets/controls";
 
 export const runtime = "nodejs";
@@ -57,6 +58,8 @@ export async function PATCH(
     return NextResponse.json({ error: payload.error.flatten() }, { status: 400 });
   }
 
+  const nextControls = (payload.data.controls as DeviceWidget["controls"] | undefined) ?? widget.controls;
+
   const updated = stateStore.upsertDeviceWidget({
     ...widget,
     slug: payload.data.slug ?? widget.slug,
@@ -69,7 +72,7 @@ export async function PATCH(
     css: payload.data.css ?? widget.css,
     js: payload.data.js ?? widget.js,
     capabilities: payload.data.capabilities ?? widget.capabilities,
-    controls: payload.data.controls ?? widget.controls,
+    controls: nextControls,
     sourcePrompt: payload.data.sourcePrompt === undefined
       ? widget.sourcePrompt
       : payload.data.sourcePrompt ?? undefined,

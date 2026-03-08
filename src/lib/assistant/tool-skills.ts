@@ -1129,11 +1129,11 @@ async function resolveBrowserCredential(device: Device): Promise<{
   credentialId?: string;
   username?: string;
   password?: string;
+  unsupportedAuthMode?: HttpApiCredentialAuthMode;
 }> {
   const candidates = stateStore.getDeviceCredentials(device.id)
     .filter((credential) =>
       credential.protocol.toLowerCase() === "http-api"
-      && getHttpApiCredentialAuth(credential.scopeJson).mode === "basic"
     );
   if (candidates.length === 0) {
     return {};
@@ -1147,9 +1147,17 @@ async function resolveBrowserCredential(device: Device): Promise<{
     }
     return b.updatedAt.localeCompare(a.updatedAt);
   });
-  const selected = sorted[0];
+  const selected = sorted.find((credential) => getHttpApiCredentialAuth(credential.scopeJson).mode === "basic")
+    ?? sorted[0];
   if (!selected) {
     return {};
+  }
+  const auth = getHttpApiCredentialAuth(selected.scopeJson);
+  if (auth.mode !== "basic") {
+    return {
+      credentialId: selected.id,
+      unsupportedAuthMode: auth.mode,
+    };
   }
   const secret = await vault.getSecret(selected.vaultSecretRef);
   if (!secret || secret.trim().length === 0) {
@@ -2421,6 +2429,33 @@ function mapSkillDescriptors(): SkillRuntimeDescriptor[] {
   return descriptors;
 }
 
+function resolveLiveSkillDescriptor(seed: SkillRuntimeDescriptor): SkillRuntimeDescriptor {
+  const descriptors = mapSkillDescriptors();
+  return descriptors.find((candidate) =>
+    candidate.toolCallName === seed.toolCallName
+    && candidate.skillId === seed.skillId
+    && candidate.adapterId === seed.adapterId
+  ) ?? descriptors.find((candidate) => candidate.toolCallName === seed.toolCallName)
+    ?? seed;
+}
+
+function validateGenericToolOperation(
+  descriptor: SkillRuntimeDescriptor,
+  operation: OperationSpec,
+  input: Record<string, unknown>,
+): string | null {
+  if (operation.kind === "http.request" && operation.mode === "read") {
+    const method = normalizeHttpMethod(input);
+    if (method !== "GET") {
+      return `${descriptor.toolCallName} is read-only and cannot use HTTP ${method}. Create or update a mutating tool skill instead of using a probe/audit tool for live changes.`;
+    }
+    if (typeof input.body !== "undefined") {
+      return `${descriptor.toolCallName} is read-only and cannot send an HTTP request body. Create or update a mutating tool skill instead.`;
+    }
+  }
+  return null;
+}
+
 export async function buildAdapterSkillTools(
   options?: {
     attachedDeviceId?: string;
@@ -2439,6 +2474,7 @@ export async function buildAdapterSkillTools(
       description: descriptor.toolCallDescription,
       inputSchema: jsonSchema(descriptor.toolCallParameters),
       execute: async (argsUnknown: unknown) => {
+        const liveDescriptor = resolveLiveSkillDescriptor(descriptor);
         const args = isRecord(argsUnknown) ? (argsUnknown as ExecuteArgs) : {};
         const input = normalizeToolInput(args as ExecuteArgs & Record<string, unknown>);
 
@@ -2457,25 +2493,36 @@ export async function buildAdapterSkillTools(
           return { ok: false, error: readiness.reason, deviceId: device.id };
         }
 
-        if (!options?.allowPreOnboardingExecution && !hasSelectedProfileForAdapter(device.id, descriptor.adapterId)) {
+        if (!options?.allowPreOnboardingExecution && !hasSelectedProfileForAdapter(device.id, liveDescriptor.adapterId)) {
           return {
             ok: false,
             blocked: "profile",
-            error: `Adapter ${descriptor.adapterName} is not selected for ${device.name}. Complete onboarding and select the matching adapter first.`,
+            error: `Adapter ${liveDescriptor.adapterName} is not selected for ${device.name}. Complete onboarding and select the matching adapter first.`,
           };
         }
 
-        const planned = buildOperationFromDescriptor(descriptor, device, input);
+        const planned = buildOperationFromDescriptor(liveDescriptor, device, input);
         if ("error" in planned) {
           return {
             ok: false,
             blocked: "execution_config",
             error: planned.error,
-            skillId: descriptor.skillId,
+            skillId: liveDescriptor.skillId,
           };
         }
 
         const operation = planned.operation;
+        const operationValidationError = validateGenericToolOperation(liveDescriptor, operation, input);
+        if (operationValidationError) {
+          return {
+            ok: false,
+            blocked: "execution_config",
+            error: operationValidationError,
+            skillId: liveDescriptor.skillId,
+            deviceId: device.id,
+            deviceName: device.name,
+          };
+        }
         const actionClass = actionClassForOperation(operation);
 
         const policy = evaluatePolicy(
@@ -2540,20 +2587,20 @@ export async function buildAdapterSkillTools(
           quarantineActive: false,
           allowUnauthenticated: options?.allowPreOnboardingExecution === true && operation.mode === "read",
           allowProvidedCredentials: true,
-          idempotencySeed: `${descriptor.skillId}:${device.id}:${nowIso()}`,
+          idempotencySeed: `${liveDescriptor.skillId}:${device.id}:${nowIso()}`,
           params: {},
         });
 
         await stateStore.addAction({
           actor: "user",
           kind: "diagnose",
-          message: `Adapter skill executed: ${descriptor.skillName} on ${device.name}`,
+          message: `Adapter skill executed: ${liveDescriptor.skillName} on ${device.name}`,
           context: {
             deviceId: device.id,
-            adapterId: descriptor.adapterId,
-            adapterName: descriptor.adapterName,
-            skillId: descriptor.skillId,
-            toolCallName: descriptor.toolCallName,
+            adapterId: liveDescriptor.adapterId,
+            adapterName: liveDescriptor.adapterName,
+            skillId: liveDescriptor.skillId,
+            toolCallName: liveDescriptor.toolCallName,
             operationKind: operation.kind,
             operationMode: operation.mode,
             executionOk: execution.ok,
@@ -2565,8 +2612,8 @@ export async function buildAdapterSkillTools(
           ok: execution.ok,
           deviceId: device.id,
           deviceName: device.name,
-          adapterId: descriptor.adapterId,
-          skillId: descriptor.skillId,
+          adapterId: liveDescriptor.adapterId,
+          skillId: liveDescriptor.skillId,
           operationKind: operation.kind,
           operationMode: operation.mode,
           output: execution.output,
@@ -3875,6 +3922,7 @@ export async function buildAdapterSkillTools(
     }),
     execute: async (argsUnknown: unknown) => {
       const args = isRecord(argsUnknown) ? argsUnknown : {};
+      await adapterRegistry.initialize();
       const query = inputString(args, "query")?.toLowerCase();
       const provides = (inputStringArray(args, "provides") ?? []).map((value) => value.toLowerCase());
       const enabledOnly = inputBoolean(args, "enabled_only") === true;
@@ -3953,6 +4001,7 @@ export async function buildAdapterSkillTools(
       }
 
       try {
+        await adapterRegistry.initialize();
         const pkg = adapterRegistry.getAdapterPackageById(adapterId);
         if (!pkg) {
           return { ok: false, error: `Adapter ${adapterId} not found.` };
@@ -4039,6 +4088,7 @@ export async function buildAdapterSkillTools(
           ok: true,
           adapterId: created.id,
           adapterName: created.name,
+          summary: `Created adapter ${created.name}. Newly added chat tool calls become available on subsequent requests, not earlier in the same turn.`,
           adapter: summarizeAdapterRecord(created),
           ...(pkg
             ? {
@@ -4116,6 +4166,7 @@ export async function buildAdapterSkillTools(
       }
 
       try {
+        await adapterRegistry.initialize();
         const existingPackage = adapterRegistry.getAdapterPackageById(adapterId);
         if (!existingPackage) {
           return { ok: false, error: `Adapter ${adapterId} not found.` };
@@ -4137,6 +4188,7 @@ export async function buildAdapterSkillTools(
           ok: true,
           adapterId: updated.id,
           adapterName: updated.name,
+          summary: `Updated adapter ${updated.name}. Existing tool calls will use the refreshed config on subsequent executions.`,
           adapter: summarizeAdapterRecord(updated),
           ...(pkg
             ? {
@@ -4237,6 +4289,7 @@ export async function buildAdapterSkillTools(
       }
 
       try {
+        await adapterRegistry.initialize();
         const pkg = adapterRegistry.getAdapterPackageById(adapterId);
         if (!pkg) {
           return { ok: false, error: `Adapter ${adapterId} not found.` };
@@ -4316,6 +4369,7 @@ export async function buildAdapterSkillTools(
           skillId,
           skillName: inputString(args.skill, "name") ?? skillId,
           replaced,
+          summary: `${replaced ? "Updated" : "Added"} adapter tool ${inputString(args.skill, "name") ?? skillId} on ${updated.name}. Refreshed execution config applies to subsequent tool executions.`,
           adapter: summarizeAdapterRecord(updated),
           ...(refreshedPackage
             ? {
@@ -5217,6 +5271,16 @@ export async function buildAdapterSkillTools(
       const stored = device && useStoredCredentials
         ? await resolveBrowserCredential(device)
         : {};
+      if (!providedUsername && !providedPassword && stored.unsupportedAuthMode) {
+        return {
+          ok: false,
+          error: `Browser automation cannot apply stored ${httpApiCredentialAuthLabel(stored.unsupportedAuthMode)} credentials. Use broker-backed HTTP/API tools instead of steward_browser_browse for this device.`,
+          url: parsedUrl.toString(),
+          deviceId: device?.id,
+          deviceName: device?.name,
+          credentialId: stored.credentialId,
+        };
+      }
       const username = providedUsername ?? stored.username;
       const password = providedPassword ?? stored.password;
 
@@ -5391,12 +5455,27 @@ export async function buildAdapterSkillTools(
               stepResults.push({ action, label, ok: true, selector: selector || "body", expected: value });
             } else if (action === "evaluate") {
               if (!script) throw new Error("evaluate requires script");
-              const evalResult = await page.evaluate((source) => {
-                const executable = new Function(`return (${source});`)();
-                if (typeof executable === "function") {
-                  return executable();
+              const evalResult = await page.evaluate(async (source) => {
+                const attempts = [
+                  () => new Function(`return (${source});`)(),
+                  () => new Function(`return (async () => (${source}))();`)(),
+                  () => new Function(`return (async () => {${source}\n})();`)(),
+                ];
+
+                let lastError = "Unknown evaluate failure.";
+                for (const attempt of attempts) {
+                  try {
+                    const executable = attempt();
+                    if (typeof executable === "function") {
+                      return await executable();
+                    }
+                    return await executable;
+                  } catch (error) {
+                    lastError = error instanceof Error ? error.message : String(error);
+                  }
                 }
-                return executable;
+
+                throw new Error(lastError);
               }, script);
               stepResults.push({
                 action,
@@ -5404,7 +5483,7 @@ export async function buildAdapterSkillTools(
                 ok: true,
                 result: typeof evalResult === "string"
                   ? evalResult.slice(0, 2_000)
-                  : JSON.stringify(evalResult).slice(0, 2_000),
+                  : JSON.stringify(evalResult ?? null)?.slice(0, 2_000) ?? "null",
               });
             } else if (action === "screenshot") {
               const inlineArtifact = screenshotPath
@@ -5929,6 +6008,9 @@ export async function buildAdapterSkillTools(
         }
 
         const redacted = redactDeviceCredential(credential);
+        const validationSummary = inputBoolean(args, "validate_now") === true && credential.protocol === "http-api" && credential.status !== "validated"
+          ? `Stored ${protocol} credential for ${device.name}. Generic network validation is not available for http-api credentials, so Steward kept it at ${credential.status}.`
+          : `Stored ${protocol} credential for ${device.name}.`;
         return {
           ok: true,
           deviceId: device.id,
@@ -5936,7 +6018,7 @@ export async function buildAdapterSkillTools(
           credential: summarizeCredentialEntry(redacted),
           usageHints: credentialUsageHints(redacted),
           credentialCount: stateStore.getDeviceCredentials(device.id).length,
-          summary: `Stored ${protocol} credential for ${device.name}.`,
+          summary: validationSummary,
         };
       }
 
@@ -5959,13 +6041,16 @@ export async function buildAdapterSkillTools(
       if (action === "validate") {
         const credential = await validateDeviceCredential(device.id, resolved.value.id);
         const redacted = redactDeviceCredential(credential);
+        const summary = credential.protocol === "http-api" && credential.status !== "validated"
+          ? `Generic network validation is not available for ${credential.protocol} credentials on ${device.name}; Steward kept the credential at ${credential.status}.`
+          : `Validated ${credential.protocol} credential for ${device.name}.`;
         return {
           ok: true,
           deviceId: device.id,
           deviceName: device.name,
           credential: summarizeCredentialEntry(redacted),
           usageHints: credentialUsageHints(redacted),
-          summary: `Validated ${credential.protocol} credential for ${device.name}.`,
+          summary,
         };
       }
 
@@ -6012,13 +6097,16 @@ export async function buildAdapterSkillTools(
       }
 
       const redacted = redactDeviceCredential(updated);
+      const summary = inputBoolean(args, "validate_now") === true && updated.protocol === "http-api" && updated.status !== "validated"
+        ? `Updated ${updated.protocol} credential for ${device.name}. Generic network validation is not available for http-api credentials, so Steward kept it at ${updated.status}.`
+        : `Updated ${updated.protocol} credential for ${device.name}.`;
       return {
         ok: true,
         deviceId: device.id,
         deviceName: device.name,
         credential: summarizeCredentialEntry(redacted),
         usageHints: credentialUsageHints(redacted),
-        summary: `Updated ${updated.protocol} credential for ${device.name}.`,
+        summary,
       };
     },
   });
@@ -6176,14 +6264,23 @@ export async function buildAdapterSkillTools(
           };
         }
 
-        const widgets = stateStore.getDeviceWidgets(device.id)
+        const savedWidgets = stateStore.getDeviceWidgets(device.id);
+        const widgets = savedWidgets
           .filter((candidate) => candidate.controls.length > 0);
+        const summary = savedWidgets.length === 0
+          ? `No widgets are currently saved for ${device.name}.`
+          : widgets.length === savedWidgets.length
+            ? `Found ${widgets.length} saved widget${widgets.length === 1 ? "" : "s"} on ${device.name}, and all expose callable controls.`
+            : `Found ${savedWidgets.length} saved widget${savedWidgets.length === 1 ? "" : "s"} on ${device.name}; ${widgets.length} expose callable controls.`;
         return {
           ok: true,
           deviceId: device.id,
           deviceName: device.name,
-          widgetCount: widgets.length,
+          summary,
+          widgetCount: savedWidgets.length,
+          controllableWidgetCount: widgets.length,
           widgets: widgets.map(summarizeWidgetEntry),
+          savedWidgets: savedWidgets.map(summarizeWidgetEntry),
         };
       }
 
@@ -6197,20 +6294,27 @@ export async function buildAdapterSkillTools(
       }
 
       const controlId = inputString(args, "control_id");
-      if (!controlId) {
-        return { ok: false, error: "control_id is required." };
-      }
-
-      const control = getWidgetControl(widget, controlId);
-      if (!control) {
-        return {
-          ok: false,
-          error: `Control ${controlId} was not found on widget ${widget.name}.`,
-          availableControls: widget.controls.map(summarizeWidgetControlEntry),
-        };
-      }
-
       if (action === "get") {
+        if (!controlId) {
+          return {
+            ok: true,
+            deviceId: device.id,
+            deviceName: device.name,
+            widget: summarizeWidgetEntry(widget),
+            controls: widget.controls.map(summarizeWidgetControlEntry),
+            summary: widget.controls.length === 0
+              ? `${widget.name} is saved but currently exposes 0 callable controls.`
+              : `Loaded ${widget.controls.length} callable control${widget.controls.length === 1 ? "" : "s"} from ${widget.name}.`,
+          };
+        }
+        const control = getWidgetControl(widget, controlId);
+        if (!control) {
+          return {
+            ok: false,
+            error: `Control ${controlId} was not found on widget ${widget.name}.`,
+            availableControls: widget.controls.map(summarizeWidgetControlEntry),
+          };
+        }
         return {
           ok: true,
           deviceId: device.id,
@@ -6222,6 +6326,27 @@ export async function buildAdapterSkillTools(
 
       if (action !== "execute") {
         return { ok: false, error: `Unsupported action: ${action}` };
+      }
+
+      if (!controlId) {
+        return {
+          ok: false,
+          error: widget.controls.length === 0
+            ? `${widget.name} is saved but exposes 0 callable controls. Revise the widget before trying to execute a control.`
+            : "control_id is required.",
+          availableControls: widget.controls.map(summarizeWidgetControlEntry),
+        };
+      }
+
+      const control = getWidgetControl(widget, controlId);
+      if (!control) {
+        return {
+          ok: false,
+          error: widget.controls.length === 0
+            ? `${widget.name} is saved but exposes 0 callable controls. Revise the widget before trying to execute ${controlId}.`
+            : `Control ${controlId} was not found on widget ${widget.name}.`,
+          availableControls: widget.controls.map(summarizeWidgetControlEntry),
+        };
       }
 
       if (control.execution.kind === "operation") {
