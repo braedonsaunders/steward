@@ -41,3 +41,7 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 .oneshot/
+
+# playwright
+.playwright-cli/
+output/playwright/
