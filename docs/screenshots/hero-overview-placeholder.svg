@@ -1,58 +1,342 @@
 <svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1600" y2="900" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#07111F"/>
-      <stop offset="1" stop-color="#12324A"/>
+      <stop stop-color="#050D18"/>
+      <stop offset="1" stop-color="#0B1E30"/>
     </linearGradient>
-    <linearGradient id="panel" x1="250" y1="110" x2="1320" y2="760" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#0E2035"/>
-      <stop offset="1" stop-color="#132C44"/>
+    <linearGradient id="main" x1="280" y1="60" x2="1560" y2="860" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0A1929"/>
+      <stop offset="1" stop-color="#0E2239"/>
     </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1" gradientUnits="objectBoundingBox">
+      <stop stop-color="#12283F"/>
+      <stop offset="1" stop-color="#0D1F33"/>
+    </linearGradient>
+    <linearGradient id="statGreen" x1="0" y1="0" x2="1" y2="1" gradientUnits="objectBoundingBox">
+      <stop stop-color="#064E3B"/>
+      <stop offset="1" stop-color="#0A2F24"/>
+    </linearGradient>
+    <linearGradient id="statOrange" x1="0" y1="0" x2="1" y2="1" gradientUnits="objectBoundingBox">
+      <stop stop-color="#4A2C10"/>
+      <stop offset="1" stop-color="#2E1D0B"/>
+    </linearGradient>
+    <linearGradient id="statBlue" x1="0" y1="0" x2="1" y2="1" gradientUnits="objectBoundingBox">
+      <stop stop-color="#0C2D4A"/>
+      <stop offset="1" stop-color="#091D33"/>
+    </linearGradient>
+    <linearGradient id="statPurple" x1="0" y1="0" x2="1" y2="1" gradientUnits="objectBoundingBox">
+      <stop stop-color="#2E1A47"/>
+      <stop offset="1" stop-color="#1C1132"/>
+    </linearGradient>
+    <clipPath id="appClip"><rect x="40" y="40" width="1520" height="820" rx="24"/></clipPath>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
   </defs>
-  <rect width="1600" height="900" rx="32" fill="url(#bg)"/>
-  <rect x="64" y="64" width="1472" height="772" rx="28" fill="#091423" stroke="#2A4461"/>
-  <rect x="104" y="112" width="256" height="676" rx="24" fill="#0D1D31"/>
-  <rect x="392" y="112" width="1104" height="676" rx="24" fill="url(#panel)"/>
-  <text x="132" y="168" fill="#E5F0FF" font-size="34" font-family="Arial, Helvetica, sans-serif" font-weight="700">Steward</text>
-  <text x="132" y="208" fill="#83A6C7" font-size="20" font-family="Arial, Helvetica, sans-serif">Your network's first employee</text>
-  <rect x="132" y="248" width="200" height="56" rx="16" fill="#14304B"/>
-  <rect x="132" y="324" width="200" height="56" rx="16" fill="#10263C"/>
-  <rect x="132" y="400" width="200" height="56" rx="16" fill="#10263C"/>
-  <rect x="132" y="476" width="200" height="56" rx="16" fill="#10263C"/>
-  <text x="156" y="283" fill="#F7FAFF" font-size="22" font-family="Arial, Helvetica, sans-serif">Inbox</text>
-  <text x="156" y="359" fill="#9FC0E1" font-size="22" font-family="Arial, Helvetica, sans-serif">Topology</text>
-  <text x="156" y="435" fill="#9FC0E1" font-size="22" font-family="Arial, Helvetica, sans-serif">Devices</text>
-  <text x="156" y="511" fill="#9FC0E1" font-size="22" font-family="Arial, Helvetica, sans-serif">Policies</text>
-  <text x="432" y="170" fill="#EFF7FF" font-size="40" font-family="Arial, Helvetica, sans-serif" font-weight="700">Screenshot placeholder</text>
-  <text x="432" y="214" fill="#9BC0DF" font-size="22" font-family="Arial, Helvetica, sans-serif">Replace this with a real hero capture of the dashboard, chat, and incident feed.</text>
-  <rect x="432" y="254" width="236" height="110" rx="18" fill="#143A58"/>
-  <rect x="692" y="254" width="236" height="110" rx="18" fill="#143A58"/>
-  <rect x="952" y="254" width="236" height="110" rx="18" fill="#143A58"/>
-  <rect x="1212" y="254" width="244" height="110" rx="18" fill="#143A58"/>
-  <text x="460" y="302" fill="#9AC0E1" font-size="18" font-family="Arial, Helvetica, sans-serif">Managed devices</text>
-  <text x="460" y="342" fill="#F8FBFF" font-size="42" font-family="Arial, Helvetica, sans-serif" font-weight="700">128</text>
-  <text x="720" y="302" fill="#9AC0E1" font-size="18" font-family="Arial, Helvetica, sans-serif">Open incidents</text>
-  <text x="720" y="342" fill="#F8FBFF" font-size="42" font-family="Arial, Helvetica, sans-serif" font-weight="700">3</text>
-  <text x="980" y="302" fill="#9AC0E1" font-size="18" font-family="Arial, Helvetica, sans-serif">Pending approvals</text>
-  <text x="980" y="342" fill="#F8FBFF" font-size="42" font-family="Arial, Helvetica, sans-serif" font-weight="700">2</text>
-  <text x="1240" y="302" fill="#9AC0E1" font-size="18" font-family="Arial, Helvetica, sans-serif">Autonomous fixes</text>
-  <text x="1240" y="342" fill="#F8FBFF" font-size="42" font-family="Arial, Helvetica, sans-serif" font-weight="700">19</text>
-  <rect x="432" y="396" width="642" height="348" rx="22" fill="#0D1C2E" stroke="#35597D"/>
-  <rect x="1102" y="396" width="354" height="348" rx="22" fill="#0D1C2E" stroke="#35597D"/>
-  <text x="464" y="442" fill="#EAF4FF" font-size="28" font-family="Arial, Helvetica, sans-serif" font-weight="700">Morning briefing</text>
-  <rect x="464" y="474" width="578" height="72" rx="18" fill="#152B43"/>
-  <rect x="464" y="564" width="578" height="72" rx="18" fill="#152B43"/>
-  <rect x="464" y="654" width="578" height="72" rx="18" fill="#152B43"/>
-  <circle cx="506" cy="510" r="10" fill="#F97316"/>
-  <circle cx="506" cy="600" r="10" fill="#F59E0B"/>
-  <circle cx="506" cy="690" r="10" fill="#10B981"/>
-  <text x="532" y="505" fill="#F8FBFF" font-size="22" font-family="Arial, Helvetica, sans-serif">NAS array degraded. Replacement playbook prepared.</text>
-  <text x="532" y="595" fill="#F8FBFF" font-size="22" font-family="Arial, Helvetica, sans-serif">TLS certificate expires in 9 days. Approval required.</text>
-  <text x="532" y="685" fill="#F8FBFF" font-size="22" font-family="Arial, Helvetica, sans-serif">Three stale containers can be updated after hours.</text>
-  <text x="1134" y="442" fill="#EAF4FF" font-size="28" font-family="Arial, Helvetica, sans-serif" font-weight="700">Operator chat</text>
-  <rect x="1134" y="478" width="290" height="92" rx="18" fill="#173754"/>
-  <rect x="1134" y="590" width="290" height="118" rx="18" fill="#10283F"/>
-  <text x="1160" y="518" fill="#F6FAFF" font-size="20" font-family="Arial, Helvetica, sans-serif">"Why was the file server slow?"</text>
-  <text x="1160" y="626" fill="#B8D0E7" font-size="18" font-family="Arial, Helvetica, sans-serif">Disk I/O on nas-01 was saturated during backup verification.</text>
-  <text x="1160" y="656" fill="#B8D0E7" font-size="18" font-family="Arial, Helvetica, sans-serif">Recommendation: shift the job window or add link capacity.</text>
+
+  <!-- Outer frame -->
+  <rect width="1600" height="900" rx="28" fill="url(#bg)"/>
+  <rect x="40" y="40" width="1520" height="820" rx="24" fill="#070F1B" stroke="#1E3A56" stroke-width="1"/>
+
+  <g clip-path="url(#appClip)">
+
+    <!-- ===== SIDEBAR ===== -->
+    <rect x="40" y="40" width="220" height="820" fill="#08111E"/>
+    <line x1="260" y1="40" x2="260" y2="860" stroke="#1A3049" stroke-width="1"/>
+
+    <!-- Logo area -->
+    <circle cx="90" cy="88" r="18" fill="#0D6E5B" opacity="0.9"/>
+    <text x="88" y="95" fill="#FFFFFF" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700" text-anchor="middle">S</text>
+    <text x="116" y="95" fill="#E8F2FF" font-size="22" font-family="Arial, Helvetica, sans-serif" font-weight="700">Steward</text>
+
+    <!-- Sidebar nav items -->
+    <!-- Dashboard (active) -->
+    <rect x="56" y="130" width="188" height="40" rx="10" fill="#0F2A42"/>
+    <rect x="56" y="130" width="3" height="40" rx="1.5" fill="#10B981"/>
+    <!-- Dashboard icon -->
+    <rect x="72" y="142" width="7" height="7" rx="1.5" fill="#10B981"/>
+    <rect x="81" y="142" width="7" height="7" rx="1.5" fill="#10B981"/>
+    <rect x="72" y="151" width="7" height="7" rx="1.5" fill="#10B981"/>
+    <rect x="81" y="151" width="7" height="7" rx="1.5" fill="#10B981"/>
+    <text x="98" y="156" fill="#E8F2FF" font-size="14" font-family="Arial, Helvetica, sans-serif" font-weight="600">Dashboard</text>
+
+    <!-- Devices -->
+    <rect x="72" y="186" width="16" height="12" rx="3" fill="none" stroke="#7BA3C4" stroke-width="1.5"/>
+    <line x1="72" y1="191" x2="88" y2="191" stroke="#7BA3C4" stroke-width="1.5"/>
+    <text x="98" y="196" fill="#7BA3C4" font-size="14" font-family="Arial, Helvetica, sans-serif">Devices</text>
+    <rect x="196" y="183" width="32" height="20" rx="10" fill="#1A3049"/>
+    <text x="212" y="197" fill="#5B9BD5" font-size="11" font-family="Arial, Helvetica, sans-serif" font-weight="600" text-anchor="middle">47</text>
+
+    <!-- Incidents -->
+    <circle cx="80" cy="230" r="8" fill="none" stroke="#7BA3C4" stroke-width="1.5"/>
+    <text x="79" y="234" fill="#7BA3C4" font-size="12" font-family="Arial, Helvetica, sans-serif" font-weight="700" text-anchor="middle">!</text>
+    <text x="98" y="234" fill="#7BA3C4" font-size="14" font-family="Arial, Helvetica, sans-serif">Incidents</text>
+    <rect x="196" y="221" width="32" height="20" rx="10" fill="#3B1A1A"/>
+    <text x="212" y="235" fill="#F87171" font-size="11" font-family="Arial, Helvetica, sans-serif" font-weight="600" text-anchor="middle">5</text>
+
+    <!-- Approvals -->
+    <rect x="72" y="260" width="16" height="16" rx="4" fill="none" stroke="#7BA3C4" stroke-width="1.5"/>
+    <polyline points="76,268 79,272 87,264" fill="none" stroke="#7BA3C4" stroke-width="1.5"/>
+    <text x="98" y="272" fill="#7BA3C4" font-size="14" font-family="Arial, Helvetica, sans-serif">Approvals</text>
+    <rect x="196" y="259" width="32" height="20" rx="10" fill="#2E1D0B"/>
+    <text x="212" y="273" fill="#FBBF24" font-size="11" font-family="Arial, Helvetica, sans-serif" font-weight="600" text-anchor="middle">2</text>
+
+    <!-- Chat -->
+    <rect x="72" y="300" width="16" height="14" rx="4" fill="none" stroke="#7BA3C4" stroke-width="1.5"/>
+    <circle cx="78" cy="307" r="1.5" fill="#7BA3C4"/>
+    <circle cx="83" cy="307" r="1.5" fill="#7BA3C4"/>
+    <text x="98" y="311" fill="#7BA3C4" font-size="14" font-family="Arial, Helvetica, sans-serif">Chat</text>
+
+    <!-- Topology -->
+    <circle cx="77" cy="346" r="4" fill="none" stroke="#7BA3C4" stroke-width="1.5"/>
+    <circle cx="86" cy="340" r="3" fill="none" stroke="#7BA3C4" stroke-width="1.5"/>
+    <line x1="80" y1="343" x2="83" y2="341" stroke="#7BA3C4" stroke-width="1"/>
+    <text x="98" y="350" fill="#7BA3C4" font-size="14" font-family="Arial, Helvetica, sans-serif">Topology</text>
+
+    <!-- Policies -->
+    <rect x="73" y="376" width="14" height="16" rx="2" fill="none" stroke="#7BA3C4" stroke-width="1.5"/>
+    <line x1="77" y1="382" x2="83" y2="382" stroke="#7BA3C4" stroke-width="1.2"/>
+    <line x1="77" y1="386" x2="83" y2="386" stroke="#7BA3C4" stroke-width="1.2"/>
+    <text x="98" y="389" fill="#7BA3C4" font-size="14" font-family="Arial, Helvetica, sans-serif">Policies</text>
+
+    <!-- Discovery -->
+    <circle cx="80" cy="422" r="7" fill="none" stroke="#7BA3C4" stroke-width="1.5"/>
+    <line x1="85" y1="427" x2="89" y2="431" stroke="#7BA3C4" stroke-width="1.5"/>
+    <text x="98" y="427" fill="#7BA3C4" font-size="14" font-family="Arial, Helvetica, sans-serif">Discovery</text>
+
+    <!-- Divider -->
+    <line x1="64" y1="460" x2="244" y2="460" stroke="#1A3049" stroke-width="1"/>
+
+    <!-- Settings -->
+    <text x="98" y="488" fill="#5B7A96" font-size="14" font-family="Arial, Helvetica, sans-serif">Settings</text>
+    <!-- Activity -->
+    <text x="98" y="520" fill="#5B7A96" font-size="14" font-family="Arial, Helvetica, sans-serif">Activity</text>
+
+    <!-- Agent status -->
+    <rect x="56" y="790" width="188" height="54" rx="12" fill="#0B1D2E" stroke="#1A3049" stroke-width="1"/>
+    <circle cx="76" cy="817" r="5" fill="#10B981" filter="url(#glow)"/>
+    <text x="90" y="813" fill="#9FC5E0" font-size="11" font-family="Arial, Helvetica, sans-serif">Agent loop</text>
+    <text x="90" y="828" fill="#10B981" font-size="12" font-family="Arial, Helvetica, sans-serif" font-weight="600">Active — last run 4m ago</text>
+
+
+    <!-- ===== MAIN CONTENT AREA ===== -->
+    <rect x="260" y="40" width="1300" height="820" fill="url(#main)"/>
+
+    <!-- Top bar -->
+    <rect x="260" y="40" width="1300" height="56" fill="#080F1C"/>
+    <line x1="260" y1="96" x2="1560" y2="96" stroke="#1A3049" stroke-width="1"/>
+    <text x="292" y="74" fill="#C8DBF0" font-size="20" font-family="Arial, Helvetica, sans-serif" font-weight="600">Dashboard</text>
+    <text x="412" y="74" fill="#5B7A96" font-size="14" font-family="Arial, Helvetica, sans-serif">Sunday, Mar 9 2026</text>
+
+    <!-- User avatar -->
+    <circle cx="1510" cy="68" r="16" fill="#1A3049"/>
+    <text x="1510" y="73" fill="#7BA3C4" font-size="13" font-family="Arial, Helvetica, sans-serif" font-weight="600" text-anchor="middle">BS</text>
+
+    <!-- Search bar -->
+    <rect x="1280" y="52" width="200" height="32" rx="8" fill="#0C1A2A" stroke="#1E3A56" stroke-width="1"/>
+    <text x="1300" y="73" fill="#3E6380" font-size="13" font-family="Arial, Helvetica, sans-serif">Search devices...</text>
+
+
+    <!-- ===== STAT CARDS ROW ===== -->
+    <!-- Card 1: Managed Devices -->
+    <rect x="284" y="116" width="238" height="96" rx="14" fill="url(#statGreen)" stroke="#155E47" stroke-width="1"/>
+    <text x="308" y="146" fill="#6EE7B7" font-size="13" font-family="Arial, Helvetica, sans-serif" font-weight="500">Managed Devices</text>
+    <text x="308" y="188" fill="#F0FDF4" font-size="38" font-family="Arial, Helvetica, sans-serif" font-weight="700">47</text>
+    <text x="360" y="188" fill="#6EE7B7" font-size="14" font-family="Arial, Helvetica, sans-serif">online</text>
+    <text x="404" y="188" fill="#4B7A62" font-size="14" font-family="Arial, Helvetica, sans-serif">/ 52 total</text>
+
+    <!-- Card 2: Open Incidents -->
+    <rect x="538" y="116" width="238" height="96" rx="14" fill="url(#statOrange)" stroke="#6B4619" stroke-width="1"/>
+    <text x="562" y="146" fill="#FCD34D" font-size="13" font-family="Arial, Helvetica, sans-serif" font-weight="500">Open Incidents</text>
+    <text x="562" y="188" fill="#FFFBEB" font-size="38" font-family="Arial, Helvetica, sans-serif" font-weight="700">5</text>
+    <circle cx="600" cy="178" r="5" fill="#EF4444"/>
+    <text x="610" y="183" fill="#FCA5A5" font-size="12" font-family="Arial, Helvetica, sans-serif">2 critical</text>
+    <text x="682" y="183" fill="#A3763C" font-size="12" font-family="Arial, Helvetica, sans-serif">3 warning</text>
+
+    <!-- Card 3: Pending Approvals -->
+    <rect x="792" y="116" width="238" height="96" rx="14" fill="url(#statPurple)" stroke="#4A2D6B" stroke-width="1"/>
+    <text x="816" y="146" fill="#C4B5FD" font-size="13" font-family="Arial, Helvetica, sans-serif" font-weight="500">Pending Approvals</text>
+    <text x="816" y="188" fill="#F5F3FF" font-size="38" font-family="Arial, Helvetica, sans-serif" font-weight="700">2</text>
+    <text x="852" y="188" fill="#A78BFA" font-size="14" font-family="Arial, Helvetica, sans-serif">awaiting review</text>
+
+    <!-- Card 4: Playbook Runs -->
+    <rect x="1046" y="116" width="238" height="96" rx="14" fill="url(#statBlue)" stroke="#1E4164" stroke-width="1"/>
+    <text x="1070" y="146" fill="#7DD3FC" font-size="13" font-family="Arial, Helvetica, sans-serif" font-weight="500">Playbook Runs</text>
+    <text x="1070" y="188" fill="#F0F9FF" font-size="38" font-family="Arial, Helvetica, sans-serif" font-weight="700">23</text>
+    <text x="1118" y="188" fill="#7DD3FC" font-size="14" font-family="Arial, Helvetica, sans-serif">completed this week</text>
+
+    <!-- Agent loop badge -->
+    <rect x="1310" y="120" width="218" height="88" rx="14" fill="#0B1A2A" stroke="#1A3049" stroke-width="1"/>
+    <text x="1334" y="146" fill="#94A3B8" font-size="11" font-family="Arial, Helvetica, sans-serif" font-weight="600" letter-spacing="1">AGENT LOOP</text>
+    <text x="1334" y="168" fill="#E2E8F0" font-size="13" font-family="Arial, Helvetica, sans-serif">discover → understand → act → learn</text>
+    <rect x="1334" y="180" width="172" height="6" rx="3" fill="#162636"/>
+    <rect x="1334" y="180" width="130" height="6" rx="3" fill="#10B981"/>
+    <text x="1334" y="198" fill="#10B981" font-size="11" font-family="Arial, Helvetica, sans-serif">Cycle 38 running...</text>
+
+
+    <!-- ===== MORNING BRIEFING (LEFT) ===== -->
+    <rect x="284" y="232" width="566" height="395" rx="16" fill="#0A1725" stroke="#1A3049" stroke-width="1"/>
+    <text x="312" y="266" fill="#E8F2FF" font-size="17" font-family="Arial, Helvetica, sans-serif" font-weight="700">Morning Briefing</text>
+    <text x="680" y="266" fill="#3E6380" font-size="12" font-family="Arial, Helvetica, sans-serif">Today, 6:00 AM</text>
+
+    <!-- Briefing item 1 - Critical -->
+    <rect x="304" y="286" width="526" height="64" rx="10" fill="#12101C" stroke="#3B1A1A" stroke-width="1"/>
+    <circle cx="326" cy="318" r="6" fill="#EF4444"/>
+    <text x="342" y="309" fill="#FCA5A5" font-size="11" font-family="Arial, Helvetica, sans-serif" font-weight="600">CRITICAL</text>
+    <text x="342" y="330" fill="#E2E8F0" font-size="14" font-family="Arial, Helvetica, sans-serif">NAS-01 RAID array degraded — disk 3 showing SMART warnings.</text>
+    <text x="710" y="309" fill="#475569" font-size="11" font-family="Arial, Helvetica, sans-serif">Playbook ready</text>
+
+    <!-- Briefing item 2 - Critical -->
+    <rect x="304" y="360" width="526" height="64" rx="10" fill="#12101C" stroke="#3B1A1A" stroke-width="1"/>
+    <circle cx="326" cy="392" r="6" fill="#EF4444"/>
+    <text x="342" y="383" fill="#FCA5A5" font-size="11" font-family="Arial, Helvetica, sans-serif" font-weight="600">CRITICAL</text>
+    <text x="342" y="404" fill="#E2E8F0" font-size="14" font-family="Arial, Helvetica, sans-serif">Switch port Gi0/4 flapping — 12 transitions in the last hour.</text>
+    <text x="710" y="383" fill="#475569" font-size="11" font-family="Arial, Helvetica, sans-serif">Investigating</text>
+
+    <!-- Briefing item 3 - Warning -->
+    <rect x="304" y="434" width="526" height="64" rx="10" fill="#110F1A" stroke="#2E1D0B" stroke-width="1"/>
+    <circle cx="326" cy="466" r="6" fill="#F59E0B"/>
+    <text x="342" y="457" fill="#FCD34D" font-size="11" font-family="Arial, Helvetica, sans-serif" font-weight="600">WARNING</text>
+    <text x="342" y="478" fill="#E2E8F0" font-size="14" font-family="Arial, Helvetica, sans-serif">TLS cert on proxy-01 expires in 9 days. Renewal requires approval.</text>
+    <text x="710" y="457" fill="#475569" font-size="11" font-family="Arial, Helvetica, sans-serif">Approval pending</text>
+
+    <!-- Briefing item 4 - Info -->
+    <rect x="304" y="508" width="526" height="64" rx="10" fill="#0D1520" stroke="#1A3049" stroke-width="1"/>
+    <circle cx="326" cy="540" r="6" fill="#3B82F6"/>
+    <text x="342" y="531" fill="#93C5FD" font-size="11" font-family="Arial, Helvetica, sans-serif" font-weight="600">INFO</text>
+    <text x="342" y="552" fill="#CBD5E1" font-size="14" font-family="Arial, Helvetica, sans-serif">3 Docker containers on docker-host-02 have newer images available.</text>
+    <text x="710" y="531" fill="#475569" font-size="11" font-family="Arial, Helvetica, sans-serif">After-hours update</text>
+
+    <!-- Briefing item 5 - Info -->
+    <rect x="304" y="582" width="526" height="32" rx="10" fill="#0B1420" stroke="#152538" stroke-width="1"/>
+    <circle cx="326" cy="598" r="4" fill="#10B981"/>
+    <text x="342" y="603" fill="#94A3B8" font-size="13" font-family="Arial, Helvetica, sans-serif">Backup verification passed for all 8 backup targets.</text>
+
+
+    <!-- ===== DEVICE INVENTORY (RIGHT) ===== -->
+    <rect x="866" y="232" width="662" height="240" rx="16" fill="#0A1725" stroke="#1A3049" stroke-width="1"/>
+    <text x="894" y="266" fill="#E8F2FF" font-size="17" font-family="Arial, Helvetica, sans-serif" font-weight="700">Recent Devices</text>
+    <text x="1410" y="266" fill="#2563EB" font-size="13" font-family="Arial, Helvetica, sans-serif">View all →</text>
+
+    <!-- Table header -->
+    <text x="894" y="296" fill="#475569" font-size="11" font-family="Arial, Helvetica, sans-serif" font-weight="600" letter-spacing="0.5">NAME</text>
+    <text x="1076" y="296" fill="#475569" font-size="11" font-family="Arial, Helvetica, sans-serif" font-weight="600" letter-spacing="0.5">IP</text>
+    <text x="1216" y="296" fill="#475569" font-size="11" font-family="Arial, Helvetica, sans-serif" font-weight="600" letter-spacing="0.5">TYPE</text>
+    <text x="1356" y="296" fill="#475569" font-size="11" font-family="Arial, Helvetica, sans-serif" font-weight="600" letter-spacing="0.5">STATUS</text>
+    <line x1="894" y1="304" x2="1508" y2="304" stroke="#152538" stroke-width="1"/>
+
+    <!-- Device row 1 -->
+    <circle cx="908" cy="324" r="5" fill="#10B981"/>
+    <text x="924" y="329" fill="#E2E8F0" font-size="13" font-family="Arial, Helvetica, sans-serif" font-weight="500">nas-01</text>
+    <text x="1076" y="329" fill="#94A3B8" font-size="13" font-family="monospace">192.168.1.10</text>
+    <rect x="1216" y="314" width="54" height="22" rx="6" fill="#0F2A42"/>
+    <text x="1243" y="329" fill="#7DD3FC" font-size="11" font-family="Arial, Helvetica, sans-serif" text-anchor="middle">NAS</text>
+    <circle cx="1370" cy="324" r="4" fill="#EF4444"/>
+    <text x="1382" y="329" fill="#FCA5A5" font-size="12" font-family="Arial, Helvetica, sans-serif">degraded</text>
+
+    <!-- Device row 2 -->
+    <line x1="894" y1="342" x2="1508" y2="342" stroke="#0E1A28" stroke-width="1"/>
+    <circle cx="908" cy="360" r="5" fill="#10B981"/>
+    <text x="924" y="365" fill="#E2E8F0" font-size="13" font-family="Arial, Helvetica, sans-serif" font-weight="500">proxy-01</text>
+    <text x="1076" y="365" fill="#94A3B8" font-size="13" font-family="monospace">192.168.1.20</text>
+    <rect x="1216" y="350" width="54" height="22" rx="6" fill="#0F2A42"/>
+    <text x="1243" y="365" fill="#7DD3FC" font-size="11" font-family="Arial, Helvetica, sans-serif" text-anchor="middle">Server</text>
+    <circle cx="1370" cy="360" r="4" fill="#10B981"/>
+    <text x="1382" y="365" fill="#6EE7B7" font-size="12" font-family="Arial, Helvetica, sans-serif">online</text>
+
+    <!-- Device row 3 -->
+    <line x1="894" y1="378" x2="1508" y2="378" stroke="#0E1A28" stroke-width="1"/>
+    <circle cx="908" cy="396" r="5" fill="#10B981"/>
+    <text x="924" y="401" fill="#E2E8F0" font-size="13" font-family="Arial, Helvetica, sans-serif" font-weight="500">core-sw-01</text>
+    <text x="1076" y="401" fill="#94A3B8" font-size="13" font-family="monospace">192.168.1.1</text>
+    <rect x="1216" y="386" width="54" height="22" rx="6" fill="#0F2A42"/>
+    <text x="1243" y="401" fill="#7DD3FC" font-size="11" font-family="Arial, Helvetica, sans-serif" text-anchor="middle">Switch</text>
+    <circle cx="1370" cy="396" r="4" fill="#F59E0B"/>
+    <text x="1382" y="401" fill="#FCD34D" font-size="12" font-family="Arial, Helvetica, sans-serif">warning</text>
+
+    <!-- Device row 4 -->
+    <line x1="894" y1="414" x2="1508" y2="414" stroke="#0E1A28" stroke-width="1"/>
+    <circle cx="908" cy="432" r="5" fill="#10B981"/>
+    <text x="924" y="437" fill="#E2E8F0" font-size="13" font-family="Arial, Helvetica, sans-serif" font-weight="500">docker-host-02</text>
+    <text x="1076" y="437" fill="#94A3B8" font-size="13" font-family="monospace">192.168.1.45</text>
+    <rect x="1216" y="422" width="74" height="22" rx="6" fill="#0F2A42"/>
+    <text x="1253" y="437" fill="#7DD3FC" font-size="11" font-family="Arial, Helvetica, sans-serif" text-anchor="middle">Docker host</text>
+    <circle cx="1370" cy="432" r="4" fill="#10B981"/>
+    <text x="1382" y="437" fill="#6EE7B7" font-size="12" font-family="Arial, Helvetica, sans-serif">online</text>
+
+    <!-- Device row 5 -->
+    <line x1="894" y1="450" x2="1508" y2="450" stroke="#0E1A28" stroke-width="1"/>
+    <circle cx="908" cy="460" r="5" fill="#64748B"/>
+    <text x="924" y="465" fill="#94A3B8" font-size="13" font-family="Arial, Helvetica, sans-serif" font-weight="500">printer-lobby</text>
+    <text x="1076" y="465" fill="#64748B" font-size="13" font-family="monospace">192.168.1.80</text>
+    <rect x="1216" y="450" width="54" height="22" rx="6" fill="#0F2A42"/>
+    <text x="1243" y="465" fill="#7DD3FC" font-size="11" font-family="Arial, Helvetica, sans-serif" text-anchor="middle">Printer</text>
+    <circle cx="1370" cy="460" r="4" fill="#64748B"/>
+    <text x="1382" y="465" fill="#64748B" font-size="12" font-family="Arial, Helvetica, sans-serif">offline</text>
+
+
+    <!-- ===== OPERATOR CHAT (BOTTOM RIGHT) ===== -->
+    <rect x="866" y="488" width="662" height="372" rx="16" fill="#0A1725" stroke="#1A3049" stroke-width="1"/>
+    <text x="894" y="522" fill="#E8F2FF" font-size="17" font-family="Arial, Helvetica, sans-serif" font-weight="700">Chat</text>
+    <circle cx="938" cy="517" r="4" fill="#10B981"/>
+    <text x="950" y="522" fill="#6EE7B7" font-size="12" font-family="Arial, Helvetica, sans-serif">Live context</text>
+
+    <!-- User message -->
+    <rect x="1120" y="544" width="388" height="42" rx="12" fill="#1E3A56"/>
+    <text x="1140" y="570" fill="#E2E8F0" font-size="14" font-family="Arial, Helvetica, sans-serif">Why was the file server slow last night?</text>
+
+    <!-- Steward reply -->
+    <rect x="894" y="600" width="520" height="116" rx="12" fill="#0E1A28" stroke="#1A3049" stroke-width="1"/>
+    <circle cx="918" cy="622" r="10" fill="#0D6E5B"/>
+    <text x="918" y="627" fill="#FFFFFF" font-size="11" font-family="Arial, Helvetica, sans-serif" font-weight="700" text-anchor="middle">S</text>
+    <text x="936" y="627" fill="#94A3B8" font-size="12" font-family="Arial, Helvetica, sans-serif">Steward</text>
+    <text x="918" y="649" fill="#CBD5E1" font-size="13" font-family="Arial, Helvetica, sans-serif">Disk I/O on nas-01 was saturated between 2:00–4:30 AM</text>
+    <text x="918" y="668" fill="#CBD5E1" font-size="13" font-family="Arial, Helvetica, sans-serif">during backup verification on /vol/share. Average write</text>
+    <text x="918" y="687" fill="#CBD5E1" font-size="13" font-family="Arial, Helvetica, sans-serif">latency hit 180ms (baseline: 12ms). Shifting the job</text>
+    <text x="918" y="706" fill="#CBD5E1" font-size="13" font-family="Arial, Helvetica, sans-serif">window to 1:00 AM would avoid the overlap.</text>
+
+    <!-- Evidence badge -->
+    <rect x="894" y="724" width="160" height="28" rx="8" fill="#0C2D4A" stroke="#1E4164" stroke-width="1"/>
+    <text x="912" y="743" fill="#7DD3FC" font-size="12" font-family="Arial, Helvetica, sans-serif">Based on 4 data sources</text>
+
+    <!-- Tool call badge -->
+    <rect x="1066" y="724" width="200" height="28" rx="8" fill="#162636" stroke="#1A3049" stroke-width="1"/>
+    <text x="1084" y="743" fill="#94A3B8" font-size="12" font-family="Arial, Helvetica, sans-serif">query_device_metrics(nas-01)</text>
+
+    <!-- Chat input -->
+    <rect x="886" y="768" width="622" height="44" rx="12" fill="#0C1A2A" stroke="#1E3A56" stroke-width="1"/>
+    <text x="914" y="795" fill="#3E6380" font-size="14" font-family="Arial, Helvetica, sans-serif">Ask about your infrastructure...</text>
+    <rect x="1456" y="778" width="36" height="26" rx="8" fill="#0D6E5B"/>
+    <text x="1474" y="796" fill="#FFFFFF" font-size="16" font-family="Arial, Helvetica, sans-serif" text-anchor="middle">↑</text>
+
+    <!-- ===== BOTTOM LEFT: RECENT PLAYBOOK RUNS ===== -->
+    <rect x="284" y="640" width="566" height="220" rx="16" fill="#0A1725" stroke="#1A3049" stroke-width="1"/>
+    <text x="312" y="674" fill="#E8F2FF" font-size="17" font-family="Arial, Helvetica, sans-serif" font-weight="700">Recent Playbook Runs</text>
+
+    <!-- Playbook row 1 -->
+    <rect x="304" y="694" width="526" height="44" rx="8" fill="#0D1520"/>
+    <rect x="316" y="706" width="8" height="20" rx="4" fill="#10B981"/>
+    <text x="336" y="715" fill="#E2E8F0" font-size="13" font-family="Arial, Helvetica, sans-serif" font-weight="500">config-backup</text>
+    <text x="460" y="715" fill="#64748B" font-size="12" font-family="Arial, Helvetica, sans-serif">core-sw-01</text>
+    <text x="580" y="715" fill="#6EE7B7" font-size="12" font-family="Arial, Helvetica, sans-serif" font-weight="500">completed</text>
+    <text x="724" y="715" fill="#475569" font-size="12" font-family="Arial, Helvetica, sans-serif">2h ago</text>
+
+    <!-- Playbook row 2 -->
+    <rect x="304" y="746" width="526" height="44" rx="8" fill="#0D1520"/>
+    <rect x="316" y="758" width="8" height="20" rx="4" fill="#10B981"/>
+    <text x="336" y="767" fill="#E2E8F0" font-size="13" font-family="Arial, Helvetica, sans-serif" font-weight="500">service-recovery</text>
+    <text x="480" y="767" fill="#64748B" font-size="12" font-family="Arial, Helvetica, sans-serif">docker-host-02</text>
+    <text x="620" y="767" fill="#6EE7B7" font-size="12" font-family="Arial, Helvetica, sans-serif" font-weight="500">completed</text>
+    <text x="724" y="767" fill="#475569" font-size="12" font-family="Arial, Helvetica, sans-serif">5h ago</text>
+
+    <!-- Playbook row 3 -->
+    <rect x="304" y="798" width="526" height="44" rx="8" fill="#0D1520"/>
+    <rect x="316" y="810" width="8" height="20" rx="4" fill="#F59E0B"/>
+    <text x="336" y="819" fill="#E2E8F0" font-size="13" font-family="Arial, Helvetica, sans-serif" font-weight="500">cert-renewal</text>
+    <text x="454" y="819" fill="#64748B" font-size="12" font-family="Arial, Helvetica, sans-serif">proxy-01</text>
+    <text x="558" y="819" fill="#FBBF24" font-size="12" font-family="Arial, Helvetica, sans-serif" font-weight="500">awaiting approval</text>
+    <text x="724" y="819" fill="#475569" font-size="12" font-family="Arial, Helvetica, sans-serif">pending</text>
+
+  </g>
 </svg>
