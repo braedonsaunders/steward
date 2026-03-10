@@ -56,7 +56,7 @@ Steward is a self-hosted IT operations control plane for small networks. This re
   </tr>
 </table>
 
-## What This Repo Actually Ships
+## What Steward Is
 
 - A Next.js 16 + React 19 application with both operator UI and JSON APIs
 - A persistent `discover -> understand -> act -> learn` agent loop with manual and scheduled execution
