@@ -71,7 +71,7 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     sessions: protocolSessionManager.listSessions({
       ...(deviceId ? { deviceId } : {}),
-      ...(protocol === "mqtt" || protocol === "websocket" ? { protocol } : {}),
+      ...(protocol === "mqtt" || protocol === "websocket" || protocol === "web-session" || protocol === "rdp" || protocol === "vnc" ? { protocol } : {}),
     }),
   });
 }

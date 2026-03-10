@@ -1,6 +1,7 @@
 import { stateStore } from "@/lib/state/store";
 import { getHttpApiCredentialAuth } from "@/lib/credentials/http-api";
 import type {
+  AccessMethod,
   Assurance,
   AssuranceRun,
   Device,
@@ -36,6 +37,10 @@ export interface DeviceWidgetContext {
       appliedBySteward: boolean;
     };
   }>;
+  accessMethods: Array<Pick<
+    AccessMethod,
+    "key" | "kind" | "title" | "protocol" | "port" | "secure" | "selected" | "status" | "credentialProtocol" | "summary"
+  >>;
   baseline: DeviceBaseline | null;
   workloads: Workload[];
   assurances: Assurance[];
@@ -66,6 +71,7 @@ export async function buildDeviceWidgetContext(deviceId: string): Promise<Device
     latestAssuranceRuns,
     findings,
     credentials,
+    accessMethods,
     widgets,
   ] = await Promise.all([
     stateStore.getState(),
@@ -74,6 +80,7 @@ export async function buildDeviceWidgetContext(deviceId: string): Promise<Device
     Promise.resolve(stateStore.getLatestAssuranceRuns(deviceId)),
     Promise.resolve(stateStore.getDeviceFindings(deviceId)),
     Promise.resolve(stateStore.getDeviceCredentials(deviceId)),
+    Promise.resolve(stateStore.getAccessMethods(deviceId)),
     Promise.resolve(stateStore.getDeviceWidgets(deviceId)),
   ]);
 
@@ -110,6 +117,18 @@ export async function buildDeviceWidgetContext(deviceId: string): Promise<Device
           : undefined,
       };
     }),
+    accessMethods: accessMethods.map((method) => ({
+      key: method.key,
+      kind: method.kind,
+      title: method.title,
+      protocol: method.protocol,
+      port: method.port,
+      secure: method.secure,
+      selected: method.selected,
+      status: method.status,
+      credentialProtocol: method.credentialProtocol,
+      summary: method.summary,
+    })),
     baseline: state.baselines.find((item) => item.deviceId === deviceId) ?? null,
     workloads,
     assurances,

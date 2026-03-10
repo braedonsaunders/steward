@@ -7,6 +7,7 @@ import {
   updateDeviceCredential,
   validateDeviceCredential,
 } from "@/lib/adoption/credentials";
+import { isSupportedCredentialProtocol, normalizeCredentialProtocol } from "@/lib/protocols/catalog";
 
 export const runtime = "nodejs";
 
@@ -32,11 +33,16 @@ export async function PATCH(
     return NextResponse.json({ error: payload.error.flatten() }, { status: 400 });
   }
 
+  const normalizedProtocol = payload.data.protocol ? normalizeCredentialProtocol(payload.data.protocol) : undefined;
+  if (normalizedProtocol && !isSupportedCredentialProtocol(normalizedProtocol)) {
+    return NextResponse.json({ error: `Unsupported credential protocol: ${payload.data.protocol}` }, { status: 400 });
+  }
+
   try {
     let credential = await updateDeviceCredential({
       deviceId: id,
       credentialId,
-      protocol: payload.data.protocol,
+      protocol: normalizedProtocol,
       accountLabel: payload.data.accountLabel,
       secret: payload.data.secret,
       scopeJson: payload.data.scopeJson,

@@ -16,7 +16,16 @@ import type {
   DeviceCredential,
   DeviceProfileBinding,
 } from "@/lib/state/types";
+import { protocolDisplayLabel, SUPPORTED_CREDENTIAL_PROTOCOLS } from "@/lib/protocols/catalog";
 import { cn } from "@/lib/utils";
+
+function credentialProtocolLabel(protocol: string): string {
+  return protocolDisplayLabel(protocol);
+}
+
+function credentialStatusLabel(status: string): string {
+  return status === "pending" ? "pending" : "stored";
+}
 
 interface AdoptionSnapshot {
   run: AdoptionRun | null;
@@ -25,18 +34,7 @@ interface AdoptionSnapshot {
   profiles: DeviceProfileBinding[];
 }
 
-const CREDENTIAL_TYPE_OPTIONS = [
-  "ssh",
-  "winrm",
-  "windows",
-  "snmp",
-  "http-api",
-  "docker",
-  "kubernetes",
-  "mqtt",
-  "rtsp",
-  "printing",
-] as const;
+const CREDENTIAL_TYPE_OPTIONS = SUPPORTED_CREDENTIAL_PROTOCOLS;
 
 type DeviceAccessSection = "all" | "adapters" | "credentials";
 
@@ -67,7 +65,6 @@ export function DeviceAccessPanel({
   const [hasLoaded, setHasLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [credentialValidating, setCredentialValidating] = useState<Record<string, boolean>>({});
   const [selectingProfileId, setSelectingProfileId] = useState<string | null>(null);
 
   const [addDialogOpen, setAddDialogOpen] = useState(false);
@@ -190,22 +187,6 @@ export function DeviceAccessPanel({
       setError(err instanceof Error ? err.message : "Failed to delete credential");
     } finally {
       setDeletingCredentialId(null);
-    }
-  };
-
-  const validateCredential = async (credentialId: string) => {
-    setCredentialValidating((prev) => ({ ...prev, [credentialId]: true }));
-    try {
-      const res = await fetch(`/api/devices/${deviceId}/credentials/${credentialId}/validate`, withClientApiToken({ method: "POST" }));
-      const data = (await res.json()) as { error?: string };
-      if (!res.ok) {
-        throw new Error(data.error ?? "Failed to mark credential as validated");
-      }
-      await refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to mark credential as validated");
-    } finally {
-      setCredentialValidating((prev) => ({ ...prev, [credentialId]: false }));
     }
   };
 
@@ -385,26 +366,15 @@ export function DeviceAccessPanel({
               <li key={credential.id} className="rounded-md border bg-background/75 p-3 text-xs">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1 space-y-1">
-                    <p className="font-medium">{credential.protocol}</p>
+                    <p className="font-medium">{credentialProtocolLabel(credential.protocol)}</p>
                     <p className="text-muted-foreground">{credential.accountLabel ?? "no username"}</p>
                     <p className="text-[10px] text-muted-foreground">
-                      {credential.lastValidatedAt
-                        ? `Last validated ${new Date(credential.lastValidatedAt).toLocaleString()}`
-                        : "Not validated yet"}
+                      Manually entered credential
                     </p>
                   </div>
-                  <Badge variant="outline" className="shrink-0">{credential.status}</Badge>
+                  <Badge variant="outline" className="shrink-0">{credentialStatusLabel(credential.status)}</Badge>
                 </div>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-6 px-2 text-[10px]"
-                    disabled={Boolean(credentialValidating[credential.id])}
-                    onClick={() => void validateCredential(credential.id)}
-                  >
-                    {credentialValidating[credential.id] ? "Marking..." : "Mark Validated"}
-                  </Button>
                   <Button
                     size="sm"
                     variant="outline"
@@ -466,7 +436,7 @@ export function DeviceAccessPanel({
               <SelectTrigger id="cred-type"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {CREDENTIAL_TYPE_OPTIONS.map((type) => (
-                  <SelectItem key={type} value={type}>{type}</SelectItem>
+                  <SelectItem key={type} value={type}>{protocolDisplayLabel(type)}</SelectItem>
                 ))}
               </SelectContent>
             </Select>

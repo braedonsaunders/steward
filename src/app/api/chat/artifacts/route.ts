@@ -4,7 +4,11 @@ import { NextResponse, type NextRequest } from "next/server";
 import { isAuthorized } from "@/lib/auth/guard";
 import { getDataDir } from "@/lib/state/db";
 
-const CHAT_ARTIFACTS_ROOT = path.resolve(getDataDir(), "artifacts", "browser-browse");
+const CHAT_ARTIFACTS_ROOT = path.resolve(getDataDir(), "artifacts");
+const ALLOWED_ARTIFACT_PREFIXES = [
+  "artifacts/browser-browse/",
+  "artifacts/remote-desktop/",
+] as const;
 
 function inferContentType(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();
@@ -22,7 +26,7 @@ function normalizeRelativeArtifactPath(value: string): string | null {
   if (normalized.includes("..") || normalized.startsWith("/") || /^[a-zA-Z]:/.test(normalized)) {
     return null;
   }
-  if (!normalized.startsWith("artifacts/browser-browse/")) {
+  if (!ALLOWED_ARTIFACT_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
     return null;
   }
   return normalized;
@@ -50,7 +54,7 @@ export async function GET(request: NextRequest) {
       status: 200,
       headers: {
         "content-type": inferContentType(absolutePath),
-        "cache-control": "private, max-age=3600",
+        "cache-control": "private, max-age=60",
       },
     });
   } catch {

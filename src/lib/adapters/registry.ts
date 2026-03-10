@@ -12,6 +12,7 @@ import {
 } from "@/lib/adapters/skills";
 import {
   type AdapterManifest,
+  type AdapterWebFlowRecipe,
   type AdapterProfileMatch,
   type AdapterSkillMarkdown,
   type AdapterRecord,
@@ -41,6 +42,13 @@ export interface AdapterPackageRecord {
   adapterSkillMd?: string;
   toolSkillMd: Record<string, string>;
   isBuiltin: boolean;
+}
+
+export interface DeviceWebFlowBinding {
+  adapterId: string;
+  adapterName: string;
+  profileMatch?: AdapterProfileMatch;
+  flow: AdapterWebFlowRecipe;
 }
 
 export interface AdapterPackageMutation {
@@ -1347,6 +1355,60 @@ class AdapterRegistry {
     }
 
     return capabilities;
+  }
+
+  async getDeviceWebFlows(device: Device): Promise<DeviceWebFlowBinding[]> {
+    const matches = await this.getDeviceProfileMatches(device);
+    const matchByAdapterId = new Map<string, AdapterProfileMatch>();
+    for (const match of matches) {
+      if (match.adapterId && !matchByAdapterId.has(match.adapterId)) {
+        matchByAdapterId.set(match.adapterId, match);
+      }
+    }
+
+    const bindings: DeviceWebFlowBinding[] = [];
+    for (const [id, entry] of this.loaded) {
+      const flows = Array.isArray(entry.manifest.webFlows) ? entry.manifest.webFlows : [];
+      if (flows.length === 0) {
+        continue;
+      }
+      const profileMatch = matchByAdapterId.get(id);
+      const likelyHttpSurface = device.services.some((service) => {
+        const name = String(service.name ?? "").toLowerCase();
+        return [80, 443, 8080, 8443, 5000, 5001, 7443, 9000, 9443].includes(Number(service.port))
+          || name.includes("http")
+          || name.includes("https")
+          || name.includes("web");
+      });
+      if (!profileMatch && !likelyHttpSurface) {
+        continue;
+      }
+      for (const flow of flows) {
+        bindings.push({
+          adapterId: id,
+          adapterName: entry.manifest.name,
+          profileMatch,
+          flow,
+        });
+      }
+    }
+
+    bindings.sort((left, right) => {
+      const leftKind = left.profileMatch?.kind ?? "supporting";
+      const rightKind = right.profileMatch?.kind ?? "supporting";
+      const kindRank = (value: string) => value === "primary" ? 0 : value === "fallback" ? 1 : 2;
+      if (kindRank(leftKind) !== kindRank(rightKind)) {
+        return kindRank(leftKind) - kindRank(rightKind);
+      }
+      const leftConfidence = left.profileMatch?.confidence ?? (left.adapterId === "steward.http-surface" ? 0.35 : 0);
+      const rightConfidence = right.profileMatch?.confidence ?? (right.adapterId === "steward.http-surface" ? 0.35 : 0);
+      if (leftConfidence !== rightConfidence) {
+        return rightConfidence - leftConfidence;
+      }
+      return left.flow.name.localeCompare(right.flow.name);
+    });
+
+    return bindings;
   }
 }
 

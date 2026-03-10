@@ -370,6 +370,10 @@ main() {
 
   log "Ensuring Playwright runtime..."
   node scripts/ensure-playwright.mjs
+
+  log "Ensuring remote desktop runtime (guacd)..."
+  node scripts/ensure-remote-desktop-runtime.mjs
 }
 
 main "$@"
+

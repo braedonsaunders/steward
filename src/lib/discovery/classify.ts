@@ -903,6 +903,9 @@ const inferProtocols = (ports: number[]): string[] => {
   if (ports.includes(22)) protocols.add("ssh");
   if (ports.includes(5985) || ports.includes(5986)) protocols.add("winrm");
   if (ports.includes(3389)) protocols.add("rdp");
+  if (ports.includes(5900) || ports.includes(5901)) protocols.add("vnc");
+  if (ports.includes(445)) protocols.add("smb");
+  if (ports.includes(135)) protocols.add("wmi");
   if (ports.includes(161)) protocols.add("snmp");
   if (hasWeb) protocols.add("http-api");
   if (ports.some((port) => [80, 8080, 8000, 9000, 5000].includes(port))) protocols.add("http");
@@ -911,9 +914,6 @@ const inferProtocols = (ports: number[]): string[] => {
   if (ports.includes(6443)) protocols.add("kubernetes");
   if (ports.includes(1883) || ports.includes(8883)) protocols.add("mqtt");
   if (hasAny(ports, SIP_PORTS)) protocols.add("sip");
-  if (ports.includes(3389) || ports.includes(445) || ports.includes(389) || ports.includes(5985) || ports.includes(5986)) {
-    protocols.add("windows");
-  }
   if (ports.includes(554)) protocols.add("rtsp");
   if (ports.includes(53)) protocols.add("dns");
   if (ports.includes(631) || ports.includes(9100)) protocols.add("printing");
@@ -1221,3 +1221,4 @@ export const candidateToDevice = (
     },
   };
 };
+

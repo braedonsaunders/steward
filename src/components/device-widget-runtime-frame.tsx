@@ -208,9 +208,21 @@ function buildWidgetDocument(args: {
           });
         };
 
+        const unwrapWidgetResult = (result) => {
+          if (!result || typeof result !== "object") {
+            return null;
+          }
+          const nested = result.operationResult;
+          if (nested && typeof nested === "object") {
+            return nested;
+          }
+          return result;
+        };
+
         const normalizeMqttMessages = (result) => {
-          const details = result && typeof result === "object" && result.details && typeof result.details === "object"
-            ? result.details
+          const resolved = unwrapWidgetResult(result);
+          const details = resolved && typeof resolved === "object" && resolved.details && typeof resolved.details === "object"
+            ? resolved.details
             : null;
           const messages = details && Array.isArray(details.messages) ? details.messages : [];
           return messages
@@ -239,8 +251,9 @@ function buildWidgetDocument(args: {
         };
 
         const normalizeHttpResponse = (result) => {
-          const details = result && typeof result === "object" && result.details && typeof result.details === "object"
-            ? result.details
+          const resolved = unwrapWidgetResult(result);
+          const details = resolved && typeof resolved === "object" && resolved.details && typeof resolved.details === "object"
+            ? resolved.details
             : null;
           const responseBody = details && typeof details.responseBody === "string"
             ? details.responseBody
@@ -413,6 +426,23 @@ function buildWidgetDocument(args: {
           },
           getMqttMessages(result) {
             return normalizeMqttMessages(result);
+          },
+          getControlOperationResult(result) {
+            return result && typeof result === "object" && result.operationResult && typeof result.operationResult === "object"
+              ? result.operationResult
+              : null;
+          },
+          getControlOutput(result) {
+            const operationResult = result && typeof result === "object" && result.operationResult && typeof result.operationResult === "object"
+              ? result.operationResult
+              : null;
+            if (operationResult && typeof operationResult.output === "string") {
+              return operationResult.output;
+            }
+            if (result && typeof result === "object" && result.details && typeof result.details === "object" && typeof result.details.stdout === "string") {
+              return result.details.stdout;
+            }
+            return "";
           },
           getHttpResponse(result) {
             return normalizeHttpResponse(result);

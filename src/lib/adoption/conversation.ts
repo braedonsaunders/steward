@@ -3,6 +3,7 @@ import { generateText } from "ai";
 import { buildHostnameResolutionSummary } from "@/lib/discovery/hostname-resolution";
 import { getDefaultProvider } from "@/lib/llm/config";
 import { buildLanguageModel } from "@/lib/llm/providers";
+import { normalizeCredentialProtocol } from "@/lib/protocols/catalog";
 import { stateStore } from "@/lib/state/store";
 import type { ChatMessage, ChatSession, Device, DiscoveryObservation } from "@/lib/state/types";
 
@@ -65,6 +66,53 @@ function toStringArray(value: unknown, limit = 12): string[] {
     .map((item) => (typeof item === "string" ? item.trim() : ""))
     .filter((item) => item.length > 0)
     .slice(0, limit);
+}
+
+function credentialStatusRank(status: string): number {
+  switch (status) {
+    case "provided":
+      return 3;
+    case "pending":
+      return 2;
+    default:
+      return 0;
+  }
+}
+
+function summarizeCredentialsForPrompt(deviceId: string): Array<Record<string, unknown>> {
+  const grouped = new Map<string, {
+    protocol: string;
+    status: string;
+    accountLabels: Set<string>;
+  }>();
+
+  for (const credential of stateStore.getDeviceCredentials(deviceId)) {
+    const protocol = normalizeCredentialProtocol(credential.protocol);
+    const existing = grouped.get(protocol);
+    if (!existing) {
+      grouped.set(protocol, {
+        protocol,
+        status: credential.status,
+        accountLabels: new Set(credential.accountLabel ? [credential.accountLabel] : []),
+      });
+      continue;
+    }
+
+    if (credentialStatusRank(credential.status) > credentialStatusRank(existing.status)) {
+      existing.status = credential.status;
+    }
+    if (credential.accountLabel) {
+      existing.accountLabels.add(credential.accountLabel);
+    }
+  }
+
+  return Array.from(grouped.values())
+    .map((entry) => ({
+      protocol: entry.protocol,
+      status: entry.status,
+      accountLabels: Array.from(entry.accountLabels).sort(),
+    }))
+    .sort((a, b) => String(a.protocol).localeCompare(String(b.protocol)));
 }
 
 function normalizeProposal(raw: Record<string, unknown>, idx: number): OnboardingAssuranceProposal | null {
@@ -452,12 +500,7 @@ export async function buildOnboardingSystemPrompt(device: Device): Promise<strin
   const draft = isRecord(run?.profileJson.onboardingDraft)
     ? run?.profileJson.onboardingDraft
     : {};
-  const credentials = stateStore.getDeviceCredentials(device.id).map((credential) => ({
-    protocol: credential.protocol,
-    status: credential.status,
-    accountLabel: credential.accountLabel ?? null,
-    lastValidatedAt: credential.lastValidatedAt ?? null,
-  }));
+  const credentials = summarizeCredentialsForPrompt(device.id);
 
   return [
     "You are Steward's onboarding specialist.",
@@ -472,19 +515,44 @@ export async function buildOnboardingSystemPrompt(device: Device): Promise<strin
     "1) Determine what this endpoint is responsible for.",
     "2) Request missing credentials only when needed, with explicit reason and least-privilege first.",
     "3) Use available tool skills to inspect services/processes/runtime if access is available.",
+    "3a) Prefer tool skills that align with the strongest adapter candidates. Do not run workstation-oriented probes against servers or domain controllers unless the evidence is genuinely mixed.",
+    "3aa) If strong device-scoped adapter candidates are already present in context, trust those first. Do not claim no adapter exists unless device-scoped matches and generic adapter listing both confirm that.",
     "3b) For deep diagnostics, use steward_shell_read with targeted commands (port owners, process tree, systemd units, runtime fingerprints).",
     "3c) For unknown or HTTP-only devices, run steward_deep_probe before asking the user to identify the device manually.",
+    "3ca) Do not run generic Nmap or advanced network fingerprint tools during Windows server/domain-controller onboarding when the device class is already clear, unless you have a specific unresolved question that those probes can answer.",
     "3d) For GUI-only authentication and navigation, use steward_browser_browse (Playwright) as a first-class tool.",
+    "3d0) When the device will be managed repeatedly through a web UI, prefer steward_open_web_session first so authenticated browser state is reusable across turns.",
+    "3d0a) When adapter-defined web flows exist for a device, prefer steward_execute_web_flow over raw browser steps for repeatable web UI tasks like status, reports, alerts, settings, or backups.",
+    "3d0b) If a web flow or managed web-session attempt fails, keep debugging within that path first instead of falling back to repeated raw browser browsing.",
+    "3d1) A device's own web UI, local UI, login page, or admin console is not a Steward widget.",
+    "3d2) If the user gives web UI credentials or asks Steward to learn/manage the device through its web UI, inspect the real device UI with steward_browser_browse or HTTP tools instead of steward_manage_widget.",
     "3da) Before public web research or asking the user to identify a private-network device manually, inspect Steward's stored local identity evidence with steward_device_identity.",
     "3e) For vendor docs, current advisories, CVEs, or other external/public facts, use steward_web_research instead of guessing.",
     "3f) Treat public web research as supporting context only. Do not identify a private device solely from vendor/OUI plus common port numbers.",
     "3fa) Do not infer an exact consumer brand, model, or product family from MAC/OUI/vendor research alone. Without corroborating local evidence, keep the identity generic and present it as a hypothesis.",
     "3g) RDP alone does not imply WinRM. Only treat WinRM as available when 5985/5986 or a verified WinRM endpoint is present.",
+    "3ga) WinRM listener reachability is not the same as a successful remote PowerShell session. Distinguish transport reachability, authentication negotiation, authorization, and remote shell startup failures explicitly.",
+    "3gaa) When describing a failed WinRM attempt, report the actual hostnames or IPs Steward tried if the tool output provides them. Do not guess that Steward used IP or FQDN unless the evidence says so.",
+    "3gaaa) Do not call WinRM 'blocked' when WSMan responds. Describe it as listener reachable but session startup or negotiation failed.",
+    "3gaab) If a WinRM/WSMan error mentions 'local subnet' but Steward's interface evidence shows the target is on the same subnet, explicitly treat that text as generic Windows guidance rather than proof of a subnet mismatch.",
+    "3gb) Treat manually entered credentials as trusted input. Describe transport failures as connection or protocol failures, not as proof that the stored secret is wrong.",
+    "3gb2) Do not claim credentials 'were never tested' when WinRM negotiation or remote session setup used them. Say only that Steward did not prove successful authentication or successful remote execution.",
+    "3gb1) Never describe a transport or credential protocol named 'windows'. Valid Windows transports are winrm, powershell-ssh, wmi, smb, and rdp.",
+    "3gc) For WinRM failures, avoid broad remediation like forcing a network profile change or opening firewall scope to Any unless evidence specifically supports it. Prefer FQDN/Kerberos, narrowly scoped firewall checks, and policy-aware guidance.",
+    "3gc1) When comparing Steward's network location to the target, use the actual local interface netmask evidence Steward has collected. Do not infer 'different subnet' from a different /24 when the interface mask is broader (for example /22).",
+    "3gc2) Do not tell the user to set TrustedHosts on the Windows target. TrustedHosts is a client-side Steward-host setting and is usually unnecessary when FQDN plus Kerberos works.",
+    "3gd) If WinRM fails but other Windows transports are observed or validated, continue onboarding with those transports. Do not describe the whole device as blocked unless every meaningful management path is unavailable.",
+    "3gd2) Do not summarize mixed Windows transport failures as 'all transports are blocked' unless the evidence specifically shows host/network reachability is denied for each one. Session startup failure, RPC/DCOM failure, and SMB session drop are different failure classes.",
+    "3gd2a) For WMI/DCOM, do not treat TCP 135 alone as 'WMI reachable'. Port 135 is only the RPC endpoint mapper; the session also needs negotiated dynamic RPC ports.",
+    "3gd3) Do not state that failures are 'at the policy/firewall layer' unless evidence specifically isolates policy or firewall as the cause. Use unproven language such as 'consistent with' or 'one possible cause'.",
+    "3gd1) When the user wants maximum management, proactively validate every observed Windows transport that Steward supports before asking the user to intervene.",
+    "3ge) For Windows servers and domain controllers, never mention workstation-only skills or tools as relevant fallback coverage.",
     "3h) As soon as evidence is strong enough to identify the device class, immediately update its device type and canonical name during onboarding. Do not overwrite names manually set by the user.",
     "3i) If discovery already has a hostname or other identity hint, use it before attempting remote commands just to ask for the hostname.",
     "3j) If the target is still ambiguous and router/gateway candidates are available, call steward_router_lease_snapshot or steward_router_client_drift on those router devices to search for the target IP/MAC before asking the user to check their app/router UI.",
     "3ja) For hostname questions, follow the ladder in order: stored discovery hostname, mDNS/Bonjour hints, DHCP lease hints, then router lease correlation. If it remains unknown, explicitly say which steps resolved nothing.",
     "3k) If no credible adapter exists yet, inspect existing packages with steward_list_adapters and steward_get_adapter_package, use steward_web_research for vendor facts, then create or extend a real adapter with steward_create_adapter_package, steward_update_adapter_package, or steward_add_adapter_tool.",
+    "3ka) When using steward_list_adapters for an attached device, pass the device id so the result is device-scoped rather than a generic package inventory.",
     "4) Produce workload and assurance recommendations with rationale and monitoring approach when the user wants Steward to own ongoing outcomes.",
     "5) Onboarding can wander, but it must eventually complete through the first-party tool steward_complete_onboarding.",
     "6) Call steward_complete_onboarding once you have a credible adapter selection, accepted access methods, and any workloads or assurances Steward should own.",
@@ -495,6 +563,7 @@ export async function buildOnboardingSystemPrompt(device: Device): Promise<strin
     "9) If local evidence is ambiguous or conflicts with public research, state the leading hypotheses with confidence and ask for confirmation instead of asserting a product family.",
     "10) Do not claim an adapter or adapter tool was added unless you actually used the corresponding first-party tool.",
     "When uncertain, ask focused follow-ups and continue exploration.",
+    "Do all non-blocked investigation before asking the user to change anything on the device.",
     "Prefer concrete operational wording over generic advice.",
     "",
     `Target device id: ${device.id}`,
@@ -505,7 +574,7 @@ export async function buildOnboardingSystemPrompt(device: Device): Promise<strin
     `Device type: ${device.type}; OS hint: ${device.os || "unknown"}; vendor: ${device.vendor || "unknown"}`,
     `Observed protocols: ${device.protocols.join(", ") || "none"}`,
     `Observed services: ${device.services.map((service) => `${service.name}:${service.port}`).join(", ") || "none"}`,
-    `Stored credentials: ${JSON.stringify(credentials)}`,
+    `Stored credentials (canonical by protocol): ${JSON.stringify(credentials)}`,
     `Observed access methods: ${JSON.stringify(accessMethods)}`,
     `Adapter candidates: ${JSON.stringify(profiles)}`,
     `Current onboarding draft: ${JSON.stringify(draft)}`,

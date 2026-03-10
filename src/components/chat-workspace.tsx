@@ -13,6 +13,7 @@ import {
   Edit3,
   Globe,
   Loader2,
+  Monitor,
   MessageSquarePlus,
   MoreHorizontal,
   PanelLeftClose,
@@ -211,6 +212,8 @@ function toolKindLabel(kind: ChatToolEventKind): string {
       return "Terminal";
     case "probe":
       return "Probe";
+    case "desktop":
+      return "Desktop";
     default:
       return "Tool";
   }
@@ -222,6 +225,9 @@ function ToolKindIcon({ kind, className }: { kind: ChatToolEventKind; className?
   }
   if (kind === "probe") {
     return <Radar className={className} />;
+  }
+  if (kind === "desktop") {
+    return <Monitor className={className} />;
   }
   return <Sparkles className={className} />;
 }
@@ -273,6 +279,39 @@ type BrowserToolPreview = {
     requestFailures: string[];
     pageErrors: string[];
   };
+};
+
+type RemoteDesktopStepPreview = {
+  action: string;
+  ok: boolean;
+  label?: string;
+  path?: string;
+  x?: number;
+  y?: number;
+  fromX?: number;
+  fromY?: number;
+  toX?: number;
+  toY?: number;
+  text?: string;
+  key?: string;
+  direction?: string;
+  amount?: number;
+  result?: string;
+  screenshotBase64?: string;
+  mimeType?: string;
+};
+
+type RemoteDesktopToolPreview = {
+  ok: boolean;
+  sessionId?: string;
+  deviceName?: string;
+  protocol?: string;
+  viewerPath?: string;
+  stepsExecuted: number;
+  latestFramePath?: string;
+  latestFrameBase64?: string;
+  latestFrameMimeType?: string;
+  stepResults: RemoteDesktopStepPreview[];
 };
 
 type DeviceSettingsToolPreview = {
@@ -438,6 +477,63 @@ function parseBrowserToolPreview(event: ChatToolEvent): BrowserToolPreview | nul
   }
 }
 
+function parseRemoteDesktopToolPreview(event: ChatToolEvent): RemoteDesktopToolPreview | null {
+  if (event.toolName !== "steward_remote_desktop") {
+    return null;
+  }
+  if (!event.outputPreview) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(event.outputPreview) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return null;
+    }
+    const record = parsed as Record<string, unknown>;
+    const stepResults = Array.isArray(record.stepResults)
+      ? record.stepResults
+        .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null && !Array.isArray(item))
+        .map((item) => ({
+          action: typeof item.action === "string" ? item.action : "step",
+          ok: item.ok !== false,
+          label: typeof item.label === "string" ? item.label : undefined,
+          path: typeof item.path === "string" ? item.path : undefined,
+          x: typeof item.x === "number" ? item.x : undefined,
+          y: typeof item.y === "number" ? item.y : undefined,
+          fromX: typeof item.fromX === "number" ? item.fromX : undefined,
+          fromY: typeof item.fromY === "number" ? item.fromY : undefined,
+          toX: typeof item.toX === "number" ? item.toX : undefined,
+          toY: typeof item.toY === "number" ? item.toY : undefined,
+          text: typeof item.text === "string" ? item.text : undefined,
+          key: typeof item.key === "string" ? item.key : undefined,
+          direction: typeof item.direction === "string" ? item.direction : undefined,
+          amount: typeof item.amount === "number" ? item.amount : undefined,
+          result: typeof item.result === "string" ? item.result : undefined,
+          screenshotBase64: typeof item.screenshotBase64 === "string" ? item.screenshotBase64 : undefined,
+          mimeType: typeof item.mimeType === "string" ? item.mimeType : undefined,
+        }))
+      : [];
+
+    return {
+      ok: record.ok !== false,
+      sessionId: typeof record.sessionId === "string" ? record.sessionId : undefined,
+      deviceName: typeof record.deviceName === "string" ? record.deviceName : undefined,
+      protocol: typeof record.protocol === "string" ? record.protocol : undefined,
+      viewerPath: typeof record.viewerPath === "string" ? record.viewerPath : undefined,
+      stepsExecuted: typeof record.stepsExecuted === "number"
+        ? record.stepsExecuted
+        : stepResults.length,
+      latestFramePath: typeof record.latestFramePath === "string" ? record.latestFramePath : undefined,
+      latestFrameBase64: typeof record.latestFrameBase64 === "string" ? record.latestFrameBase64 : undefined,
+      latestFrameMimeType: typeof record.latestFrameMimeType === "string" ? record.latestFrameMimeType : undefined,
+      stepResults: stepResults.slice(0, 16),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function parseDeviceSettingsToolPreview(event: ChatToolEvent): DeviceSettingsToolPreview | null {
   if (event.toolName !== "steward_manage_device") {
     return null;
@@ -490,17 +586,64 @@ function parseDeviceSettingsToolPreview(event: ChatToolEvent): DeviceSettingsToo
   }
 }
 
-function browserStepScreenshotSrc(step: BrowserStepPreview | undefined): string | null {
-  if (!step) {
+function artifactImageSrc(frame: { screenshotBase64?: string; path?: string; mimeType?: string } | undefined): string | null {
+  if (!frame) {
     return null;
   }
-  if (step.screenshotBase64 && step.screenshotBase64.length > 0) {
-    return `data:${step.mimeType ?? "image/png"};base64,${step.screenshotBase64}`;
+  if (frame.screenshotBase64 && frame.screenshotBase64.length > 0) {
+    return `data:${frame.mimeType ?? "image/png"};base64,${frame.screenshotBase64}`;
   }
-  if (step.path && step.path.length > 0) {
-    return `/api/chat/artifacts?path=${encodeURIComponent(step.path)}`;
+  if (frame.path && frame.path.length > 0) {
+    return `/api/chat/artifacts?path=${encodeURIComponent(frame.path)}`;
   }
   return null;
+}
+
+function browserStepScreenshotSrc(step: BrowserStepPreview | undefined): string | null {
+  return artifactImageSrc(step);
+}
+
+function remoteDesktopScreenshotSrc(preview: RemoteDesktopToolPreview | null): string | null {
+  if (!preview) {
+    return null;
+  }
+  const latestFrame = artifactImageSrc({
+    screenshotBase64: preview.latestFrameBase64,
+    path: preview.latestFramePath,
+    mimeType: preview.latestFrameMimeType,
+  });
+  if (latestFrame) {
+    return latestFrame;
+  }
+  return artifactImageSrc(preview.stepResults.find((step) => step.screenshotBase64 || step.path));
+}
+
+function summarizeRemoteDesktopStep(step: RemoteDesktopStepPreview): string {
+  const parts: string[] = [];
+  if (Number.isFinite(step.x) && Number.isFinite(step.y)) {
+    parts.push(`(${step.x}, ${step.y})`);
+  }
+  if (
+    Number.isFinite(step.fromX)
+    && Number.isFinite(step.fromY)
+    && Number.isFinite(step.toX)
+    && Number.isFinite(step.toY)
+  ) {
+    parts.push(`${step.fromX},${step.fromY} -> ${step.toX},${step.toY}`);
+  }
+  if (step.text) {
+    parts.push(truncateInlineValue(step.text, 96));
+  }
+  if (step.key) {
+    parts.push(`key ${step.key}`);
+  }
+  if (step.direction) {
+    parts.push(`${step.direction}${typeof step.amount === "number" ? ` x${step.amount}` : ""}`);
+  }
+  if (step.result) {
+    parts.push(truncateInlineValue(step.result, 96));
+  }
+  return parts.join(" | ");
 }
 
 function clampAnchorOffset(anchorOffset: number | undefined, contentLength: number): number {
@@ -679,11 +822,13 @@ const ChatToolEventCard = memo(function ChatToolEventCard({
   const running = event.status === "running";
   const normalizedOutput = normalizeToolOutput(event.outputPreview);
   const browserPreview = parseBrowserToolPreview(event);
+  const remoteDesktopPreview = parseRemoteDesktopToolPreview(event);
   const deviceSettingsPreview = parseDeviceSettingsToolPreview(event);
   const inputPills = useMemo(() => extractToolInputPills(event.inputPreview), [event.inputPreview]);
   const browserScreenshotStep = browserPreview?.stepResults.find((step) => step.screenshotBase64 || step.path);
   const browserScreenshotSrc = browserStepScreenshotSrc(browserScreenshotStep);
-  const standardCard = !browserPreview && !deviceSettingsPreview;
+  const remoteDesktopFrameSrc = remoteDesktopScreenshotSrc(remoteDesktopPreview);
+  const standardCard = !browserPreview && !remoteDesktopPreview && !deviceSettingsPreview;
   const hasLongSummary = Boolean(
     (event.error && (event.error.length > 140 || event.error.includes("\n")))
     || (event.summary && (event.summary.length > 140 || event.summary.includes("\n"))),
@@ -878,6 +1023,49 @@ const ChatToolEventCard = memo(function ChatToolEventCard({
                   )}
                 </div>
               )}
+              {remoteDesktopPreview && (
+                <div className="space-y-2 rounded-2xl border border-border/60 bg-background/70 p-3">
+                  <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                    {remoteDesktopPreview.deviceName ? <Badge variant="outline">{remoteDesktopPreview.deviceName}</Badge> : null}
+                    {remoteDesktopPreview.protocol ? <Badge variant="secondary">{remoteDesktopPreview.protocol.toUpperCase()}</Badge> : null}
+                    <Badge variant="secondary">{remoteDesktopPreview.stepsExecuted} step{remoteDesktopPreview.stepsExecuted === 1 ? "" : "s"}</Badge>
+                    {remoteDesktopPreview.viewerPath ? (
+                      <a
+                        href={remoteDesktopPreview.viewerPath}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-sky-600 transition-colors hover:text-sky-500 dark:text-sky-300 dark:hover:text-sky-200"
+                      >
+                        Open live viewer
+                      </a>
+                    ) : null}
+                  </div>
+
+                  {remoteDesktopFrameSrc ? (
+                    <div className="overflow-hidden rounded-xl border border-border/70 bg-muted/20">
+                      <img
+                        src={remoteDesktopFrameSrc}
+                        alt="Remote desktop snapshot"
+                        className="mx-auto h-auto max-h-[34rem] w-full object-contain"
+                      />
+                    </div>
+                  ) : null}
+
+                  {remoteDesktopPreview.stepResults.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {remoteDesktopPreview.stepResults.map((step, index) => (
+                        <div key={`${step.action}-${index}`} className="flex items-start justify-between gap-2 rounded-md border border-border/60 bg-background/80 px-2 py-1.5 text-[11px]">
+                          <div className="min-w-0">
+                            <p className="truncate font-medium">{step.label ?? step.action}</p>
+                            <p className="truncate text-muted-foreground">{summarizeRemoteDesktopStep(step)}</p>
+                          </div>
+                          <Badge variant={step.ok ? "secondary" : "outline"}>{step.ok ? "ok" : "failed"}</Badge>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              )}
 
               {deviceSettingsPreview && (
                 <div className="space-y-2 rounded-2xl border border-border/60 bg-background/70 p-3 text-[12px]">
@@ -913,11 +1101,11 @@ const ChatToolEventCard = memo(function ChatToolEventCard({
                 </div>
               )}
 
-              {normalizedOutput && event.kind === "terminal" && (
+                            {standardCard && normalizedOutput && event.kind === "terminal" && (
                 <ExpandableToolOutputPanel title="Inline Terminal" value={normalizedOutput} terminal />
               )}
 
-              {normalizedOutput && event.kind !== "terminal" && (
+              {standardCard && normalizedOutput && event.kind !== "terminal" && (
                 <ExpandableToolOutputPanel title="Tool Output" value={normalizedOutput} />
               )}
             </div>
@@ -2004,3 +2192,6 @@ export function ChatWorkspace({
 }
 
 export default ChatWorkspace;
+
+
+

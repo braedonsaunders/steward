@@ -7,6 +7,7 @@ import {
   validateDeviceCredential,
 } from "@/lib/adoption/credentials";
 import { getDeviceAdoptionSnapshot } from "@/lib/adoption/orchestrator";
+import { isSupportedCredentialProtocol, normalizeCredentialProtocol } from "@/lib/protocols/catalog";
 import { stateStore } from "@/lib/state/store";
 
 export const runtime = "nodejs";
@@ -52,10 +53,15 @@ export async function POST(
     return NextResponse.json({ error: payload.error.flatten() }, { status: 400 });
   }
 
+  const normalizedProtocol = normalizeCredentialProtocol(payload.data.protocol);
+  if (!isSupportedCredentialProtocol(normalizedProtocol)) {
+    return NextResponse.json({ error: `Unsupported credential protocol: ${payload.data.protocol}` }, { status: 400 });
+  }
+
   try {
     let credential = await storeDeviceCredential({
       deviceId: id,
-      protocol: payload.data.protocol,
+      protocol: normalizedProtocol,
       secret: payload.data.secret,
       adapterId: payload.data.adapterId,
       accountLabel: payload.data.accountLabel,

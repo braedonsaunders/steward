@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
-import path from "node:path";
 import { dynamicTool, jsonSchema } from "ai";
 import { adapterRegistry } from "@/lib/adapters/registry";
 import type { AdapterToolSkill } from "@/lib/adapters/types";
@@ -16,7 +14,6 @@ import {
 import { runWebResearch } from "@/lib/assistant/web-research";
 import {
   deleteDeviceCredential,
-  markCredentialValidatedFromUse,
   redactDeviceCredential,
   storeDeviceCredential,
   updateDeviceCredential,
@@ -30,6 +27,7 @@ import {
   type HttpApiCredentialAuthMode,
   withHttpApiCredentialAuth,
 } from "@/lib/credentials/http-api";
+import { isWindowsPlatformDevice, normalizeCredentialProtocol, protocolDisplayLabel } from "@/lib/protocols/catalog";
 import { completeDeviceOnboarding } from "@/lib/adoption/orchestrator";
 import {
   computeDeviceStateHash,
@@ -40,6 +38,7 @@ import { candidateToDevice } from "@/lib/discovery/classify";
 import { dedupeObservations } from "@/lib/discovery/evidence";
 import { fingerprintDevice } from "@/lib/discovery/fingerprint";
 import { buildHostnameResolutionSummary } from "@/lib/discovery/hostname-resolution";
+import { runRemoteDesktopFlow } from "@/lib/remote-desktop/agent";
 import { runNmapDeepFingerprint } from "@/lib/discovery/nmap-deep";
 import { getOuiStats, lookupOuiVendor } from "@/lib/discovery/oui";
 import { collectPacketIntelSnapshot } from "@/lib/discovery/packet-intel";
@@ -61,8 +60,9 @@ import { getDeviceNameValidationError, normalizeDeviceName } from "@/lib/devices
 import { getDefaultProvider } from "@/lib/llm/config";
 import { evaluatePolicy } from "@/lib/policy/engine";
 import { protocolSessionManager } from "@/lib/protocol-sessions/manager";
+import { loadPlaywrightChromiumRuntime } from "@/lib/runtime/playwright";
+import { webSessionManager } from "@/lib/web-sessions/manager";
 import { getAdoptionRecord, getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
-import { getDataDir } from "@/lib/state/db";
 import { stateStore } from "@/lib/state/store";
 import { vault } from "@/lib/security/vault";
 import { runShell } from "@/lib/utils/shell";
@@ -76,6 +76,7 @@ import { executeWidgetControl, getWidgetControl } from "@/lib/widgets/controls";
 import { generateAndStoreDeviceWidget } from "@/lib/widgets/generator";
 import { DEVICE_TYPE_VALUES, type DeviceType } from "@/lib/state/types";
 import type {
+  AccessMethod,
   ActionClass,
   Assurance,
   DeviceAutomation,
@@ -174,22 +175,6 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
   return Math.max(min, Math.min(max, Math.floor(parsed)));
 }
 
-const BROWSER_BROWSE_ARTIFACT_RELATIVE_DIR = "artifacts/browser-browse";
-
-function ensureBrowserBrowseArtifactDir(): string {
-  const absoluteDir = path.join(getDataDir(), "artifacts", "browser-browse");
-  mkdirSync(absoluteDir, { recursive: true });
-  return absoluteDir;
-}
-
-function createBrowserBrowseScreenshotArtifact(ext: "jpg" | "png"): { absolutePath: string; relativePath: string } {
-  const dir = ensureBrowserBrowseArtifactDir();
-  const fileName = `${Date.now()}-${randomUUID()}.${ext}`;
-  const absolutePath = path.join(dir, fileName);
-  const relativePath = `${BROWSER_BROWSE_ARTIFACT_RELATIVE_DIR}/${fileName}`;
-  return { absolutePath, relativePath };
-}
-
 function slugifyWidgetKey(value: string): string {
   return value
     .toLowerCase()
@@ -219,19 +204,15 @@ function shellEscapeSingleQuoted(value: string): string {
   return value.replace(/'/g, "'\"'\"'");
 }
 
+function shellEscapeDoubleQuoted(value: string): string {
+  return value.replace(/"/g, '\\"');
+}
+
 function sanitizeSnmpToken(value: string | undefined, fallback: string, pattern: RegExp): string {
   if (typeof value !== "string") return fallback;
   const trimmed = value.trim();
   if (!trimmed) return fallback;
   return pattern.test(trimmed) ? trimmed : fallback;
-}
-
-function normalizeCredentialProtocol(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "windows") return "winrm";
-  if (normalized === "http" || normalized === "https") return "http-api";
-  if (normalized === "mqtts") return "mqtt";
-  return normalized;
 }
 
 function resolveMode(kind: OperationKind, requested?: unknown): OperationMode {
@@ -593,15 +574,8 @@ async function localCommandAvailable(command: string): Promise<boolean> {
 }
 
 async function localPlaywrightAvailable(): Promise<boolean> {
-  try {
-    const moduleName = "playwright";
-    const mod = await import(moduleName);
-    const chromium = (mod as Record<string, unknown>).chromium as { executablePath?: () => string } | undefined;
-    const executable = chromium?.executablePath?.();
-    return typeof executable === "string" && executable.trim().length > 0;
-  } catch {
-    return false;
-  }
+  const chromium = await loadPlaywrightChromiumRuntime();
+  return Boolean(chromium);
 }
 
 function inferAdapterForKind(kind: OperationKind, device: Device): string {
@@ -612,16 +586,30 @@ function inferAdapterForKind(kind: OperationKind, device: Device): string {
   if (kind === "container.restart" || kind === "container.stop") return "docker";
   if (kind === "service.restart" || kind === "service.stop") {
     if (protocols.has("winrm")) return "winrm";
+    if (protocols.has("powershell-ssh")) return "powershell-ssh";
+    if (protocols.has("wmi")) return "wmi";
+    if (protocols.has("ssh")) return "ssh";
+  }
+  if (kind === "file.copy") {
+    if (protocols.has("smb")) return "smb";
     if (protocols.has("ssh")) return "ssh";
   }
   if (kind === "shell.command") {
     if (protocols.has("ssh")) return "ssh";
     if (protocols.has("winrm")) return "winrm";
+    if (protocols.has("powershell-ssh")) return "powershell-ssh";
+    if (protocols.has("wmi")) return "wmi";
+    if (protocols.has("smb")) return "smb";
     if (protocols.has("docker")) return "docker";
     if (protocols.has("snmp")) return "snmp";
   }
   if (protocols.has("ssh")) return "ssh";
   if (protocols.has("winrm")) return "winrm";
+  if (protocols.has("powershell-ssh")) return "powershell-ssh";
+  if (protocols.has("wmi")) return "wmi";
+  if (protocols.has("smb")) return "smb";
+  if (protocols.has("rdp")) return "rdp";
+  if (protocols.has("vnc")) return "vnc";
   if (protocols.has("docker")) return "docker";
   if (protocols.has("mqtt")) return "mqtt";
   if (protocols.has("http-api") || protocols.has("http")) return "http-api";
@@ -635,6 +623,11 @@ const SSH_PORT_PREFERENCE = [22, 2222, 2200];
 const WINRM_PORT_PREFERENCE = [5985, 5986];
 const DOCKER_PORT_PREFERENCE = [2375, 2376];
 const MQTT_PORT_PREFERENCE = [8883, 1883];
+const SHELL_READ_FAILURE_CACHE_TTL_MS = 60_000;
+const shellReadFailureCache = new Map<string, {
+  at: number;
+  result: Record<string, unknown>;
+}>();
 const HTTP_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
 const SSH_OPTIONS_WITH_VALUE = new Set([
   "-b",
@@ -795,17 +788,18 @@ function buildContractSnapshotPayload(deviceId: string): {
 function summarizeCredentialEntry(
   credential: DeviceCredential | Omit<DeviceCredential, "vaultSecretRef">,
 ): Record<string, unknown> {
+  const protocol = normalizeCredentialProtocol(credential.protocol);
   const summary: Record<string, unknown> = {
     id: credential.id,
-    protocol: credential.protocol,
+    protocol,
+    protocolLabel: protocolDisplayLabel(protocol),
     adapterId: credential.adapterId ?? null,
     accountLabel: credential.accountLabel ?? null,
     status: credential.status,
-    lastValidatedAt: credential.lastValidatedAt ?? null,
     updatedAt: credential.updatedAt,
   };
 
-  if (credential.protocol.toLowerCase() === "http-api") {
+  if (protocol === "http-api") {
     const auth = getHttpApiCredentialAuth(credential.scopeJson);
     summary.httpAuthMode = auth.mode;
     summary.httpAuth = describeHttpApiCredentialAuth(credential.scopeJson);
@@ -820,7 +814,7 @@ function summarizeCredentialEntry(
 function credentialUsageHints(
   credential: DeviceCredential | Omit<DeviceCredential, "vaultSecretRef">,
 ): Record<string, unknown> | undefined {
-  if (credential.protocol.toLowerCase() !== "http-api") {
+  if (normalizeCredentialProtocol(credential.protocol) !== "http-api") {
     return undefined;
   }
 
@@ -1082,49 +1076,6 @@ function inferManageableDeviceCategory(device: Device): DeviceType | null {
   return null;
 }
 
-interface PlaywrightChromium {
-  launch: (options: Record<string, unknown>) => Promise<{
-    newContext: (options: Record<string, unknown>) => Promise<{
-      newPage: () => Promise<{
-        on: (event: string, handler: (...args: unknown[]) => void) => void;
-        goto: (url: string, options?: Record<string, unknown>) => Promise<unknown>;
-        click: (selector: string, options?: Record<string, unknown>) => Promise<void>;
-        hover: (selector: string, options?: Record<string, unknown>) => Promise<void>;
-        fill: (selector: string, value: string, options?: Record<string, unknown>) => Promise<void>;
-        press: (selector: string, key: string, options?: Record<string, unknown>) => Promise<void>;
-        check: (selector: string, options?: Record<string, unknown>) => Promise<void>;
-        uncheck: (selector: string, options?: Record<string, unknown>) => Promise<void>;
-        selectOption: (selector: string, values: string | string[], options?: Record<string, unknown>) => Promise<void>;
-        waitForSelector: (selector: string, options?: Record<string, unknown>) => Promise<unknown>;
-        waitForURL: (urlOrRegex: string | RegExp, options?: Record<string, unknown>) => Promise<unknown>;
-        waitForTimeout: (timeout: number) => Promise<void>;
-        title: () => Promise<string>;
-        url: () => string;
-        content: () => Promise<string>;
-        screenshot: (options?: Record<string, unknown>) => Promise<Uint8Array>;
-        evaluate: <T>(fn: (...args: unknown[]) => T, arg?: unknown) => Promise<T>;
-        close: () => Promise<void>;
-      }>;
-      close: () => Promise<void>;
-    }>;
-    close: () => Promise<void>;
-  }>;
-}
-
-async function loadPlaywrightChromium(): Promise<PlaywrightChromium | null> {
-  try {
-    const moduleName = "playwright";
-    const mod = await import(moduleName);
-    const chromium = (mod as Record<string, unknown>).chromium;
-    if (chromium && typeof chromium === "object" && "launch" in chromium) {
-      return chromium as PlaywrightChromium;
-    }
-  } catch {
-    // Playwright may be unavailable in minimal installs.
-  }
-  return null;
-}
-
 async function resolveBrowserCredential(device: Device): Promise<{
   credentialId?: string;
   username?: string;
@@ -1138,7 +1089,7 @@ async function resolveBrowserCredential(device: Device): Promise<{
   if (candidates.length === 0) {
     return {};
   }
-  const priority = ["validated", "provided", "invalid", "pending"] as const;
+  const priority = ["validated", "provided", "pending"] as const;
   const sorted = [...candidates].sort((a, b) => {
     const aPriority = priority.indexOf(a.status as (typeof priority)[number]);
     const bPriority = priority.indexOf(b.status as (typeof priority)[number]);
@@ -1568,6 +1519,39 @@ function normalizeShellReadCommand(
   };
 }
 
+function validateShellReadCommandForAdapter(
+  adapterId: string,
+  command: string,
+): { ok: true } | { ok: false; error: string; hint: string } {
+  const normalized = command.trim().toLowerCase();
+  if (adapterId === "wmi") {
+    const usesRemoteSession = normalized.includes("$session")
+      || normalized.includes("-cimsession")
+      || normalized.includes("-computername")
+      || normalized.includes("invoke-cimmethod");
+    if (!usesRemoteSession) {
+      return {
+        ok: false,
+        error: "WMI is not a general remote shell. The command must explicitly use the injected remote CIM session.",
+        hint: "Use `$session`, `-CimSession`, or `-ComputerName`, for example: `Get-CimInstance -CimSession $session -ClassName Win32_OperatingSystem | Select-Object Caption,Version,LastBootUpTime`.",
+      };
+    }
+  }
+  if (adapterId === "smb") {
+    const shareScoped = normalized.includes("$sharepath")
+      || normalized.includes("$shareroot")
+      || normalized.includes("join-path $sharepath")
+      || normalized.includes("join-path $shareroot");
+    if (!shareScoped) {
+      return {
+        ok: false,
+        error: "SMB is share access only. It cannot execute general Windows commands remotely.",
+        hint: "Use a share-scoped file operation against `$sharePath` or `$shareRoot`, for example: `Get-ChildItem $sharePath | Select-Object -First 20 Name,Length,LastWriteTime`.",
+      };
+    }
+  }
+  return { ok: true };
+}
 function normalizeToolInput(args: ExecuteArgs & Record<string, unknown>): Record<string, unknown> {
   const nested = isRecord(args.input) ? { ...args.input } : {};
   const topLevelEntries = Object.entries(args)
@@ -1644,6 +1628,58 @@ function buildAdapterPackagePayload(
         toolSkillMd: cloneJsonValue(pkg.toolSkillMd),
       }),
   };
+}
+
+function preferredWebAccessMethod(device: Device): AccessMethod | null {
+  return stateStore.getAccessMethods(device.id)
+    .filter((method) => method.kind === "web-session" || method.kind === "http-api")
+    .sort((left, right) => {
+      const statusRank = (value: AccessMethod["status"]) => value === "validated"
+        ? 0
+        : value === "credentialed"
+          ? 1
+          : value === "observed"
+            ? 2
+            : 3;
+      if (statusRank(left.status) !== statusRank(right.status)) {
+        return statusRank(left.status) - statusRank(right.status);
+      }
+      if (left.secure !== right.secure) {
+        return left.secure ? -1 : 1;
+      }
+      const leftIdx = HTTP_PORT_PREFERENCE.indexOf(left.port ?? -1);
+      const rightIdx = HTTP_PORT_PREFERENCE.indexOf(right.port ?? -1);
+      return (leftIdx === -1 ? 999 : leftIdx) - (rightIdx === -1 ? 999 : rightIdx);
+    })[0] ?? null;
+}
+
+function buildDeviceWebUrl(device: Device, method?: AccessMethod | null, pathName = "/"): string {
+  const selected = method ?? preferredWebAccessMethod(device);
+  const secure = selected?.secure ?? true;
+  const port = selected?.port;
+  const normalizedPath = pathName.startsWith("/") ? pathName : `/${pathName}`;
+  return `${secure ? "https" : "http"}://${device.ip}${port ? `:${port}` : ""}${normalizedPath}`;
+}
+
+function inferFallbackMatchedAdapters(device: Device): Array<Record<string, unknown>> {
+  if (isWindowsPlatformDevice(device)) {
+    const type = String(device.type || "").toLowerCase();
+    const name = [device.name, device.hostname, device.os, device.role].filter(Boolean).join(" ").toLowerCase();
+    const isServer = type === "server" || /domain controller|active directory|windows server/.test(name);
+    return [
+      {
+        adapterId: isServer ? "steward.windows-server" : "steward.windows-workstation",
+        profileId: isServer ? "steward.windows-server" : "steward.windows-workstation",
+        name: isServer ? "Windows Server" : "Windows Workstation",
+        kind: "fallback",
+        confidence: 0.55,
+        summary: "Heuristic Windows profile fallback based on device classification and observed services.",
+        requiredAccessMethods: device.protocols.filter((protocol) => ["winrm", "powershell-ssh", "wmi", "smb", "rdp", "vnc"].includes(normalizeCredentialProtocol(protocol))),
+        requiredCredentialProtocols: device.protocols.filter((protocol) => ["winrm", "powershell-ssh", "wmi", "smb", "rdp", "vnc"].includes(normalizeCredentialProtocol(protocol))),
+      },
+    ];
+  }
+  return [];
 }
 
 function upsertAdapterToolSkillInManifest(
@@ -1758,6 +1794,18 @@ function defaultCommandTemplate(
       const authFlag = auth ? ` -Authentication ${auth}` : "";
       return `pwsh -NoLogo -NonInteractive -Command "Invoke-Command -ComputerName {{host}}${portFlag}${useSslFlag}${authFlag} -ScriptBlock { ${command} }"`;
     }
+    if (adapterId === "powershell-ssh") {
+      const command = userCommand || "Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,LastBootUpTime";
+      return `ssh {{host}} \"powershell.exe -NoLogo -NoProfile -NonInteractive -Command \\\"${shellEscapeDoubleQuoted(command)}\\\"\"`;
+    }
+    if (adapterId === "wmi") {
+      const command = userCommand || "Get-CimInstance -CimSession $session -ClassName Win32_OperatingSystem | Select-Object Caption,Version,LastBootUpTime";
+      return `pwsh -NoLogo -NonInteractive -Command \"$session=New-CimSession -ComputerName {{host}}; try { ${shellEscapeDoubleQuoted(command)} } finally { if ($session) { Remove-CimSession $session } }\"`;
+    }
+    if (adapterId === "smb") {
+      const command = userCommand || "Get-ChildItem $sharePath | Select-Object -First 20 Name,Length,LastWriteTime";
+      return `pwsh -NoLogo -NonInteractive -Command \"$sharePath='\\\\{{host}}\\C$'; ${shellEscapeDoubleQuoted(command)}\"`;
+    }
     if (adapterId === "docker") {
       const command = userCommand || "ps --format '{{.Names}} {{.Status}} {{.Image}}'";
       return `docker -H ${dockerHostTarget(device, input)} ${command}`;
@@ -1799,6 +1847,14 @@ function defaultCommandTemplate(
       const auth = winrmAuthenticationPreference(input);
       const authFlag = auth ? ` -Authentication ${auth}` : "";
       return `pwsh -NoLogo -NonInteractive -Command "Invoke-Command -ComputerName {{host}}${portFlag}${useSslFlag}${authFlag} -ScriptBlock { ${verb} -Name '${service}' -ErrorAction Stop }"`;
+    }
+    if (adapterId === "powershell-ssh") {
+      const verb = kind === "service.restart" ? "Restart-Service" : "Stop-Service";
+      return `ssh {{host}} \"powershell.exe -NoLogo -NoProfile -NonInteractive -Command \\\"${verb} -Name '${service}' -ErrorAction Stop\\\"\"`;
+    }
+    if (adapterId === "wmi") {
+      const method = kind === "service.restart" ? "StartService" : "StopService";
+      return `pwsh -NoLogo -NonInteractive -Command \"$session=New-CimSession -ComputerName {{host}}; try { Invoke-CimMethod -CimSession $session -Query 'SELECT * FROM Win32_Service WHERE Name=\\\'${service}\\\'' -MethodName ${method} } finally { if ($session) { Remove-CimSession $session } }\"`;
     }
     const verb = kind === "service.restart" ? "restart" : "stop";
     return `${sshCommandPrefix(device, input)} 'sudo systemctl ${verb} ${shellEscapeSingleQuoted(service)}'`;
@@ -1855,6 +1911,73 @@ function defaultBrokerRequest(
         ...(authentication ? { authentication } : {}),
       };
     }
+  }
+
+  if (adapterId === "powershell-ssh") {
+    const host = inputString(input, "host", "computer_name", "ssh_host");
+    const port = inputPort(input) ?? 22;
+    if (kind === "shell.command") {
+      const command = typeof input.command === "string" && input.command.trim().length > 0
+        ? input.command.trim()
+        : "Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,LastBootUpTime";
+      return {
+        protocol: "powershell-ssh",
+        command,
+        ...(host ? { host } : {}),
+        port,
+      };
+    }
+    if (kind === "service.restart" || kind === "service.stop") {
+      const service = typeof input.service === "string" ? input.service.trim() : "";
+      if (!service) return undefined;
+      return {
+        protocol: "powershell-ssh",
+        command: `${kind === "service.restart" ? "Restart-Service" : "Stop-Service"} -Name '${service}' -ErrorAction Stop`,
+        ...(host ? { host } : {}),
+        port,
+      };
+    }
+  }
+
+  if (adapterId === "wmi") {
+    const host = inputString(input, "host", "computer_name", "wmi_host");
+    if (kind === "shell.command") {
+      const command = typeof input.command === "string" && input.command.trim().length > 0
+        ? input.command.trim()
+        : "Get-CimInstance -CimSession $session -ClassName Win32_OperatingSystem | Select-Object Caption,Version,LastBootUpTime";
+      return {
+        protocol: "wmi",
+        command,
+        ...(host ? { host } : {}),
+      };
+    }
+  }
+
+  if (adapterId === "smb") {
+    const host = inputString(input, "host", "computer_name", "smb_host");
+    const share = inputString(input, "share", "share_name");
+    if (kind === "shell.command") {
+      const command = typeof input.command === "string" && input.command.trim().length > 0
+        ? input.command.trim()
+        : "Get-ChildItem $sharePath | Select-Object -First 20 Name,Length,LastWriteTime";
+      return {
+        protocol: "smb",
+        command,
+        ...(host ? { host } : {}),
+        ...(share ? { share } : {}),
+      };
+    }
+  }
+
+  if (adapterId === "rdp") {
+    const host = inputString(input, "host", "computer_name", "rdp_host");
+    return {
+      protocol: "rdp",
+      ...(host ? { host } : {}),
+      ...(inputPort(input) ? { port: inputPort(input) } : {}),
+      ...(input.admin === true ? { admin: true } : {}),
+      action: input.action === "check" ? "check" : "launch",
+    };
   }
 
   if (kind === "http.request") {
@@ -1929,6 +2052,8 @@ function defaultBrokerRequest(
       ...(body ? { body } : {}),
       insecureSkipVerify,
       ...(expectRegex ? { expectRegex } : {}),
+      ...(inputString(input, "session_id") ? { sessionId: inputString(input, "session_id") } : {}),
+      ...(inputString(input, "session_holder") ? { sessionHolder: inputString(input, "session_holder") } : {}),
     };
   }
 
@@ -2019,7 +2144,7 @@ function defaultBrokerRequest(
     const port = preferredSshPort(device, inputPort(input));
     return {
       protocol: "ssh",
-      argv: ["sh", "-lc", command],
+      command,
       ...(port ? { port } : {}),
     };
   }
@@ -2461,6 +2586,7 @@ export async function buildAdapterSkillTools(
     attachedDeviceId?: string;
     allowPreOnboardingExecution?: boolean;
     includeWidgetManagementTool?: boolean;
+    widgetVerificationMode?: "strict" | "warn-on-connectivity";
     provider?: LLMProvider;
     model?: string;
   },
@@ -2848,13 +2974,13 @@ export async function buildAdapterSkillTools(
   });
 
   tools.steward_shell_read = dynamicTool({
-    description: "Run an investigative read-only command over SSH/WinRM/Docker. Use port for non-default management ports instead of embedding ssh wrappers in the command.",
+    description: "Run an investigative read-only command over supported remote transports such as SSH, WinRM, PowerShell over SSH, WMI, SMB, or Docker. For WMI, the command itself must use `$session` or `-CimSession`; for SMB, only share-scoped file operations using `$sharePath` or `$shareRoot` are valid. Use port for non-default management ports instead of embedding transport wrappers in the command.",
     inputSchema: jsonSchema({
       type: "object",
       properties: {
         device_id: { type: "string", description: "Target device id, name, or IP" },
         command: { type: "string", description: "Read-only command to execute remotely" },
-        protocol: { type: "string", description: "Optional protocol override: ssh, winrm, docker" },
+        protocol: { type: "string", description: "Optional protocol override: ssh, winrm, powershell-ssh, wmi, smb, docker" },
         port: { type: "integer", description: "Optional management port override, such as SSH on 2222." },
       },
       required: ["device_id", "command"],
@@ -2887,11 +3013,34 @@ export async function buildAdapterSkillTools(
       const normalizedShellInput = adapterId === "ssh" || adapterId === "network-ssh" || adapterId === "shell"
         ? normalizeShellReadCommand(command, device)
         : { command };
+      const commandValidation = validateShellReadCommandForAdapter(adapterId, normalizedShellInput.command);
+      if (!commandValidation.ok) {
+        return {
+          ok: false,
+          deviceId: device.id,
+          deviceName: device.name,
+          adapterId,
+          error: commandValidation.error,
+          summary: `${protocolDisplayLabel(adapterId)} shell read needs a protocol-scoped command`,
+          hint: commandValidation.hint,
+        };
+      }
       const port = coercePort(args.port) ?? normalizedShellInput.port;
       const shellInput = {
         command: normalizedShellInput.command,
         ...(port ? { port } : {}),
       };
+      const shellCacheKey = [device.id, adapterId, shellInput.command, String(port ?? "")].join("::");
+      const cachedFailure = shellReadFailureCache.get(shellCacheKey);
+      if (cachedFailure && Date.now() - cachedFailure.at < SHELL_READ_FAILURE_CACHE_TTL_MS) {
+        return {
+          ...cachedFailure.result,
+          cached: true,
+          summary: typeof cachedFailure.result.summary === "string"
+            ? `${cachedFailure.result.summary} (cached identical failure)`
+            : "Cached identical shell read failure",
+        };
+      }
       const commandTemplate = defaultCommandTemplate("shell.command", adapterId, shellInput, device);
       if (!commandTemplate) {
         return { ok: false, error: `Cannot build command template for adapter ${adapterId}.` };
@@ -2939,7 +3088,7 @@ export async function buildAdapterSkillTools(
         params: {},
       });
 
-      return {
+      const result = {
         ok: execution.ok,
         deviceId: device.id,
         deviceName: device.name,
@@ -2949,6 +3098,15 @@ export async function buildAdapterSkillTools(
         output: execution.output,
         gates: execution.gateResults,
       };
+      if (!execution.ok) {
+        shellReadFailureCache.set(shellCacheKey, {
+          at: Date.now(),
+          result,
+        });
+      } else {
+        shellReadFailureCache.delete(shellCacheKey);
+      }
+      return result;
     },
   });
 
@@ -3268,7 +3426,7 @@ export async function buildAdapterSkillTools(
       type: "object",
       properties: {
         device_id: { type: "string", description: "Optional target device id, name, or IP." },
-        protocol: { type: "string", enum: ["mqtt", "websocket"], description: "Optional session protocol filter." },
+        protocol: { type: "string", enum: ["mqtt", "websocket", "web-session"], description: "Optional session protocol filter." },
         status: { type: "string", enum: ["idle", "connecting", "connected", "blocked", "error", "stopped"], description: "Optional session status filter." },
       },
       additionalProperties: false,
@@ -3282,7 +3440,7 @@ export async function buildAdapterSkillTools(
         ok: true,
         sessions: protocolSessionManager.listSessions({
           ...(device ? { deviceId: device.id } : {}),
-          ...(args.protocol === "mqtt" || args.protocol === "websocket" ? { protocol: args.protocol } : {}),
+          ...(args.protocol === "mqtt" || args.protocol === "websocket" || args.protocol === "web-session" ? { protocol: args.protocol } : {}),
           ...(args.status === "idle" || args.status === "connecting" || args.status === "connected" || args.status === "blocked" || args.status === "error" || args.status === "stopped" ? { status: args.status } : {}),
         }),
       };
@@ -3338,7 +3496,7 @@ export async function buildAdapterSkillTools(
       const credentials = stateStore.getDeviceCredentials(device.id)
         .filter((credential) => credential.protocol === "mqtt")
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-      const credential = credentials.find((entry) => entry.status === "validated" || entry.status === "provided") ?? credentials[0];
+      const credential = credentials.find((entry) => entry.status === "provided" || entry.status === "pending") ?? credentials[0];
       try {
         const session = await protocolSessionManager.openPersistentMqttSession({
           device,
@@ -3433,6 +3591,238 @@ export async function buildAdapterSkillTools(
         ok: true,
         lease,
         session: protocolSessionManager.getSession(sessionId),
+      };
+    },
+  });
+
+  tools.steward_open_web_session = dynamicTool({
+    description: "Open or refresh a persistent managed browser session for a web-managed device so Steward can reuse authenticated state across turns.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        device_id: { type: "string", description: "Target device id, name, or IP." },
+        url: { type: "string", description: "Absolute login or landing URL." },
+        username: { type: "string", description: "Optional username override." },
+        password: { type: "string", description: "Optional password override." },
+        use_stored_credentials: { type: "boolean", description: "Use stored http-api credentials when available." },
+        username_selector: { type: "string", description: "Optional CSS selector for username field." },
+        password_selector: { type: "string", description: "Optional CSS selector for password field." },
+        submit_selector: { type: "string", description: "Optional CSS selector for submit button." },
+        wait_for_selector: { type: "string", description: "Optional selector expected after successful auth." },
+        post_login_wait_ms: { type: "integer", description: "Optional wait after submit." },
+        session_id: { type: "string", description: "Optional existing managed web session id." },
+        reuse_session: { type: "boolean", description: "Reuse a compatible session when available." },
+        reset_session: { type: "boolean", description: "Discard persisted browser state and start fresh." },
+      },
+      required: ["device_id", "url"],
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const targetUrl = inputString(args, "url");
+      if (!targetUrl) {
+        return { ok: false, error: "url is required." };
+      }
+      const device = await resolveDeviceByTarget(inputString(args, "device_id"), options?.attachedDeviceId);
+      if (!device) {
+        return { ok: false, error: "Valid device_id is required." };
+      }
+      const useStoredCredentials = args.use_stored_credentials !== false;
+      const providedUsername = inputString(args, "username");
+      const providedPassword = inputString(args, "password");
+      const stored = useStoredCredentials ? await resolveBrowserCredential(device) : {};
+      if (!providedUsername && !providedPassword && stored.unsupportedAuthMode) {
+        return {
+          ok: false,
+          error: `Browser automation cannot apply stored ${httpApiCredentialAuthLabel(stored.unsupportedAuthMode)} credentials. Use broker-backed HTTP/API tools instead.`,
+          deviceId: device.id,
+          deviceName: device.name,
+          credentialId: stored.credentialId,
+        };
+      }
+      return webSessionManager.runBrowserFlow({
+        url: targetUrl,
+        device,
+        sessionId: inputString(args, "session_id"),
+        username: providedUsername ?? stored.username,
+        password: providedPassword ?? stored.password,
+        credentialId: stored.credentialId,
+        usernameSelector: inputString(args, "username_selector"),
+        passwordSelector: inputString(args, "password_selector"),
+        submitSelector: inputString(args, "submit_selector"),
+        waitForSelector: inputString(args, "wait_for_selector"),
+        postLoginWaitMs: clampInt(args.post_login_wait_ms, 0, 60_000, 1_000),
+        collectDiagnostics: true,
+        includeHtml: false,
+        persistSession: true,
+        reuseSession: inputBoolean(args, "reuse_session") !== false,
+        resetSession: inputBoolean(args, "reset_session") === true,
+        markCredentialValidated: true,
+        actor: "steward",
+      });
+    },
+  });
+
+  tools.steward_list_web_flows = dynamicTool({
+    description: "List reusable adapter-defined web flows that Steward can run against a device's web UI.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        device_id: { type: "string", description: "Target device id, name, or IP." },
+      },
+      required: ["device_id"],
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const device = await resolveDeviceByTarget(inputString(args, "device_id"), options?.attachedDeviceId);
+      if (!device) {
+        return { ok: false, error: "Valid device_id is required." };
+      }
+      const flows = await adapterRegistry.getDeviceWebFlows(device);
+      return {
+        ok: true,
+        deviceId: device.id,
+        deviceName: device.name,
+        flows: flows.map((entry) => ({
+          adapterId: entry.adapterId,
+          adapterName: entry.adapterName,
+          flowId: entry.flow.id,
+          name: entry.flow.name,
+          description: entry.flow.description,
+          startUrl: entry.flow.startUrl,
+          requiresAuth: entry.flow.requiresAuth === true,
+          confidence: entry.profileMatch?.confidence ?? null,
+          kind: entry.profileMatch?.kind ?? null,
+        })),
+      };
+    },
+  });
+
+  tools.steward_execute_web_flow = dynamicTool({
+    description: "Execute the best adapter-defined web flow for a device, reusing a managed web session whenever possible.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        device_id: { type: "string", description: "Target device id, name, or IP." },
+        flow_id: { type: "string", description: "Optional explicit flow id." },
+        adapter_id: { type: "string", description: "Optional adapter id to narrow matching flows." },
+        intent: { type: "string", description: "Optional task intent, such as status, reports, alerts, backups, or settings." },
+        reset_session: { type: "boolean", description: "Ignore persisted browser state and start fresh." },
+        include_html: { type: "boolean", description: "Include final HTML preview in the result." },
+      },
+      required: ["device_id"],
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const device = await resolveDeviceByTarget(inputString(args, "device_id"), options?.attachedDeviceId);
+      if (!device) {
+        return { ok: false, error: "Valid device_id is required." };
+      }
+      const intent = inputString(args, "intent")?.toLowerCase();
+      const flowId = inputString(args, "flow_id");
+      const adapterId = inputString(args, "adapter_id");
+      const flows = (await adapterRegistry.getDeviceWebFlows(device))
+        .filter((entry) => !adapterId || entry.adapterId === adapterId)
+        .filter((entry) => !flowId || entry.flow.id === flowId);
+      if (flows.length === 0) {
+        return {
+          ok: false,
+          error: `No adapter-defined web flows are available for ${device.name}.`,
+          deviceId: device.id,
+          deviceName: device.name,
+        };
+      }
+
+      const score = (entry: Awaited<ReturnType<typeof adapterRegistry.getDeviceWebFlows>>[number]): number => {
+        let total = (entry.profileMatch?.confidence ?? 0.35) * 100;
+        if ((entry.profileMatch?.kind ?? "supporting") === "primary") total += 40;
+        if ((entry.profileMatch?.kind ?? "supporting") === "fallback") total += 20;
+        if (intent) {
+          const text = `${entry.flow.id} ${entry.flow.name} ${entry.flow.description}`.toLowerCase();
+          if (text.includes(intent)) total += 50;
+          if (intent.includes("status") && /home|status|dashboard/.test(text)) total += 30;
+          if (intent.includes("report") && /report|history/.test(text)) total += 30;
+          if (intent.includes("backup") && /backup|restore/.test(text)) total += 30;
+          if (intent.includes("setting") && /setting|config|admin/.test(text)) total += 30;
+        }
+        return total;
+      };
+
+      const selected = [...flows].sort((left, right) => score(right) - score(left))[0];
+      const method = preferredWebAccessMethod(device);
+      const startUrl = /^https?:\/\//i.test(selected.flow.startUrl)
+        ? selected.flow.startUrl
+        : buildDeviceWebUrl(device, method, selected.flow.startUrl);
+      const stored = await resolveBrowserCredential(device);
+      const waitForSelector = selected.flow.successAssertions?.find((assertion) => assertion.selector)?.selector;
+      const result = await webSessionManager.runBrowserFlow({
+        url: startUrl,
+        device,
+        username: stored.username,
+        password: stored.password,
+        credentialId: stored.credentialId,
+        usernameSelector: selected.flow.usernameSelector,
+        passwordSelector: selected.flow.passwordSelector,
+        submitSelector: selected.flow.submitSelector,
+        waitForSelector,
+        postLoginWaitMs: selected.flow.postLoginWaitMs,
+        collectDiagnostics: true,
+        includeHtml: inputBoolean(args, "include_html") === true,
+        steps: selected.flow.steps.map((step) => ({
+          action: step.action,
+          selector: step.selector,
+          value: step.value,
+          url: step.url,
+          script: step.script,
+          label: step.label,
+          timeout_ms: step.timeoutMs,
+        })),
+        persistSession: true,
+        reuseSession: true,
+        resetSession: inputBoolean(args, "reset_session") === true,
+        markCredentialValidated: true,
+        actor: "steward",
+      });
+      if (!result.ok) {
+        return {
+          ...result,
+          adapterId: selected.adapterId,
+          flowId: selected.flow.id,
+          flowName: selected.flow.name,
+        };
+      }
+
+      const finalUrl = typeof result.finalUrl === "string" ? result.finalUrl : "";
+      const preview = typeof result.contentPreview === "string" ? result.contentPreview.toLowerCase() : "";
+      for (const assertion of selected.flow.successAssertions ?? []) {
+        if (assertion.urlIncludes && !finalUrl.includes(assertion.urlIncludes)) {
+          return {
+            ok: false,
+            error: `Web flow ${selected.flow.id} did not satisfy URL assertion ${assertion.urlIncludes}.`,
+            adapterId: selected.adapterId,
+            flowId: selected.flow.id,
+            result,
+          };
+        }
+        if (assertion.textIncludes && !preview.includes(assertion.textIncludes.toLowerCase())) {
+          return {
+            ok: false,
+            error: `Web flow ${selected.flow.id} did not satisfy text assertion ${assertion.textIncludes}.`,
+            adapterId: selected.adapterId,
+            flowId: selected.flow.id,
+            result,
+          };
+        }
+      }
+
+      return {
+        ...result,
+        adapterId: selected.adapterId,
+        adapterName: selected.adapterName,
+        flowId: selected.flow.id,
+        flowName: selected.flow.name,
       };
     },
   });
@@ -3900,6 +4290,10 @@ export async function buildAdapterSkillTools(
     inputSchema: jsonSchema({
       type: "object",
       properties: {
+        device_id: {
+          type: "string",
+          description: "Optional device id, name, or IP. When provided, Steward returns device-scoped matched adapters first instead of a generic package list.",
+        },
         query: {
           type: "string",
           description: "Optional free-text filter matched against adapter id, name, description, author, and skill names.",
@@ -3923,13 +4317,20 @@ export async function buildAdapterSkillTools(
     execute: async (argsUnknown: unknown) => {
       const args = isRecord(argsUnknown) ? argsUnknown : {};
       await adapterRegistry.initialize();
+      const device = await resolveDeviceByTarget(
+        inputString(args, "device_id"),
+        options?.attachedDeviceId,
+      );
       const query = inputString(args, "query")?.toLowerCase();
       const provides = (inputStringArray(args, "provides") ?? []).map((value) => value.toLowerCase());
       const enabledOnly = inputBoolean(args, "enabled_only") === true;
       const toolQuery = inputString(args, "tool_query")?.toLowerCase();
 
-      const records = adapterRegistry.getAdapterRecords().filter((record) => {
+      let records = adapterRegistry.getAdapterRecords().filter((record) => {
         if (enabledOnly && !record.enabled) {
+          return false;
+        }
+        if (device && !record.provides.includes("profile")) {
           return false;
         }
         if (provides.length > 0 && !provides.every((capability) => record.provides.some((provided) => provided === capability))) {
@@ -3964,10 +4365,57 @@ export async function buildAdapterSkillTools(
         return true;
       });
 
+      let matchedAdapters: Array<Record<string, unknown>> = [];
+      if (device) {
+        const matches = await adapterRegistry.getDeviceProfileMatches(device);
+        const matchedIds = new Set(matches.map((match) => match.adapterId));
+        matchedAdapters = matches.map((match) => ({
+          adapterId: match.adapterId,
+          profileId: match.profileId ?? null,
+          name: match.name,
+          kind: match.kind ?? "primary",
+          confidence: match.confidence ?? null,
+          summary: match.summary ?? null,
+          requiredAccessMethods: match.requiredAccessMethods ?? [],
+          requiredCredentialProtocols: match.requiredCredentialProtocols ?? [],
+        }));
+        if (matchedAdapters.length === 0) {
+          matchedAdapters = inferFallbackMatchedAdapters(device);
+          for (const match of matchedAdapters) {
+            if (typeof match.adapterId === "string") {
+              matchedIds.add(match.adapterId);
+            }
+          }
+        }
+        if (matchedIds.size > 0) {
+          records = records.filter((record) => matchedIds.has(record.id));
+        }
+      }
+
+      const scopedAdapters = device
+        ? matchedAdapters.map((match) => {
+          const record = records.find((candidate) => candidate.id === match.adapterId);
+          return record ? summarizeAdapterRecord(record) : {
+            id: match.adapterId,
+            name: match.name,
+            description: match.summary,
+            provides: ["profile"],
+          };
+        })
+        : records.map((record) => summarizeAdapterRecord(record));
+
       return {
         ok: true,
-        count: records.length,
-        adapters: records.map((record) => summarizeAdapterRecord(record)),
+        ...(device
+          ? {
+            deviceId: device.id,
+            deviceName: device.name,
+            matchedAdapterCount: matchedAdapters.length,
+            matchedAdapters,
+          }
+          : {}),
+        count: device ? matchedAdapters.length : records.length,
+        adapters: scopedAdapters,
       };
     },
   });
@@ -5141,6 +5589,113 @@ export async function buildAdapterSkillTools(
     },
   });
 
+  tools.steward_remote_desktop = dynamicTool({
+    description: "Open RDP or VNC desktops inside Steward, capture snapshots, and execute atomic remote desktop actions.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        device_id: {
+          type: "string",
+          description: "Target device id, name, or IP. Optional when chat is attached to a device.",
+        },
+        protocol: {
+          type: "string",
+          enum: ["rdp", "vnc"],
+          description: "Optional remote desktop protocol override.",
+        },
+        credential_id: {
+          type: "string",
+          description: "Optional stored credential id to force for the desktop session.",
+        },
+        mode: {
+          type: "string",
+          enum: ["observe", "command"],
+          description: "Observe opens the session read-only. Command allows control.",
+        },
+        keep_session_open: {
+          type: "boolean",
+          description: "Keep the governed session lease open after the flow completes.",
+        },
+        steps: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              action: {
+                type: "string",
+                enum: ["snapshot", "click", "double_click", "drag", "scroll", "type", "key", "wait"],
+              },
+              label: { type: "string" },
+              x: { type: "integer" },
+              y: { type: "integer" },
+              from_x: { type: "integer" },
+              from_y: { type: "integer" },
+              to_x: { type: "integer" },
+              to_y: { type: "integer" },
+              text: { type: "string" },
+              key: { type: "string" },
+              direction: { type: "string", enum: ["up", "down"] },
+              amount: { type: "integer" },
+              duration_ms: { type: "integer" },
+              timeout_ms: { type: "integer" },
+            },
+            required: ["action"],
+            additionalProperties: false,
+          },
+        },
+      },
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const device = await resolveDeviceByTarget(inputString(args, "device_id"), options?.attachedDeviceId);
+      if (!device) {
+        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+      }
+
+      const readiness = validateDeviceReadyForToolUse(device, {
+        allowPreOnboardingExecution: options?.allowPreOnboardingExecution,
+      });
+      if (!readiness.ok) {
+        return { ok: false, error: readiness.reason, deviceId: device.id };
+      }
+
+      const protocol = (() => {
+        const raw = inputString(args, "protocol");
+        if (raw === "rdp" || raw === "vnc") {
+          return raw;
+        }
+        return undefined;
+      })();
+      const rawSteps = Array.isArray(args.steps) ? args.steps.filter(isRecord) : [];
+      return runRemoteDesktopFlow({
+        device,
+        protocol,
+        credentialId: inputString(args, "credential_id"),
+        holder: "user:" + device.id + ":remote-desktop",
+        purpose: "Assistant remote desktop flow for " + device.name,
+        mode: inputString(args, "mode") === "observe" ? "observe" : "command",
+        keepSessionOpen: inputBoolean(args, "keep_session_open") === true,
+        steps: rawSteps as Array<{
+          action: "snapshot" | "click" | "double_click" | "drag" | "scroll" | "type" | "key" | "wait";
+          label?: string;
+          x?: number;
+          y?: number;
+          from_x?: number;
+          from_y?: number;
+          to_x?: number;
+          to_y?: number;
+          text?: string;
+          key?: string;
+          direction?: "up" | "down";
+          amount?: number;
+          duration_ms?: number;
+          timeout_ms?: number;
+        }>,
+      });
+    },
+  });
+
   tools.steward_browser_browse = dynamicTool({
     description: "Browse web UIs with Playwright as a first-class tool for login, navigation, diagnostics, and interactive changes.",
     inputSchema: jsonSchema({
@@ -5197,6 +5752,22 @@ export async function buildAdapterSkillTools(
         mark_credential_validated: {
           type: "boolean",
           description: "When true, mark the stored credential validated after successful browser-authenticated access.",
+        },
+        session_id: {
+          type: "string",
+          description: "Optional managed web session id to reuse.",
+        },
+        persist_session: {
+          type: "boolean",
+          description: "Persist authenticated browser state for reuse across turns.",
+        },
+        reuse_session: {
+          type: "boolean",
+          description: "Reuse a compatible managed web session when one exists.",
+        },
+        reset_session: {
+          type: "boolean",
+          description: "Ignore any persisted browser state and start a fresh login flow.",
         },
         steps: {
           type: "array",
@@ -5257,14 +5828,6 @@ export async function buildAdapterSkillTools(
       const device = await resolveDeviceByTarget(inputString(args, "device_id"), options?.attachedDeviceId);
       const useStoredCredentials = args.use_stored_credentials !== false;
       const markCredentialValidated = args.mark_credential_validated !== false;
-      const chromium = await loadPlaywrightChromium();
-      if (!chromium) {
-        return {
-          ok: false,
-          error: "Playwright is not available on this Steward host.",
-        };
-      }
-
       const timeoutMs = clampInt(args.post_login_wait_ms, 0, 60_000, 1_000);
       const providedUsername = inputString(args, "username");
       const providedPassword = inputString(args, "password");
@@ -5291,322 +5854,37 @@ export async function buildAdapterSkillTools(
       const collectDiagnostics = inputBoolean(args, "collect_diagnostics") !== false;
       const includeHtml = inputBoolean(args, "include_html") === true;
       const rawSteps = Array.isArray(args.steps) ? args.steps.filter(isRecord) : [];
-
-      let browser: Awaited<ReturnType<PlaywrightChromium["launch"]>> | null = null;
-      let context: Awaited<ReturnType<Awaited<ReturnType<PlaywrightChromium["launch"]>>["newContext"]>> | null = null;
-      let page: Awaited<ReturnType<Awaited<ReturnType<Awaited<ReturnType<PlaywrightChromium["launch"]>>["newContext"]>>["newPage"]>> | null = null;
-      try {
-        browser = await chromium.launch({ headless: true });
-        context = await browser.newContext({
-          ignoreHTTPSErrors: true,
-        });
-        page = await context.newPage();
-
-        const consoleErrors: string[] = [];
-        const requestFailures: string[] = [];
-        const pageErrors: string[] = [];
-        const stepResults: Array<Record<string, unknown>> = [];
-        if (collectDiagnostics) {
-          page.on("console", (...args) => {
-            const message = args[0] as { type?: () => string; text?: () => string } | undefined;
-            const type = message?.type?.() ?? "log";
-            const text = message?.text?.() ?? "";
-            if ((type === "error" || type === "warning") && text.trim().length > 0) {
-              consoleErrors.push(`${type}: ${text.trim()}`);
-            }
-          });
-          page.on("requestfailed", (...args) => {
-            const request = args[0] as {
-              method?: () => string;
-              url?: () => string;
-              failure?: () => { errorText?: string } | null;
-            } | undefined;
-            const method = request?.method?.() ?? "REQUEST";
-            const url = request?.url?.() ?? "unknown-url";
-            const failure = request?.failure?.()?.errorText ?? "request failed";
-            requestFailures.push(`${method} ${url} :: ${failure}`);
-          });
-          page.on("pageerror", (...args) => {
-            const err = args[0];
-            const text = err instanceof Error ? err.message : String(err);
-            if (text.trim().length > 0) {
-              pageErrors.push(text.trim());
-            }
-          });
-        }
-
-        await page.goto(parsedUrl.toString(), { waitUntil: "domcontentloaded", timeout: 30_000 });
-
-        let usedStoredCredential = false;
-        if (usernameSelector && passwordSelector && username && password) {
-          await page.fill(usernameSelector, username, { timeout: 15_000 });
-          await page.fill(passwordSelector, password, { timeout: 15_000 });
-          if (submitSelector) {
-            await page.click(submitSelector, { timeout: 15_000 });
-          } else {
-            await page.press(passwordSelector, "Enter", { timeout: 15_000 });
-          }
-          if (timeoutMs > 0) {
-            await page.waitForTimeout(timeoutMs);
-          }
-          usedStoredCredential = Boolean(stored.credentialId) && !providedPassword;
-        }
-
-        for (const step of rawSteps) {
-          const action = typeof step.action === "string" ? step.action : "";
-          const selector = typeof step.selector === "string" ? step.selector : "";
-          const value = typeof step.value === "string" ? step.value : "";
-          const url = typeof step.url === "string" ? step.url : "";
-          const script = typeof step.script === "string" ? step.script : "";
-          const label = typeof step.label === "string" ? step.label : undefined;
-          const screenshotPath = typeof step.path === "string" ? step.path : undefined;
-          const fullPage = typeof step.full_page === "boolean" ? step.full_page : false;
-          const stepTimeout = clampInt(step.timeout_ms, 200, 120_000, 15_000);
-          try {
-            if (action === "goto") {
-              const destination = url || value;
-              if (!destination) {
-                throw new Error("goto requires url or value");
-              }
-              await page.goto(destination, { waitUntil: "domcontentloaded", timeout: stepTimeout });
-              stepResults.push({ action, label, ok: true, url: page.url() });
-            } else if (action === "click") {
-              if (!selector) throw new Error("click requires selector");
-              await page.click(selector, { timeout: stepTimeout });
-              stepResults.push({ action, label, ok: true, selector });
-            } else if (action === "hover") {
-              if (!selector) throw new Error("hover requires selector");
-              await page.hover(selector, { timeout: stepTimeout });
-              stepResults.push({ action, label, ok: true, selector });
-            } else if (action === "fill") {
-              if (!selector) throw new Error("fill requires selector");
-              await page.fill(selector, value, { timeout: stepTimeout });
-              stepResults.push({ action, label, ok: true, selector });
-            } else if (action === "press") {
-              if (!selector) throw new Error("press requires selector");
-              await page.press(selector, value || "Enter", { timeout: stepTimeout });
-              stepResults.push({ action, label, ok: true, selector, key: value || "Enter" });
-            } else if (action === "check") {
-              if (!selector) throw new Error("check requires selector");
-              await page.check(selector, { timeout: stepTimeout });
-              stepResults.push({ action, label, ok: true, selector });
-            } else if (action === "uncheck") {
-              if (!selector) throw new Error("uncheck requires selector");
-              await page.uncheck(selector, { timeout: stepTimeout });
-              stepResults.push({ action, label, ok: true, selector });
-            } else if (action === "select") {
-              if (!selector) throw new Error("select requires selector");
-              const values = value.includes("|")
-                ? value.split("|").map((item) => item.trim()).filter(Boolean)
-                : value;
-              await page.selectOption(selector, values, { timeout: stepTimeout });
-              stepResults.push({ action, label, ok: true, selector, value });
-            } else if (action === "wait_for_selector") {
-              if (!selector) throw new Error("wait_for_selector requires selector");
-              await page.waitForSelector(selector, { timeout: stepTimeout });
-              stepResults.push({ action, label, ok: true, selector });
-            } else if (action === "wait_for_url") {
-              const destination = url || value;
-              if (!destination) throw new Error("wait_for_url requires url or value");
-              await page.waitForURL(destination, { timeout: stepTimeout });
-              stepResults.push({ action, label, ok: true, url: page.url() });
-            } else if (action === "wait_for_timeout") {
-              const waitMs = clampInt(step.timeout_ms, 0, 120_000, 1_000);
-              await page.waitForTimeout(waitMs);
-              stepResults.push({ action, label, ok: true, waitMs });
-            } else if (action === "extract_text") {
-              const extracted = await page.evaluate((args) => {
-                const s = typeof args === "object" && args !== null && "selector" in args
-                  ? String((args as Record<string, unknown>).selector ?? "")
-                  : "";
-                if (!s) {
-                  return document.body?.innerText ?? "";
-                }
-                const element = document.querySelector(s);
-                return element?.textContent ?? "";
-              }, { selector });
-              stepResults.push({ action, label, ok: true, selector: selector || "body", text: String(extracted).trim().slice(0, 2_000) });
-            } else if (action === "extract_html") {
-              const extracted = await page.evaluate((args) => {
-                const s = typeof args === "object" && args !== null && "selector" in args
-                  ? String((args as Record<string, unknown>).selector ?? "")
-                  : "";
-                if (!s) {
-                  return document.documentElement?.outerHTML ?? "";
-                }
-                const element = document.querySelector(s);
-                return element?.outerHTML ?? "";
-              }, { selector });
-              stepResults.push({ action, label, ok: true, selector: selector || "html", htmlPreview: String(extracted).trim().slice(0, 2_000) });
-            } else if (action === "expect_text") {
-              if (!value) throw new Error("expect_text requires value");
-              const matched = await page.evaluate((args) => {
-                const input = args as Record<string, unknown>;
-                const selectorValue = typeof input.selector === "string" ? input.selector : "";
-                const expected = typeof input.expected === "string" ? input.expected : "";
-                const text = selectorValue
-                  ? (document.querySelector(selectorValue)?.textContent ?? "")
-                  : (document.body?.innerText ?? "");
-                return text.includes(expected);
-              }, { selector, expected: value });
-              if (!matched) {
-                throw new Error(`Expected text not found: ${value}`);
-              }
-              stepResults.push({ action, label, ok: true, selector: selector || "body", expected: value });
-            } else if (action === "evaluate") {
-              if (!script) throw new Error("evaluate requires script");
-              const evalResult = await page.evaluate(async (source) => {
-                const attempts = [
-                  () => new Function(`return (${source});`)(),
-                  () => new Function(`return (async () => (${source}))();`)(),
-                  () => new Function(`return (async () => {${source}\n})();`)(),
-                ];
-
-                let lastError = "Unknown evaluate failure.";
-                for (const attempt of attempts) {
-                  try {
-                    const executable = attempt();
-                    if (typeof executable === "function") {
-                      return await executable();
-                    }
-                    return await executable;
-                  } catch (error) {
-                    lastError = error instanceof Error ? error.message : String(error);
-                  }
-                }
-
-                throw new Error(lastError);
-              }, script);
-              stepResults.push({
-                action,
-                label,
-                ok: true,
-                result: typeof evalResult === "string"
-                  ? evalResult.slice(0, 2_000)
-                  : JSON.stringify(evalResult ?? null)?.slice(0, 2_000) ?? "null",
-              });
-            } else if (action === "screenshot") {
-              const inlineArtifact = screenshotPath
-                ? undefined
-                : createBrowserBrowseScreenshotArtifact(fullPage ? "png" : "jpg");
-              const targetPath = screenshotPath ?? inlineArtifact?.absolutePath;
-              const shot = await page.screenshot(
-                targetPath
-                  ? {
-                    path: targetPath,
-                    fullPage,
-                  }
-                  : {
-                    fullPage,
-                    type: "jpeg",
-                    quality: 65,
-                  },
-              );
-              stepResults.push({
-                action,
-                label,
-                ok: true,
-                ...(inlineArtifact
-                  ? {
-                    path: inlineArtifact.relativePath,
-                    mimeType: fullPage ? "image/png" : "image/jpeg",
-                  }
-                  : screenshotPath
-                    ? { path: screenshotPath }
-                    : {
-                      screenshotBase64: Buffer.from(shot).toString("base64"),
-                      mimeType: "image/jpeg",
-                    }),
-                bytes: shot.byteLength,
-              });
-            } else {
-              throw new Error(`Unsupported step action: ${action}`);
-            }
-          } catch (stepError) {
-            const message = stepError instanceof Error ? stepError.message : String(stepError);
-            throw new Error(`Browser step failed (${action || "unknown"}${label ? `:${label}` : ""}): ${message}`);
-          }
-        }
-
-        if (waitForSelector) {
-          await page.waitForSelector(waitForSelector, { timeout: 15_000 });
-        }
-
-        const finalUrl = page.url();
-        const title = await page.title();
-        const text = await page.evaluate(() => document.body?.innerText ?? "");
-        const contentPreview = text.trim().replace(/\s+/g, " ").slice(0, 1_200);
-        const htmlPreview = includeHtml
-          ? (await page.content()).slice(0, 6_000)
-          : undefined;
-
-        if (device && usedStoredCredential && markCredentialValidated && stored.credentialId) {
-          await markCredentialValidatedFromUse({
-            deviceId: device.id,
-            credentialId: stored.credentialId,
-            actor: "user",
-            method: "playwright.browser",
-            details: {
-              url: parsedUrl.toString(),
-              finalUrl,
-              title,
-            },
-          });
-        }
-
-        return {
-          ok: true,
-          deviceId: device?.id,
-          deviceName: device?.name,
-          url: parsedUrl.toString(),
-          finalUrl,
-          title,
-          usedStoredCredential,
-          credentialId: usedStoredCredential ? stored.credentialId : undefined,
-          contentPreview,
-          htmlPreview,
-          stepsExecuted: stepResults.length,
-          stepResults,
-          diagnostics: collectDiagnostics
-            ? {
-              consoleErrors: consoleErrors.slice(0, 40),
-              requestFailures: requestFailures.slice(0, 40),
-              pageErrors: pageErrors.slice(0, 20),
-            }
-            : undefined,
-        };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return {
-          ok: false,
-          error: `Playwright browser flow failed: ${message}`,
-          url: parsedUrl.toString(),
-          deviceId: device?.id,
-          deviceName: device?.name,
-        };
-      } finally {
-        if (page) {
-          try {
-            await page.close();
-          } catch {
-            // ignore
-          }
-        }
-        if (context) {
-          try {
-            await context.close();
-          } catch {
-            // ignore
-          }
-        }
-        if (browser) {
-          try {
-            await browser.close();
-          } catch {
-            // ignore
-          }
-        }
-      }
+      return webSessionManager.runBrowserFlow({
+        url: parsedUrl.toString(),
+        device: device ?? undefined,
+        sessionId: inputString(args, "session_id"),
+        username,
+        password,
+        credentialId: stored.credentialId,
+        usernameSelector,
+        passwordSelector,
+        submitSelector,
+        waitForSelector,
+        postLoginWaitMs: timeoutMs,
+        collectDiagnostics,
+        includeHtml,
+        steps: rawSteps as Array<{
+          action: string;
+          selector?: string;
+          value?: string;
+          url?: string;
+          script?: string;
+          label?: string;
+          full_page?: boolean;
+          path?: string;
+          timeout_ms?: number;
+        }>,
+        persistSession: inputBoolean(args, "persist_session") ?? Boolean(device),
+        reuseSession: inputBoolean(args, "reuse_session") !== false,
+        resetSession: inputBoolean(args, "reset_session") === true,
+        markCredentialValidated,
+        actor: "user",
+      });
     },
   });
 
@@ -5909,7 +6187,7 @@ export async function buildAdapterSkillTools(
         },
         validate_now: {
           type: "boolean",
-          description: "Validate immediately after storing or updating when true.",
+          description: "Legacy compatibility flag. Steward now trusts manually entered credentials and does not perform active validation here.",
         },
         http_auth_mode: {
           type: "string",
@@ -5994,7 +6272,7 @@ export async function buildAdapterSkillTools(
           }
         }
 
-        let credential = await storeDeviceCredential({
+        const credential = await storeDeviceCredential({
           deviceId: device.id,
           protocol,
           secret,
@@ -6003,14 +6281,9 @@ export async function buildAdapterSkillTools(
           scopeJson,
         });
 
-        if (inputBoolean(args, "validate_now") === true) {
-          credential = await validateDeviceCredential(device.id, credential.id);
-        }
-
         const redacted = redactDeviceCredential(credential);
-        const validationSummary = inputBoolean(args, "validate_now") === true && credential.protocol === "http-api" && credential.status !== "validated"
-          ? `Stored ${protocol} credential for ${device.name}. Generic network validation is not available for http-api credentials, so Steward kept it at ${credential.status}.`
-          : `Stored ${protocol} credential for ${device.name}.`;
+        const protocolLabel = protocolDisplayLabel(redacted.protocol);
+        const validationSummary = `Stored ${protocolLabel} credential for ${device.name}. Steward trusts manually entered credentials and will verify the transport during real operations.`;
         return {
           ok: true,
           deviceId: device.id,
@@ -6041,9 +6314,8 @@ export async function buildAdapterSkillTools(
       if (action === "validate") {
         const credential = await validateDeviceCredential(device.id, resolved.value.id);
         const redacted = redactDeviceCredential(credential);
-        const summary = credential.protocol === "http-api" && credential.status !== "validated"
-          ? `Generic network validation is not available for ${credential.protocol} credentials on ${device.name}; Steward kept the credential at ${credential.status}.`
-          : `Validated ${credential.protocol} credential for ${device.name}.`;
+        const protocolLabel = protocolDisplayLabel(redacted.protocol);
+        const summary = `Recorded ${protocolLabel} credential for ${device.name} as trusted manual input. Steward will verify the transport during real operations instead of pre-validating the credential.`;
         return {
           ok: true,
           deviceId: device.id,
@@ -6063,7 +6335,7 @@ export async function buildAdapterSkillTools(
           deviceName: device.name,
           deletedCredential: summarizeCredentialEntry(deleted),
           credentialCount: stateStore.getDeviceCredentials(device.id).length,
-          summary: `Deleted ${resolved.value.protocol} credential for ${device.name}.`,
+          summary: `Deleted ${protocolDisplayLabel(normalizeCredentialProtocol(resolved.value.protocol))} credential for ${device.name}.`,
         };
       }
 
@@ -6083,7 +6355,7 @@ export async function buildAdapterSkillTools(
         }
       }
 
-      let updated = await updateDeviceCredential({
+      const updated = await updateDeviceCredential({
         deviceId: device.id,
         credentialId: resolved.value.id,
         protocol: replacementProtocolRaw ? nextProtocol : undefined,
@@ -6092,14 +6364,9 @@ export async function buildAdapterSkillTools(
         scopeJson,
       });
 
-      if (inputBoolean(args, "validate_now") === true) {
-        updated = await validateDeviceCredential(device.id, updated.id);
-      }
-
-      const redacted = redactDeviceCredential(updated);
-      const summary = inputBoolean(args, "validate_now") === true && updated.protocol === "http-api" && updated.status !== "validated"
-        ? `Updated ${updated.protocol} credential for ${device.name}. Generic network validation is not available for http-api credentials, so Steward kept it at ${updated.status}.`
-        : `Updated ${updated.protocol} credential for ${device.name}.`;
+        const redacted = redactDeviceCredential(updated);
+        const protocolLabel = protocolDisplayLabel(redacted.protocol);
+      const summary = `Updated ${protocolLabel} credential for ${device.name}. Steward trusts manually entered credentials and will verify the transport during real operations.`;
       return {
         ok: true,
         deviceId: device.id,
@@ -6797,6 +7064,7 @@ export async function buildAdapterSkillTools(
             actor: "steward",
             targetWidgetId: widget?.id,
             targetWidgetSlug: widget ? undefined : widgetSlug,
+            verificationMode: options?.widgetVerificationMode,
           });
           await stateStore.addAction({
             actor: "steward",
@@ -6816,6 +7084,7 @@ export async function buildAdapterSkillTools(
             deviceName: device.name,
             updatedExisting: generated.updatedExisting,
             summary: generated.summary,
+            warnings: generated.warnings,
             widget: generated.widget,
           };
         }
@@ -6927,3 +7196,4 @@ export async function buildAdapterSkillTools(
 
   return tools;
 }
+

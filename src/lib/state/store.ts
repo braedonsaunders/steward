@@ -11,16 +11,18 @@ import {
 } from "@/lib/state/db";
 import {
   defaultAuthSettings,
-  defaultRuntimeSettings,
   defaultSystemSettings,
   ensureDefaults,
 } from "@/lib/state/defaults";
+import { defaultRuntimeSettings } from "@/lib/state/runtime-defaults";
 import {
   findDashboardWidgetGridPlacement,
   normalizeDashboardWidgetColumnSpan,
   normalizeDashboardWidgetRowSpan,
   resolveDashboardWidgetGridLayout,
 } from "@/lib/dashboard-widget-grid";
+import { normalizeCredentialProtocol } from "@/lib/protocols/catalog";
+import { normalizeWidgetDescription } from "@/lib/widgets/description";
 import type {
   AccessMethod,
   AccessSurface,
@@ -414,15 +416,23 @@ function notificationDeliveryFromRow(row: Record<string, unknown>): Notification
 }
 
 function deviceCredentialFromRow(row: Record<string, unknown>): DeviceCredential {
+  const rawStatus = String(row.status ?? "provided").toLowerCase();
+  const status: DeviceCredential["status"] = rawStatus === "pending"
+    ? "pending"
+    : rawStatus === "validated"
+      ? "validated"
+      : rawStatus === "invalid"
+        ? "invalid"
+        : "provided";
   return {
     id: String(row.id),
     deviceId: String(row.deviceId),
-    protocol: String(row.protocol),
+    protocol: normalizeCredentialProtocol(String(row.protocol)),
     adapterId: row.adapterId ? String(row.adapterId) : undefined,
     vaultSecretRef: String(row.vaultSecretRef),
     accountLabel: row.accountLabel ? String(row.accountLabel) : undefined,
     scopeJson: JSON.parse(String(row.scopeJson ?? "{}")) as Record<string, unknown>,
-    status: row.status as DeviceCredential["status"],
+    status,
     lastValidatedAt: row.lastValidatedAt ? String(row.lastValidatedAt) : undefined,
     createdAt: String(row.createdAt),
     updatedAt: String(row.updatedAt),
@@ -852,10 +862,28 @@ function settingsHistoryFromRow<T = Record<string, unknown>>(row: Record<string,
 class StateStore {
   private initialized = false;
 
+  private normalizeLegacyCredentialProtocols(db: Database.Database): void {
+    db.prepare(`
+      UPDATE device_credentials
+      SET protocol = 'winrm'
+      WHERE lower(protocol) = 'windows'
+    `).run();
+    db.prepare(`
+      UPDATE device_credentials
+      SET status = CASE
+        WHEN lower(status) = 'pending' THEN 'pending'
+        WHEN lower(status) = 'validated' THEN 'validated'
+        WHEN lower(status) = 'invalid' THEN 'invalid'
+        ELSE 'provided'
+      END
+    `).run();
+  }
+
   private ensureInit(): void {
     if (this.initialized) return;
     const db = getDb();
     ensureDefaults(db);
+    this.normalizeLegacyCredentialProtocols(db);
     const auditDb = getAuditDb();
     const row = auditDb.prepare("SELECT COUNT(*) as cnt FROM audit_events").get() as { cnt: number };
     if (row.cnt === 0) {
@@ -3484,7 +3512,7 @@ class StateStore {
         WHERE deviceId = ?
           AND status = 'validated'
       `).all(deviceId) as Array<{ protocol: string }>;
-      return rows.map((row) => String(row.protocol));
+      return rows.map((row) => normalizeCredentialProtocol(String(row.protocol)));
     });
   }
 
@@ -4783,6 +4811,7 @@ class StateStore {
 
       const next: DeviceWidget = {
         ...widget,
+        description: normalizeWidgetDescription(widget.description),
         revision,
       };
 

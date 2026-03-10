@@ -4,7 +4,7 @@ import {
   requiresHttpApiAccountLabel,
   withHttpApiCredentialAuth,
 } from "@/lib/credentials/http-api";
-import { validateMqttCredentialConnection } from "@/lib/network/mqtt-client";
+import { isSupportedCredentialProtocol, normalizeCredentialProtocol } from "@/lib/protocols/catalog";
 import { stateStore } from "@/lib/state/store";
 import { vault } from "@/lib/security/vault";
 import type { DeviceCredential } from "@/lib/state/types";
@@ -35,16 +35,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function normalizeProtocol(protocol: string): string {
-  return protocol.trim().toLowerCase();
-}
-
 function defaultScope(protocol: string): Record<string, unknown> {
   switch (protocol) {
     case "ssh":
       return { level: "admin", operations: ["shell", "service-control"] };
     case "winrm":
       return { level: "admin", operations: ["service-control", "eventlog"] };
+    case "powershell-ssh":
+      return { level: "admin", operations: ["powershell", "shell", "service-control"] };
+    case "wmi":
+      return { level: "admin", operations: ["inventory", "process-control", "service-control"] };
+    case "smb":
+      return { level: "admin", operations: ["file-copy", "share-access", "artifact-collection"] };
+    case "rdp":
+      return { level: "operator", operations: ["interactive-remote-control", "session-launch"] };
+    case "vnc":
+      return { level: "operator", operations: ["interactive-remote-control", "session-launch"] };
     case "snmp":
       return { level: "read", operations: ["telemetry"] };
     case "docker":
@@ -92,7 +98,7 @@ function findExistingCredential(
 ): DeviceCredential | undefined {
   const normalizedAdapter = adapterId?.trim() || "";
   return credentials.find((credential) => (
-    credential.protocol === protocol &&
+    normalizeCredentialProtocol(credential.protocol) === protocol &&
     (credential.adapterId?.trim() || "") === normalizedAdapter
   ));
 }
@@ -107,7 +113,10 @@ export async function storeDeviceCredential(input: StoreDeviceCredentialInput): 
     throw new Error("Device not found");
   }
 
-  const protocol = normalizeProtocol(input.protocol);
+  const protocol = normalizeCredentialProtocol(input.protocol);
+  if (!isSupportedCredentialProtocol(protocol)) {
+    throw new Error(`Unsupported credential protocol: ${input.protocol}`);
+  }
   const scopeJson = mergeCredentialScope(protocol, undefined, input.scopeJson);
   const accountLabel = input.accountLabel?.trim() || undefined;
   if (protocol === "http-api" && requiresHttpApiAccountLabel(scopeJson) && !accountLabel) {
@@ -174,77 +183,24 @@ export async function validateDeviceCredential(
     throw new Error("Stored credential secret is missing");
   }
 
-  if (credential.protocol === "http-api") {
-    const updatedAt = nowIso();
-    const preservedStatus = credential.status === "validated" ? "validated" : "provided";
-    const preserved: DeviceCredential = {
-      ...credential,
-      status: preservedStatus,
-      updatedAt,
-    };
-    stateStore.upsertDeviceCredential(preserved);
-
-    await stateStore.addAction({
-      actor: "steward",
-      kind: "diagnose",
-      message: `Skipped generic HTTP API credential validation for ${device.name}`,
-      context: {
-        deviceId: device.id,
-        credentialId: credential.id,
-        protocol: credential.protocol,
-        status: preserved.status,
-        reason: "No protocol-specific verifier is configured for generic http-api credentials.",
-      },
-    });
-
-    return preserved;
-  }
-
-  let validationMethod = "manual-status-mark";
-  let validationDetails: Record<string, unknown> = {
-    source: "user_or_agent_assertion",
-    note: "No programmatic network verification was performed.",
-  };
-
-  if (credential.protocol === "mqtt") {
-    const validation = await validateMqttCredentialConnection({
-      device,
-      credentialUsername: credential.accountLabel,
-      password: secret,
-    });
-    if (!validation.ok) {
-      throw new Error(validation.output || validation.summary || "MQTT credential validation failed");
-    }
-    validationMethod = "mqtt.connect";
-    validationDetails = {
-      summary: validation.summary,
-      phase: validation.phase,
-      proof: validation.proof,
-      output: validation.output,
-      transport: validation.details,
-    };
-  }
-  const validatedAt = nowIso();
-
   const updated: DeviceCredential = {
     ...credential,
-    status: "validated",
-    lastValidatedAt: validatedAt,
-    updatedAt: validatedAt,
+    status: credential.status === "pending" ? "pending" : "provided",
+    lastValidatedAt: undefined,
+    updatedAt: nowIso(),
   };
   stateStore.upsertDeviceCredential(updated);
 
   await stateStore.addAction({
     actor: "steward",
     kind: "diagnose",
-    message: `Marked credential ${credential.id} as validated for ${device.name}`,
+    message: `Recorded credential ${credential.id} as available for ${device.name}`,
     context: {
       deviceId: device.id,
       credentialId: credential.id,
       protocol: credential.protocol,
       hasSecret,
-      validationMethod,
-      validationDetails,
+      trustModel: "manual-entry-assumed-valid",
       status: updated.status,
     },
   });
@@ -263,33 +219,25 @@ export async function markCredentialValidatedFromUse(input: {
   if (!credential || credential.deviceId !== input.deviceId) {
     return null;
   }
-
-  const validatedAt = nowIso();
   const updated: DeviceCredential = {
     ...credential,
     status: "validated",
-    lastValidatedAt: validatedAt,
-    updatedAt: validatedAt,
+    lastValidatedAt: nowIso(),
+    updatedAt: nowIso(),
   };
   stateStore.upsertDeviceCredential(updated);
-
-  if (credential.status !== "validated") {
-    const device = stateStore.getDeviceById(input.deviceId);
-    await stateStore.addAction({
-      actor: input.actor ?? "steward",
-      kind: "diagnose",
-      message: `Marked credential ${credential.id} as validated${device ? ` for ${device.name}` : ""}`,
-      context: {
-        deviceId: input.deviceId,
-        credentialId: credential.id,
-        protocol: credential.protocol,
-        validationMethod: input.method,
-        validationDetails: input.details ?? null,
-        status: updated.status,
-      },
-    });
-  }
-
+  await stateStore.addAction({
+    actor: input.actor ?? "steward",
+    kind: "diagnose",
+    message: `Validated credential ${credential.id} for ${input.deviceId} via ${input.method}`,
+    context: {
+      deviceId: input.deviceId,
+      credentialId: credential.id,
+      protocol: credential.protocol,
+      method: input.method,
+      ...(input.details ?? {}),
+    },
+  });
   return updated;
 }
 
@@ -304,7 +252,10 @@ export async function updateDeviceCredential(input: UpdateDeviceCredentialInput)
     throw new Error("Credential not found");
   }
 
-  const nextProtocol = input.protocol ? normalizeProtocol(input.protocol) : existing.protocol;
+  const nextProtocol = input.protocol ? normalizeCredentialProtocol(input.protocol) : normalizeCredentialProtocol(existing.protocol);
+  if (!isSupportedCredentialProtocol(nextProtocol)) {
+    throw new Error(`Unsupported credential protocol: ${input.protocol}`);
+  }
   const nextAccountLabel = input.accountLabel === undefined
     ? existing.accountLabel
     : input.accountLabel.trim() || undefined;
@@ -372,5 +323,11 @@ export async function deleteDeviceCredential(deviceId: string, credentialId: str
 export function redactDeviceCredential(credential: DeviceCredential): Omit<DeviceCredential, "vaultSecretRef"> {
   const { vaultSecretRef, ...rest } = credential;
   void vaultSecretRef;
-  return rest;
+  const protocol = normalizeCredentialProtocol(rest.protocol);
+  return {
+    ...rest,
+    protocol,
+    scopeJson: mergeCredentialScope(protocol, rest.scopeJson),
+  };
 }
+

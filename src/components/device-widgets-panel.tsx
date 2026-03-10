@@ -41,7 +41,7 @@ function WidgetSurface({
   return (
     <Card
       className={cn(
-        "min-h-0 min-w-0 overflow-hidden",
+        "flex h-full min-h-0 min-w-0 flex-col overflow-hidden",
         fullscreen && "flex h-full flex-col rounded-[28px] border-border/70 bg-background/95 shadow-2xl",
       )}
     >
@@ -51,14 +51,17 @@ function WidgetSurface({
             <div className="min-w-0 flex-1">
               <CardTitle className="text-base">{widget.name}</CardTitle>
               {widget.description && (
-                <CardDescription className="mt-1">{widget.description}</CardDescription>
+                <CardDescription className="mt-1 line-clamp-2">{widget.description}</CardDescription>
               )}
             </div>
             <Badge variant="outline" className="capitalize">{widget.slug}</Badge>
           </div>
         </CardHeader>
       )}
-      <CardContent className={cn("min-h-0 min-w-0 overflow-auto", fullscreen && "flex-1 overflow-hidden p-3 md:p-4")}>
+      <CardContent className={cn(
+        "flex min-h-0 min-w-0 flex-1 overflow-hidden",
+        fullscreen ? "p-3 md:p-4" : "p-6 pt-0",
+      )}>
         <DeviceWidgetRuntimeFrame
           deviceId={deviceId}
           widget={widget}
@@ -66,6 +69,9 @@ function WidgetSurface({
           fullscreen={fullscreen}
           onToggleFullscreen={onToggleFullscreen}
           maxFrameHeight={fullscreen ? 4_000 : 2_000}
+          fillAvailableHeight
+          showRuntimeBadges={false}
+          className="h-full w-full flex-1"
         />
       </CardContent>
     </Card>
@@ -290,7 +296,7 @@ export function DeviceWidgetsPanel({ deviceId, active = false, className }: Devi
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-medium text-foreground">{widget.name}</p>
                         {widget.description && (
-                          <p className="mt-1 break-words text-xs leading-5 text-muted-foreground">
+                          <p className="mt-1 line-clamp-2 break-words text-xs leading-5 text-muted-foreground">
                             {widget.description}
                           </p>
                         )}

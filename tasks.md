@@ -270,3 +270,20 @@ Reference: `docs/world-class-system-program.md`
 - [ ] CM-008: Reserve the LLM agent for ambiguous diagnosis, monitor synthesis, and Lane B remediation planning
 
 Reference: `docs/continuous-monitoring-architecture-analysis.md`, `docs/continuous-monitoring-cutover-task-register.md`
+## 23) Remote Desktop Browser Program (2026-03-10)
+
+- [ ] RDS-001: Add first-class `vnc` protocol support across discovery, credentials, access methods, and management surfaces
+- [ ] RDS-002: Extend governed protocol sessions to cover remote desktop sessions (`rdp` + `vnc`)
+- [ ] RDS-003: Add a DB-backed remote desktop bridge/runtime model with launch-safe defaults
+- [ ] RDS-004: Start and supervise the browser remote desktop bridge as part of Steward runtime
+- [ ] RDS-005: Add one-click `guacd` bootstrap to Docker and host launcher scripts
+- [ ] RDS-006: Implement remote desktop session APIs (create/list/get/viewer token)
+- [ ] RDS-007: Implement browser-native remote desktop viewer pages and device-panel UX
+- [ ] RDS-008: Add chat inline previews for remote desktop screenshots and session state
+- [ ] RDS-009: Add `steward_remote_desktop` for screenshot, click, double-click, drag, type, key, scroll, and wait
+- [ ] RDS-010: Reuse Playwright against Steward's own remote viewer for agentic desktop control
+- [ ] RDS-011: Persist remote desktop screenshots/artifacts for replay and debugging
+- [ ] RDS-012: Update protocol-session state and audit trails from live remote desktop connect/disconnect events
+- [ ] RDS-013: Validate end-to-end build/lint and one-click launch flows with remote desktop prerequisites
+
+Reference: `docs/remote-desktop-browser-cutover-plan.md`

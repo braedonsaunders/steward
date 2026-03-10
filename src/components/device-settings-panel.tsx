@@ -39,7 +39,7 @@ const CategorySelect = memo(function CategorySelect({
 });
 
 export function DeviceSettingsPanel({ deviceId }: { deviceId: string }) {
-  const { devices, setDeviceAdoptionStatus } = useSteward();
+  const { devices, refresh, setDeviceAdoptionStatus } = useSteward();
   const device = devices.find((item) => item.id === deviceId);
 
   const [renameValue, setRenameValue] = useState(device?.name ?? "");
@@ -48,6 +48,7 @@ export function DeviceSettingsPanel({ deviceId }: { deviceId: string }) {
   const [structuredMemoryJson, setStructuredMemoryJson] = useState("{}");
   const [savingSettings, setSavingSettings] = useState(false);
   const [savingAdoption, setSavingAdoption] = useState(false);
+  const [resettingOnboarding, setResettingOnboarding] = useState(false);
   const [confirmAdoptionOpen, setConfirmAdoptionOpen] = useState(false);
   const [pendingAdoptionStatus, setPendingAdoptionStatus] = useState<"discovered" | "ignored" | null>(null);
   const [categoryOpen, setCategoryOpen] = useState(false);
@@ -101,6 +102,11 @@ export function DeviceSettingsPanel({ deviceId }: { deviceId: string }) {
   }
 
   const adoptionStatus = getDeviceAdoptionStatus(device);
+  const onboardingRunStatus = typeof device.metadata.adoption === "object"
+    && device.metadata.adoption !== null
+    && typeof (device.metadata.adoption as Record<string, unknown>).runStatus === "string"
+    ? String((device.metadata.adoption as Record<string, unknown>).runStatus)
+    : null;
 
   const trimmedRenameValue = renameValue.trim();
   const hasRenameChange = trimmedRenameValue.length > 0 && trimmedRenameValue !== device.name;
@@ -141,6 +147,29 @@ export function DeviceSettingsPanel({ deviceId }: { deviceId: string }) {
     if (!success) return;
     setConfirmAdoptionOpen(false);
     setPendingAdoptionStatus(null);
+  };
+
+  const resetOnboardingStatus = async () => {
+    if (adoptionStatus !== "adopted" || resettingOnboarding) return;
+    const confirmed = window.confirm(
+      "Reset onboarding status for this device? Steward will reopen onboarding and show the Start Onboarding prompt again.",
+    );
+    if (!confirmed) return;
+
+    setResettingOnboarding(true);
+    try {
+      const response = await fetch(`/api/devices/${device.id}/onboarding/reset`, withClientApiToken({ method: "POST" }));
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to reset onboarding status");
+      }
+      await refresh();
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to reset onboarding status");
+    } finally {
+      setResettingOnboarding(false);
+    }
   };
 
   const saveSettings = async () => {
@@ -240,6 +269,25 @@ export function DeviceSettingsPanel({ deviceId }: { deviceId: string }) {
             </Button>
           </div>
         </div>
+
+        {adoptionStatus === "adopted" ? (
+          <div className="space-y-2">
+            <Label>Onboarding</Label>
+            <p className="text-xs text-muted-foreground">
+              {onboardingRunStatus === "completed"
+                ? "Onboarding is complete. Reset it to show the Start Onboarding prompt again and rerun onboarding from Chat."
+                : "Onboarding is currently open. Resetting it clears the current onboarding chat session and reopens the prompt."}
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void resetOnboardingStatus()}
+              disabled={resettingOnboarding}
+            >
+              {resettingOnboarding ? "Resetting..." : "Reset Onboarding Status"}
+            </Button>
+          </div>
+        ) : null}
 
         <div className="space-y-2">
           <Label>Operator Notes (LLM Context)</Label>

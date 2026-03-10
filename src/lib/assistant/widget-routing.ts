@@ -67,14 +67,18 @@ const FOLLOW_UP_GENERIC_WIDGET_EDIT_PATTERN = /\b(change|update|edit|modify|add|
 const FOLLOW_UP_INSPECT_PATTERN = /\b(show|open|inspect|review|look at|load|list)\b/i;
 const FOLLOW_UP_REFERENCE_PATTERN = /\b(it|that|this|existing|current|same|one)\b/i;
 const FOLLOW_UP_WIDGET_ISSUE_PATTERN = /\b(broken|blank|empty|loading|stuck|render|layout|button|buttons|scroll|style|styling)\b/i;
+const DEVICE_WEB_UI_PATTERN = /\b(web ui|webui|local ui|login page|admin ui|admin console|management ui|browser)\b/i;
 
 function normalizeWidgetIntentText(value: string): string {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function messageMentionsWidgetConcept(rawText: string): boolean {
+export function messageMentionsWidgetConcept(rawText: string): boolean {
   const text = normalizeWidgetIntentText(rawText);
   if (!text) {
+    return false;
+  }
+  if (DEVICE_WEB_UI_PATTERN.test(text) && !DIRECT_WIDGET_KEYWORD_PATTERN.test(text)) {
     return false;
   }
   if (DIRECT_WIDGET_KEYWORD_PATTERN.test(text)) {
@@ -154,6 +158,13 @@ export function shouldPlanWidgetRouteTurn(args: {
   }
 
   return FOLLOW_UP_REFERENCE_PATTERN.test(text) && FOLLOW_UP_WIDGET_ISSUE_PATTERN.test(text);
+}
+
+export function shouldExposeWidgetManagementForTurn(args: {
+  history: ChatMessage[];
+  userInput: string;
+}): boolean {
+  return shouldPlanWidgetRouteTurn(args);
 }
 
 function summarizeRecentMessages(history: ChatMessage[]): string {
@@ -325,6 +336,8 @@ export async function planWidgetRoute(args: {
         "Return JSON only. No markdown. No code fences.",
         "Only route to widget management when the user explicitly asks for widget work, or when a short follow-up clearly continues a recent widget conversation.",
         "Widget work includes creating, revising, fixing, restyling, inspecting, listing, or deleting a persistent device widget, remote, dashboard, panel, or control surface for the attached device.",
+        "The device's own web UI, login page, admin console, browser session, or vendor management interface is not a Steward widget.",
+        "Requests to log into, explore, or learn a device's web UI must return {\"route\":\"none\",\"reason\":\"...\"}.",
         "Follow-up pronouns like 'it' or 'that' can still refer to the existing widget when recent conversation/tool activity is about a widget.",
         "If a widget would simply be helpful for the device, return {\"route\":\"none\",\"reason\":\"...\"}.",
         "If the turn is not widget work, return {\"route\":\"none\",\"reason\":\"...\"}.",

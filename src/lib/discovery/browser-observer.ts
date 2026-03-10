@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { buildObservation, dedupeObservations } from "@/lib/discovery/evidence";
+import { loadPlaywrightChromiumRuntime } from "@/lib/runtime/playwright";
 import { getDataDir } from "@/lib/state/db";
 import type { DiscoveryCandidate } from "@/lib/discovery/types";
 import type { DiscoveryObservationInput, ServiceFingerprint } from "@/lib/state/types";
@@ -137,17 +138,8 @@ const fetchFaviconHash = async (baseUrl: string, timeoutMs: number): Promise<str
 };
 
 const loadPlaywright = async (): Promise<{ chromium: { launch: (options: Record<string, unknown>) => Promise<unknown> } } | null> => {
-  try {
-    const moduleName = "playwright";
-    const mod = await import(moduleName);
-    const chromium = (mod as Record<string, unknown>).chromium;
-    if (chromium && typeof chromium === "object") {
-      return { chromium: chromium as { launch: (options: Record<string, unknown>) => Promise<unknown> } };
-    }
-  } catch {
-    // Playwright is optional at runtime.
-  }
-  return null;
+  const chromium = await loadPlaywrightChromiumRuntime();
+  return chromium ? { chromium: chromium as { launch: (options: Record<string, unknown>) => Promise<unknown> } } : null;
 };
 
 const webTargetsForCandidate = (candidate: DiscoveryCandidate): BrowserProbeTarget[] => {

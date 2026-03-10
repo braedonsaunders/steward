@@ -44,8 +44,17 @@ const OperationSchema = z.object({
   brokerRequest: z.discriminatedUnion("protocol", [
     z.object({
       protocol: z.literal("ssh"),
-      argv: z.array(z.string()).min(1),
+      command: z.string().min(1).optional(),
+      argv: z.array(z.string()).min(1).optional(),
       port: z.number().int().min(1).max(65535).optional(),
+    }).superRefine((value, ctx) => {
+      if (!value.command && (!value.argv || value.argv.length === 0)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "SSH broker requests require either command or argv.",
+          path: ["command"],
+        });
+      }
     }),
     z.object({
       protocol: z.literal("http"),
@@ -125,6 +134,35 @@ const OperationSchema = z.object({
       skipCertChecks: z.boolean().optional(),
       authentication: z.string().min(1).optional(),
       expectRegex: z.string().optional(),
+    }),
+    z.object({
+      protocol: z.literal("powershell-ssh"),
+      command: z.string().min(1),
+      host: z.string().min(1).optional(),
+      port: z.number().int().min(1).max(65535).optional(),
+      expectRegex: z.string().optional(),
+    }),
+    z.object({
+      protocol: z.literal("wmi"),
+      command: z.string().min(1),
+      host: z.string().min(1).optional(),
+      namespace: z.string().min(1).optional(),
+      expectRegex: z.string().optional(),
+    }),
+    z.object({
+      protocol: z.literal("smb"),
+      command: z.string().min(1),
+      host: z.string().min(1).optional(),
+      share: z.string().min(1).optional(),
+      port: z.number().int().min(1).max(65535).optional(),
+      expectRegex: z.string().optional(),
+    }),
+    z.object({
+      protocol: z.literal("rdp"),
+      host: z.string().min(1).optional(),
+      port: z.number().int().min(1).max(65535).optional(),
+      action: z.enum(["check", "launch"]).optional(),
+      admin: z.boolean().optional(),
     }),
   ]).optional(),
   args: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),

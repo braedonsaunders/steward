@@ -4,6 +4,7 @@ import { isAuthorized } from "@/lib/auth/guard";
 import { stateStore } from "@/lib/state/store";
 import type { DeviceWidget } from "@/lib/state/types";
 import { DeviceWidgetControlListSchema } from "@/lib/widgets/controls";
+import { MAX_WIDGET_DESCRIPTION_LENGTH } from "@/lib/widgets/description";
 
 export const runtime = "nodejs";
 
@@ -12,7 +13,7 @@ const CapabilitySchema = z.enum(["context", "state", "device-control"]);
 const updateWidgetSchema = z.object({
   slug: z.string().min(1).max(64).optional(),
   name: z.string().min(2).max(80).optional(),
-  description: z.string().max(240).nullable().optional(),
+  description: z.string().max(MAX_WIDGET_DESCRIPTION_LENGTH).nullable().optional(),
   status: z.enum(["active", "disabled"]).optional(),
   html: z.string().min(1).max(24_000).optional(),
   css: z.string().max(24_000).optional(),

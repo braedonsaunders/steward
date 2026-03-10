@@ -85,6 +85,36 @@ export interface AdapterToolSkill {
   skillMd?: AdapterSkillMarkdown;
 }
 
+export interface AdapterWebFlowAssertion {
+  selector?: string;
+  textIncludes?: string;
+  urlIncludes?: string;
+}
+
+export interface AdapterWebFlowStep {
+  action: "goto" | "click" | "hover" | "fill" | "press" | "check" | "uncheck" | "select" | "wait_for_selector" | "wait_for_url" | "wait_for_timeout" | "extract_text" | "extract_html" | "expect_text" | "evaluate" | "screenshot";
+  selector?: string;
+  value?: string;
+  url?: string;
+  script?: string;
+  label?: string;
+  timeoutMs?: number;
+}
+
+export interface AdapterWebFlowRecipe {
+  id: string;
+  name: string;
+  description: string;
+  startUrl: string;
+  requiresAuth?: boolean;
+  usernameSelector?: string;
+  passwordSelector?: string;
+  submitSelector?: string;
+  postLoginWaitMs?: number;
+  successAssertions?: AdapterWebFlowAssertion[];
+  steps: AdapterWebFlowStep[];
+}
+
 export interface AdapterManifest {
   /** Unique adapter ID, e.g. "com.example.unifi-discovery" */
   id: string;
@@ -106,6 +136,8 @@ export interface AdapterManifest {
   defaultConfig?: Record<string, unknown>;
   /** Tool skills exposed by this adapter */
   toolSkills?: AdapterToolSkill[];
+  /** Optional reusable browser-backed web-management flows for SPA/appliance UIs */
+  webFlows?: AdapterWebFlowRecipe[];
   /** Optional default per-tool runtime config keyed by skill id */
   defaultToolConfig?: Record<string, Record<string, unknown>>;
   /** Optional adapter docs URL */

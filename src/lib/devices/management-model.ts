@@ -1,4 +1,5 @@
 import type { AccessMethod, Device, DeviceCredential } from "@/lib/state/types";
+import { isWindowsPlatformDevice, normalizeCredentialProtocol, protocolDisplayLabel } from "@/lib/protocols/catalog";
 
 const HTTP_PORTS = new Set([80, 443, 8080, 8443, 5000, 5001, 7443, 9000, 9443]);
 const PRINTING_PORTS = new Set([515, 631, 9100]);
@@ -7,19 +8,17 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function normalizeProtocol(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "http" || normalized === "https") return "http-api";
-  if (normalized === "mqtts") return "mqtt";
-  if (normalized === "ipp" || normalized === "printer" || normalized === "lpd") return "printing";
-  if (normalized === "windows") return "winrm";
-  return normalized;
-}
-
 function inferCredentialProtocol(kind: string): string | undefined {
   switch (kind) {
+    case "web-session":
+      return "http-api";
     case "ssh":
     case "winrm":
+    case "powershell-ssh":
+    case "wmi":
+    case "smb":
+    case "rdp":
+    case "vnc":
     case "snmp":
     case "http-api":
     case "docker":
@@ -33,30 +32,7 @@ function inferCredentialProtocol(kind: string): string | undefined {
 }
 
 function inferTitle(kind: string, port?: number): string {
-  const label = (() => {
-    switch (kind) {
-      case "ssh":
-        return "SSH";
-      case "winrm":
-        return "WinRM";
-      case "snmp":
-        return "SNMP";
-      case "http-api":
-        return "HTTP / Web UI";
-      case "docker":
-        return "Docker API";
-      case "kubernetes":
-        return "Kubernetes API";
-      case "mqtt":
-        return "MQTT";
-      case "printing":
-        return "Printing";
-      case "rdp":
-        return "Remote Desktop";
-      default:
-        return kind.toUpperCase();
-    }
-  })();
+  const label = protocolDisplayLabel(kind);
   return port ? `${label} :${port}` : label;
 }
 
@@ -69,9 +45,12 @@ function credentialStatus(
     return "observed";
   }
 
-  const matching = credentials.filter((credential) => normalizeProtocol(credential.protocol) === protocol);
+  const matching = credentials.filter((credential) => normalizeCredentialProtocol(credential.protocol) === protocol);
   if (matching.some((credential) => credential.status === "validated")) {
     return "validated";
+  }
+  if (matching.some((credential) => credential.status === "invalid")) {
+    return "rejected";
   }
   if (matching.length > 0) {
     return "credentialed";
@@ -84,8 +63,38 @@ function accessMethodKey(kind: string, port?: number): string {
 }
 
 function hasDeviceProtocol(device: Device, protocol: string): boolean {
-  const normalized = normalizeProtocol(protocol);
-  return device.protocols.some((candidate) => normalizeProtocol(candidate) === normalized);
+  const normalized = normalizeCredentialProtocol(protocol);
+  return device.protocols.some((candidate) => normalizeCredentialProtocol(candidate) === normalized);
+}
+
+function hasMethodOfKind(methods: Map<string, AccessMethod>, kind: AccessMethod["kind"]): boolean {
+  return Array.from(methods.values()).some((method) => method.kind === kind);
+}
+
+function secureFallbackForKind(kind: AccessMethod["kind"]): boolean {
+  switch (kind) {
+    case "ssh":
+    case "powershell-ssh":
+    case "http-api":
+    case "web-session":
+    case "kubernetes":
+    case "mqtt":
+    case "rdp":
+    case "vnc":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function credentialFallbackKinds(protocol: string): AccessMethod["kind"][] {
+  const normalized = normalizeCredentialProtocol(protocol);
+  switch (normalized) {
+    case "http-api":
+      return ["http-api", "web-session"];
+    default:
+      return [normalized as AccessMethod["kind"]];
+  }
 }
 
 export function buildObservedAccessMethods(args: {
@@ -154,6 +163,15 @@ export function buildObservedAccessMethods(args: {
         summary: service.product ?? "Remote shell access",
         metadata,
       });
+      if (isWindowsPlatformDevice(args.device)) {
+        addMethod({
+          kind: "powershell-ssh",
+          port,
+          secure: true,
+          summary: service.product ?? "Windows PowerShell remoting over SSH",
+          metadata,
+        });
+      }
       continue;
     }
 
@@ -234,6 +252,39 @@ export function buildObservedAccessMethods(args: {
       continue;
     }
 
+    if (port === 5900 || port === 5901 || name.includes("vnc") || name.includes("rfb")) {
+      addMethod({
+        kind: "vnc",
+        port,
+        secure: false,
+        summary: service.product ?? "VNC remote desktop exposure",
+        metadata,
+      });
+      continue;
+    }
+
+    if (port === 445 || name.includes("smb") || name.includes("cifs") || name.includes("microsoft-ds")) {
+      addMethod({
+        kind: "smb",
+        port,
+        secure: false,
+        summary: service.product ?? "SMB file and administrative share access",
+        metadata,
+      });
+      continue;
+    }
+
+    if (port === 135 || name.includes("msrpc") || name.includes("wmi")) {
+      addMethod({
+        kind: "wmi",
+        port,
+        secure: false,
+        summary: service.product ?? "WMI / RPC management surface",
+        metadata,
+      });
+      continue;
+    }
+
     if (HTTP_PORTS.has(port) || name.includes("http") || name.includes("https") || name.includes("web")) {
       addMethod({
         kind: "http-api",
@@ -242,43 +293,90 @@ export function buildObservedAccessMethods(args: {
         summary: service.product ?? "Web console or HTTP API",
         metadata,
       });
+      addMethod({
+        kind: "web-session",
+        port,
+        secure: service.secure || port === 443 || port === 8443 || port === 5001 || port === 9443,
+        summary: service.product ?? "Managed browser-backed web session",
+        metadata: {
+          ...metadata,
+          managementPath: "web-ui",
+        },
+      });
     }
   }
 
-  const protocolFallbacks: Array<{ kind: AccessMethod["kind"]; secure?: boolean }> = [
-    { kind: "ssh", secure: true },
-    { kind: "winrm", secure: false },
-    { kind: "snmp", secure: false },
-    { kind: "http-api", secure: true },
-    { kind: "docker", secure: false },
-    { kind: "kubernetes", secure: true },
-    { kind: "mqtt", secure: true },
-    { kind: "printing", secure: false },
-    { kind: "rdp", secure: true },
+  const protocolFallbacks: Array<{ kind: AccessMethod["kind"] }> = [
+    { kind: "ssh" },
+    { kind: "winrm" },
+    { kind: "powershell-ssh" },
+    { kind: "wmi" },
+    { kind: "smb" },
+    { kind: "snmp" },
+    { kind: "http-api" },
+    { kind: "web-session" },
+    { kind: "docker" },
+    { kind: "kubernetes" },
+    { kind: "mqtt" },
+    { kind: "printing" },
+    { kind: "rdp" },
+    { kind: "vnc" },
   ];
 
   for (const fallback of protocolFallbacks) {
-    if (!hasDeviceProtocol(args.device, fallback.kind)) {
-      continue;
-    }
-    const key = accessMethodKey(fallback.kind);
-    if (methods.has(key)) {
+    if (!hasDeviceProtocol(args.device, fallback.kind) || hasMethodOfKind(methods, fallback.kind)) {
       continue;
     }
     addMethod({
       kind: fallback.kind,
-      secure: fallback.secure,
+      secure: secureFallbackForKind(fallback.kind),
       summary: "Observed protocol hint",
       metadata: { source: "protocol" },
     });
   }
+
+  for (const credential of args.credentials) {
+    for (const kind of credentialFallbackKinds(credential.protocol)) {
+      if (hasMethodOfKind(methods, kind)) {
+        continue;
+      }
+      addMethod({
+        kind,
+        secure: secureFallbackForKind(kind),
+        summary: kind === "web-session"
+          ? "Managed browser session available from stored HTTP credential"
+          : "Stored credential available",
+        metadata: {
+          source: "credential",
+          credentialId: credential.id,
+          credentialStatus: credential.status,
+          adapterId: credential.adapterId ?? null,
+        },
+      });
+    }
+  }
+
+  const statusRank = (status: AccessMethod["status"]): number => {
+    switch (status) {
+      case "validated":
+        return 0;
+      case "credentialed":
+        return 1;
+      case "observed":
+        return 2;
+      case "rejected":
+        return 3;
+      default:
+        return 9;
+    }
+  };
 
   return Array.from(methods.values()).sort((left, right) => {
     if (left.selected !== right.selected) {
       return left.selected ? -1 : 1;
     }
     if (left.status !== right.status) {
-      return left.status.localeCompare(right.status);
+      return statusRank(left.status) - statusRank(right.status);
     }
     if (left.kind !== right.kind) {
       return left.kind.localeCompare(right.kind);
@@ -315,3 +413,4 @@ export function summarizeDeviceIdentity(device: Device): string {
     .join(" ")
     .toLowerCase();
 }
+

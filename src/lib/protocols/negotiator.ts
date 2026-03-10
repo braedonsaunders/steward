@@ -47,6 +47,45 @@ export const buildManagementSurface = (device: Device): DeviceManagementSurface 
     });
   }
 
+  if (hasPort(device, 22) && /(windows|microsoft|active directory|domain controller)/i.test([device.name, device.hostname, device.os, device.role, device.vendor].filter(Boolean).join(" "))) {
+    capabilities.push({
+      id: "powershell-ssh-core",
+      title: "PowerShell over SSH",
+      protocol: "powershell-ssh",
+      actions: [
+        "Remote PowerShell commands",
+        "Fallback automation when WinRM is unavailable",
+        "Scripted diagnostics and service control",
+      ],
+    });
+  }
+
+  if (hasPort(device, 135)) {
+    capabilities.push({
+      id: "wmi-core",
+      title: "WMI / RPC Management",
+      protocol: "wmi",
+      actions: [
+        "System inventory",
+        "Process and service interrogation",
+        "RPC/DCOM management workflows",
+      ],
+    });
+  }
+
+  if (hasPort(device, 445)) {
+    capabilities.push({
+      id: "smb-core",
+      title: "SMB Share Access",
+      protocol: "smb",
+      actions: [
+        "File staging and retrieval",
+        "Administrative share access",
+        "Artifact collection",
+      ],
+    });
+  }
+
   if (hasPort(device, 3389)) {
     capabilities.push({
       id: "rdp-core",
@@ -114,6 +153,16 @@ export const buildManagementSurface = (device: Device): DeviceManagementSurface 
 
   if (hasPort(device, 80) || hasPort(device, 443)) {
     capabilities.push({
+      id: "web-session-core",
+      title: "Managed Web UI Session",
+      protocol: "web-session",
+      actions: [
+        "Persist browser-authenticated management sessions",
+        "Replay web-management flows across turns",
+        "Promote UI-discovered contracts into managed operations",
+      ],
+    });
+    capabilities.push({
       id: "http-core",
       title: "API / Web Console",
       protocol: "http",
@@ -136,3 +185,4 @@ export const buildManagementSurface = (device: Device): DeviceManagementSurface 
     capabilities,
   };
 };
+

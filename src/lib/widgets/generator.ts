@@ -7,6 +7,7 @@ import type { DeviceWidget, DeviceWidgetOperationRun, LLMProvider } from "@/lib/
 import { buildDeviceWidgetContext } from "@/lib/widgets/context";
 import { DeviceWidgetControlListSchema } from "@/lib/widgets/controls";
 import { previewWidgetOperation } from "@/lib/widgets/operations";
+import { MAX_WIDGET_DESCRIPTION_LENGTH } from "@/lib/widgets/description";
 
 const WIDGET_GENERATOR_MAX_OUTPUT_TOKENS = 7_000;
 const WIDGET_GENERATOR_MAX_AUTO_CONTINUATIONS = 2;
@@ -26,7 +27,7 @@ const WIDGET_JSON_RESPONSE_SHAPE = [
 
 const GeneratedWidgetSchema = z.object({
   name: z.string().min(2).max(80),
-  description: z.string().min(1).max(240),
+  description: z.string().min(1).max(MAX_WIDGET_DESCRIPTION_LENGTH),
   capabilities: z.array(z.enum(["context", "state", "device-control"])).min(1).max(3),
   controls: DeviceWidgetControlListSchema.default([]),
   html: z.string().min(1).max(24_000),
@@ -125,6 +126,53 @@ function collectGeneratedWidgetHttpRequests(widget: GeneratedWidget): Array<{
     .filter((value): value is NonNullable<typeof value> => value !== null);
 }
 
+
+function isWinrmBrokerRequest(value: unknown): value is {
+  protocol: "winrm";
+  port?: number;
+  useSsl?: boolean;
+  skipCertChecks?: boolean;
+  authentication?: string;
+} {
+  return isRecord(value) && value.protocol === "winrm";
+}
+
+function collectGeneratedWidgetWinrmRequests(widget: GeneratedWidget): Array<{
+  source: string;
+  port?: number;
+  useSsl?: boolean;
+  skipCertChecks?: boolean;
+  authentication?: string;
+}> {
+  return widget.controls
+    .map((control) => {
+      if (control.execution.kind !== "operation") {
+        return null;
+      }
+      const request = control.execution.operation.brokerRequest;
+      if (!isWinrmBrokerRequest(request)) {
+        return null;
+      }
+      return {
+        source: `controls.${control.id}`,
+        port: request.port,
+        useSsl: request.useSsl,
+        skipCertChecks: request.skipCertChecks,
+        authentication: request.authentication,
+      };
+    })
+    .filter((value): value is NonNullable<typeof value> => value !== null);
+}
+
+function normalizeWinrmRequestSecurePreference(request: { port?: number; useSsl?: boolean }): boolean | undefined {
+  if (typeof request.useSsl === "boolean") {
+    return request.useSsl;
+  }
+  if (request.port === 5986) return true;
+  if (request.port === 5985) return false;
+  return undefined;
+}
+
 function isHueClipV2Context(
   context: DeviceWidgetGenerationContext,
 ): boolean {
@@ -147,9 +195,45 @@ function isHueClipV2Context(
     && /(philips hue|hue bridge|\bhue\b|signify)/i.test(deviceFingerprint);
 }
 
+type WidgetAccessMethod = DeviceWidgetGenerationContext["accessMethods"][number];
+
+function accessMethodStatusRank(value: WidgetAccessMethod["status"]): number {
+  switch (value) {
+    case "validated":
+      return 0;
+    case "credentialed":
+      return 1;
+    case "observed":
+      return 2;
+    default:
+      return 3;
+  }
+}
+
+function preferredContextAccessMethod(context: DeviceWidgetGenerationContext, kind: string): WidgetAccessMethod | null {
+  return context.accessMethods
+    .filter((method) => method.kind === kind)
+    .sort((left, right) => {
+      if (left.selected !== right.selected) {
+        return left.selected ? -1 : 1;
+      }
+      if (left.status !== right.status) {
+        return accessMethodStatusRank(left.status) - accessMethodStatusRank(right.status);
+      }
+      if ((left.port ?? 0) !== (right.port ?? 0)) {
+        return (left.port ?? 0) - (right.port ?? 0);
+      }
+      if (left.secure !== right.secure) {
+        return left.secure ? -1 : 1;
+      }
+      return left.key.localeCompare(right.key);
+    })[0] ?? null;
+}
+
 function buildWidgetGenerationHints(context: DeviceWidgetGenerationContext): string[] {
   const hints: string[] = [];
   const httpCredential = context.credentials.find((credential) => credential.protocol.toLowerCase() === "http-api");
+  const preferredWinrm = preferredContextAccessMethod(context, "winrm");
 
   if (httpCredential?.auth?.appliedBySteward) {
     hints.push("Use the stored http-api credential exactly as described in context.credentials. Steward injects authentication automatically.");
@@ -168,6 +252,21 @@ function buildWidgetGenerationHints(context: DeviceWidgetGenerationContext): str
     }
   }
 
+  if (preferredWinrm) {
+    const port = preferredWinrm.port ?? (preferredWinrm.secure ? 5986 : 5985);
+    const transportFields = [
+      "protocol: 'winrm'",
+      `port: ${port}`,
+      ...(preferredWinrm.secure ? ["useSsl: true", "skipCertChecks: true"] : []),
+      "command: 'Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize,FreePhysicalMemory; Get-PSDrive -PSProvider FileSystem | Select-Object Name,Used,Free'",
+    ].join(", ");
+    hints.push(`This device already has a ${preferredWinrm.selected ? "selected " : ""}${preferredWinrm.status} WinRM access method on port ${port} with secure=${preferredWinrm.secure ? "true" : "false"}. Match that exact transport in widget controls.`);
+    if (!preferredWinrm.secure) {
+      hints.push("For this device, do not switch WinRM widget controls to HTTPS or Basic auth. Reuse the validated HTTP/5985 path instead.");
+    }
+    hints.push(`Preferred WinRM control shape for this device: { mode: 'read', kind: 'shell.command', adapterId: 'winrm', timeoutMs: 30000, brokerRequest: { ${transportFields} } }`);
+  }
+
   if (isHueClipV2Context(context)) {
     hints.push("This device is a Philips Hue Bridge using CLIP v2 header auth.");
     hints.push("Use CLIP v2 endpoints only: /clip/v2/resource/light, /clip/v2/resource/room, and /clip/v2/resource/grouped_light.");
@@ -181,6 +280,19 @@ function buildWidgetGenerationHints(context: DeviceWidgetGenerationContext): str
 
   return hints;
 }
+function controlLooksLikeRefresh(control: GeneratedWidget["controls"][number]): boolean {
+  return /\b(refresh|reload|sync|update)\b/i.test([
+    control.id,
+    control.label,
+    control.description ?? "",
+  ].join(" "));
+}
+
+function canAutoVerifyControl(control: GeneratedWidget["controls"][number]): boolean {
+  return control.execution.kind === "operation"
+    && control.execution.operation.mode === "read"
+    && control.parameters.length === 0;
+}
 
 function validateGeneratedWidgetAgainstContext(
   widget: GeneratedWidget,
@@ -188,6 +300,44 @@ function validateGeneratedWidgetAgainstContext(
 ): string[] {
   const issues: string[] = [];
   const httpRequests = collectGeneratedWidgetHttpRequests(widget);
+  const winrmRequests = collectGeneratedWidgetWinrmRequests(widget);
+  const preferredWinrm = preferredContextAccessMethod(context, "winrm");
+
+  if (widget.controls.some((control) => control.execution.kind === "operation") && !widget.capabilities.includes("device-control")) {
+    issues.push("Widgets with operation controls must include the device-control capability.");
+  }
+
+  if (preferredWinrm) {
+    const preferredPort = preferredWinrm.port ?? (preferredWinrm.secure ? 5986 : 5985);
+    for (const request of winrmRequests) {
+      const requestSecure = normalizeWinrmRequestSecurePreference(request);
+      if (request.port !== undefined && preferredWinrm.port !== undefined && request.port !== preferredWinrm.port) {
+        issues.push(`${request.source} targets WinRM port ${request.port}, but the selected validated access method for this device is port ${preferredWinrm.port}.`);
+      }
+      if (requestSecure !== undefined && requestSecure !== preferredWinrm.secure) {
+        issues.push(`${request.source} sets WinRM secure=${requestSecure}, but the selected validated access method for this device requires secure=${preferredWinrm.secure}.`);
+      }
+      if (!preferredWinrm.secure && request.authentication?.trim().toLowerCase() === "basic") {
+        issues.push(`${request.source} forces Basic auth on WinRM even though this device's selected validated path is HTTP/${preferredPort}. Reuse the validated WinRM defaults instead.`);
+      }
+    }
+  }
+
+  for (const control of widget.controls) {
+    if (!controlLooksLikeRefresh(control)) {
+      continue;
+    }
+    if (control.execution.kind !== "operation") {
+      issues.push(`Control ${control.id} looks like a refresh action but only mutates widget state. Refresh controls must execute a real read operation.`);
+      continue;
+    }
+    if (control.execution.operation.mode !== "read") {
+      issues.push(`Control ${control.id} looks like a refresh action but is not configured as a read operation.`);
+    }
+    if (control.parameters.length > 0) {
+      issues.push(`Control ${control.id} looks like a refresh action but requires parameters. Refresh controls must be zero-parameter reads.`);
+    }
+  }
 
   for (const request of httpRequests) {
     if (request.scheme === "https" && request.insecureSkipVerify !== true) {
@@ -230,12 +380,6 @@ function validateGeneratedWidgetAgainstContext(
   return issues;
 }
 
-function canAutoVerifyControl(control: GeneratedWidget["controls"][number]): boolean {
-  return control.execution.kind === "operation"
-    && control.execution.operation.mode === "read"
-    && control.parameters.length === 0;
-}
-
 function buildDraftWidgetForVerification(args: {
   context: DeviceWidgetGenerationContext;
   widget: GeneratedWidget;
@@ -243,19 +387,19 @@ function buildDraftWidgetForVerification(args: {
 }): DeviceWidget {
   const now = new Date().toISOString();
   return {
-    id: args.targetWidget?.id ?? `widget-preview-${randomUUID()}`,
+    id: args.targetWidget?.id ?? `draft-widget-${slugifyWidgetName(args.widget.name)}`,
     deviceId: args.context.device.id,
     slug: args.targetWidget?.slug ?? slugifyWidgetName(args.widget.name),
     name: args.widget.name.trim(),
     description: args.widget.description.trim(),
-    status: "active",
+    status: args.targetWidget?.status ?? "active",
     html: sanitizeHtml(args.widget.html),
     css: sanitizeCss(args.widget.css),
     js: sanitizeJs(args.widget.js),
     capabilities: args.widget.capabilities,
     controls: args.widget.controls as DeviceWidget["controls"],
-    sourcePrompt: "widget-generation-preview",
-    createdBy: "steward",
+    sourcePrompt: args.targetWidget?.sourcePrompt,
+    createdBy: args.targetWidget?.createdBy ?? "steward",
     revision: args.targetWidget?.revision ?? 1,
     createdAt: args.targetWidget?.createdAt ?? now,
     updatedAt: now,
@@ -409,6 +553,44 @@ async function repairGeneratedWidgetForContextIssues(args: {
   });
 }
 
+async function repairGeneratedWidgetForSchemaIssues(args: {
+  model: Awaited<ReturnType<typeof buildLanguageModel>>;
+  systemPrompt: string;
+  currentValue: unknown;
+  issues: string;
+}): Promise<{ text: string; truncated: boolean }> {
+  const repairUserPrompt = [
+    "Revise this widget JSON so it satisfies Steward's schema exactly while preserving the requested functionality.",
+    "Normalize common mistakes such as lowercase HTTP methods, uppercase schemes, numeric ports serialized as strings, and malformed control execution objects.",
+    "If a control cannot be repaired safely, remove that control instead of leaving invalid schema.",
+    "If execution.kind='state', execution.patch must be an object.",
+    "If execution.kind='operation', execution.operation must be valid.",
+    "Every control parameter must include key, label, and type.",
+    "",
+    `Schema issues: ${args.issues}`,
+    "",
+    "Current widget JSON:",
+    JSON.stringify(args.currentValue, null, 2),
+  ].join("\n");
+
+  const repairResult = await generateText({
+    model: args.model,
+    system: args.systemPrompt,
+    prompt: repairUserPrompt,
+    temperature: 0,
+    maxOutputTokens: WIDGET_GENERATOR_MAX_OUTPUT_TOKENS,
+  });
+
+  const repairFinishReason = await Promise.resolve((repairResult as { finishReason?: unknown }).finishReason);
+  return autoContinueWidgetGeneration({
+    model: args.model,
+    systemPrompt: args.systemPrompt,
+    userPrompt: repairUserPrompt,
+    initialText: repairResult.text,
+    initialFinishReason: repairFinishReason,
+  });
+}
+
 function stripWrapperTag(html: string, tag: string): string {
   const open = new RegExp(`^\\s*<${tag}[^>]*>`, "i");
   const close = new RegExp(`</${tag}>\\s*$`, "i");
@@ -468,17 +650,30 @@ export interface GenerateDeviceWidgetInput {
   actor?: DeviceWidget["createdBy"];
   targetWidgetId?: string;
   targetWidgetSlug?: string;
+  verificationMode?: "strict" | "warn-on-connectivity";
 }
 
 export interface GenerateDeviceWidgetResult {
   widget: DeviceWidget;
   updatedExisting: boolean;
   summary: string;
+  warnings: string[];
+}
+
+function isConnectivityVerificationIssue(issue: string): boolean {
+  const normalized = issue.toLowerCase();
+  return normalized.includes("winrm transport connection failed")
+    || normalized.includes("winrm listener responded but remote powershell session failed")
+    || normalized.includes("wmi command failed")
+    || normalized.includes("smb command failed")
+    || normalized.includes("rpc server is unavailable")
+    || normalized.includes("network name is no longer available");
 }
 
 export async function generateAndStoreDeviceWidget(
   input: GenerateDeviceWidgetInput,
 ): Promise<GenerateDeviceWidgetResult> {
+  const verificationMode = input.verificationMode ?? "strict";
   const context = await buildDeviceWidgetContext(input.deviceId);
   if (!context) {
     throw new Error("Device not found.");
@@ -531,6 +726,8 @@ export async function generateAndStoreDeviceWidget(
       "- await window.StewardWidget.getControls(): fetch the latest control manifest.",
       "- await window.StewardWidget.invokeControl(controlId, input?): execute a control and throw on failure.",
       "- await window.StewardWidget.invokeControlDetailed(controlId, input?): execute a control and always resolve with the structured result.",
+      "- window.StewardWidget.getControlOperationResult(result): extract the nested operation result returned by invokeControlDetailed() for operation-backed controls.",
+      "- window.StewardWidget.getControlOutput(result): extract the raw command/output text from invokeControlDetailed() for operation-backed controls.",
       "- await window.StewardWidget.getOperations({ scope: 'widget' | 'device', limit }): fetch recent widget operation history.",
       "- await window.StewardWidget.getState(): load persisted JSON widget state.",
       "- await window.StewardWidget.setState(nextState): persist JSON widget state.",
@@ -546,13 +743,17 @@ export async function generateAndStoreDeviceWidget(
       "",
       "runOperation(operation) supports the existing Steward operation model.",
       "Structured operation results include: ok, status, phase, proof, summary, output, details, policyDecision, policyReason, approvalRequired.",
+      "invokeControlDetailed() returns a DeviceWidgetControlResult. For operation-backed controls, raw command output lives under result.operationResult.output, not result.output. Prefer getControlOutput()/getControlOperationResult() instead of guessing.",
       "For HTTP operations, details.responseBody contains the raw response body and details.responseJson contains parsed JSON when the body is valid JSON. Prefer getHttpResponse()/getHttpJson() instead of parsing result.output.",
       "MQTT operation results include details.messages when responses are collected. Prefer window.StewardWidget.getMqttMessages(result) instead of parsing output text.",
+      "For PowerShell/WinRM commands that emit JSON, set $ProgressPreference='SilentlyContinue' before writing output so progress CLIXML does not corrupt JSON parsing.",
       "Operation template interpolation resolves {{host}} automatically and any scalar key provided in operation.args.",
       "Stored device credentials are applied by Steward inside the broker. Never embed credential secrets, usernames, bearer tokens, API keys, or placeholders such as {{apiKey}} in widget code.",
       "If context.credentials includes an http-api credential with auth.appliedBySteward=true, rely on the broker to attach auth automatically.",
       "For http-api auth.mode='path-segment', use the logical API path (for example '/api/groups'); Steward inserts the stored token after auth.pathPrefix automatically.",
       "For HTTP broker requests, the TLS skip flag is brokerRequest.insecureSkipVerify. Do not use skipCertChecks for HTTP operations.",
+      "If context.accessMethods includes a selected or validated transport for the protocol you need, mirror that port and TLS setting instead of copying a generic example.",
+      `Keep widget descriptions short and operator-facing (max ${MAX_WIDGET_DESCRIPTION_LENGTH} chars). Do not mention styling, transport, auth, or verification details in description text.`,
       "Use verification-oriented flows. For opaque write operations, prefer runOperationDetailed() and verify with a follow-up read when possible.",
       "For WebSocket writes, brokerRequest.successStrategy controls what counts as success:",
       "- transport: opening the socket and sending messages is enough.",
@@ -569,8 +770,8 @@ export async function generateAndStoreDeviceWidget(
       "- MQTT read + request/response: { mode: 'read', kind: 'mqtt.message', adapterId: 'mqtt', timeoutMs: 10000, args: { deviceTopic: 'example/device-42' }, brokerRequest: { protocol: 'mqtt', scheme: 'mqtts', port: 8883, subscribeTopics: ['{{deviceTopic}}/telemetry'], publishMessages: [{ topic: '{{deviceTopic}}/command', payload: '{\"action\":\"status\"}' }], collectMessages: 1, responseTimeoutMs: 3000, successStrategy: 'response', insecureSkipVerify: true } }",
       "- MQTT widget helper pattern: const result = await window.StewardWidget.runMqtt({ scheme: 'mqtts', port: 8883, args: { deviceTopic: 'example/device-42' }, subscribeTopics: ['{{deviceTopic}}/telemetry'], publishMessages: [{ topic: '{{deviceTopic}}/command', payload: '{\"action\":\"status\"}' }], collectMessages: 1, responseTimeoutMs: 3000, successStrategy: 'response', insecureSkipVerify: true }); const messages = window.StewardWidget.getMqttMessages(result);",
       "- Linux telemetry over SSH: { mode: 'read', kind: 'shell.command', adapterId: 'ssh', timeoutMs: 30000, brokerRequest: { protocol: 'ssh', argv: ['sh', '-lc', 'uptime; free -m; df -h'] } }",
-      "- Windows telemetry over WinRM: { mode: 'read', kind: 'shell.command', adapterId: 'winrm', timeoutMs: 30000, brokerRequest: { protocol: 'winrm', useSsl: true, skipCertChecks: true, authentication: 'basic', command: 'Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize,FreePhysicalMemory; Get-PSDrive -PSProvider FileSystem | Select-Object Name,Used,Free' } }",
-      "- When the Steward host is macOS, prefer Windows PowerShell over SSH when the target exposes SSH. If WinRM is required, it must use HTTPS plus authentication: 'basic'. On Linux, prefer brokerRequest over shell-wrapped pwsh commands.",
+      "- Windows telemetry over WinRM: { mode: 'read', kind: 'shell.command', adapterId: 'winrm', timeoutMs: 30000, brokerRequest: { protocol: 'winrm', command: 'Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize,FreePhysicalMemory; Get-PSDrive -PSProvider FileSystem | Select-Object Name,Used,Free' } }",
+      "Do not invent host-platform transport constraints. Use the device context and the selected or validated access method instead of generic WinRM assumptions.",
       "",
       "Capabilities:",
       "- context: required if widget reads context.",
@@ -586,6 +787,13 @@ export async function generateAndStoreDeviceWidget(
       "- Every parameter object must include key, label, and type. Use key for the machine-readable input name. Do not substitute name or id for key.",
       "- execution.kind='operation' should be used for device actions via Steward's operation model.",
       "- execution.kind='state' should be used for persisted widget state changes only.",
+      "- If any control uses execution.kind='operation', capabilities must include device-control.",
+      "- Refresh, reload, sync, or update controls must use execution.kind='operation' with mode='read' and no parameters.",
+      "- Never fake live refresh by only mutating widget state, timestamps, or labels.",
+      "- HTTP brokerRequest.method must be uppercase GET, POST, PUT, PATCH, or DELETE.",
+      "- HTTP brokerRequest.scheme must be lowercase http or https.",
+      "- brokerRequest.port must be a number, not a string.",
+      "- state executions must include execution.patch as an object.",
       "- For toggles/selects/forms, the widget UI should call invokeControl/invokeControlDetailed instead of duplicating operation templates inline.",
       ...(generationHints.length > 0
         ? [
@@ -668,10 +876,26 @@ export async function generateAndStoreDeviceWidget(
 
   const parsedResult = GeneratedWidgetSchema.safeParse(extracted.value);
   if (!parsedResult.success) {
-    const truncationNote = jsonSourceWasTruncated ? " The model response may have been truncated." : "";
-    throw new Error(`Widget generator returned invalid JSON: ${summarizeSchemaIssues(parsedResult.error)}${truncationNote}`);
+    const repaired = await repairGeneratedWidgetForSchemaIssues({
+      model,
+      systemPrompt,
+      currentValue: extracted.value,
+      issues: summarizeSchemaIssues(parsedResult.error),
+    });
+    jsonSourceWasTruncated = jsonSourceWasTruncated || repaired.truncated;
+    const repairedExtracted = tryExtractFirstJsonObject(repaired.text);
+    if (!repairedExtracted.ok) {
+      const truncationNote = jsonSourceWasTruncated ? " The model response may have been truncated." : "";
+      throw new Error(`${repairedExtracted.error}${truncationNote}`);
+    }
+    const repairedParsed = GeneratedWidgetSchema.safeParse(repairedExtracted.value);
+    if (!repairedParsed.success) {
+      const truncationNote = jsonSourceWasTruncated ? " The model response may have been truncated." : "";
+      throw new Error(`Widget generator returned invalid JSON: ${summarizeSchemaIssues(repairedParsed.error)}${truncationNote}`);
+    }
+    extracted = { ok: true, value: repairedExtracted.value };
   }
-  let parsed = parsedResult.data;
+  let parsed = GeneratedWidgetSchema.parse(extracted.value);
 
   let contextIssues = validateGeneratedWidgetAgainstContext(parsed, context);
   if (contextIssues.length > 0) {
@@ -704,6 +928,7 @@ export async function generateAndStoreDeviceWidget(
     widget: parsed,
     targetWidget,
   });
+  const verificationWarnings: string[] = [];
   if (operationalIssues.length > 0) {
     const repaired = await repairGeneratedWidgetForContextIssues({
       model,
@@ -733,7 +958,14 @@ export async function generateAndStoreDeviceWidget(
       targetWidget,
     });
     if (operationalIssues.length > 0) {
-      throw new Error(`Widget generator failed live verification: ${operationalIssues.slice(0, 8).join("; ")}`);
+      const connectivityIssues = operationalIssues.filter(isConnectivityVerificationIssue);
+      if (verificationMode === "warn-on-connectivity" && connectivityIssues.length === operationalIssues.length) {
+        verificationWarnings.push(
+          `Live verification could not complete because device connectivity is still failing: ${connectivityIssues.slice(0, 8).join("; ")}`,
+        );
+      } else {
+        throw new Error(`Widget generator failed live verification: ${operationalIssues.slice(0, 8).join("; ")}`);
+      }
     }
   }
 
@@ -774,5 +1006,6 @@ export async function generateAndStoreDeviceWidget(
     widget,
     updatedExisting: Boolean(existing),
     summary: parsed.summary.trim(),
+    warnings: verificationWarnings,
   };
 }

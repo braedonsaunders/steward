@@ -33,7 +33,7 @@ import type {
   UserRole,
 } from "@/lib/state/types";
 import type { DeviceAdoptionStatus } from "@/lib/state/device-adoption";
-import { defaultRuntimeSettings } from "@/lib/state/defaults";
+import { defaultRuntimeSettings } from "@/lib/state/runtime-defaults";
 import { persistApiToken, withApiTokenQuery, withClientApiToken } from "@/lib/auth/client-token";
 
 export interface AuthClientStatus {

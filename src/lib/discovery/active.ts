@@ -38,6 +38,7 @@ const COMMON_TCP_SERVICES: Array<{ port: number; name: string; secure: boolean }
   { port: 2376, name: "docker-tls", secure: true },
   { port: 3306, name: "mysql", secure: false },
   { port: 3389, name: "rdp", secure: true },
+  { port: 5900, name: "vnc", secure: false },
   { port: 5432, name: "postgresql", secure: false },
   { port: 5985, name: "winrm", secure: false },
   { port: 5986, name: "winrm-https", secure: true },
@@ -522,3 +523,4 @@ export const collectActiveCandidates = async (
   return [...pingCandidates, ...enriched.filter((item): item is DiscoveryCandidate => Boolean(item))]
     .filter((candidate) => isRemoteIp(candidate.ip));
 };
+

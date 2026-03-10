@@ -2,6 +2,7 @@ import {
   requiresWebResearchApiKey,
   WEB_RESEARCH_PROVIDER_ORDER,
 } from "@/lib/assistant/web-research-config";
+import { loadPlaywrightChromiumRuntime } from "@/lib/runtime/playwright";
 import type { WebResearchFallbackStrategy, WebResearchProvider } from "@/lib/state/types";
 
 interface FetchTextResult {
@@ -693,17 +694,8 @@ async function mapWithConcurrency<T, R>(
 }
 
 async function loadPlaywright(): Promise<PlaywrightModule | null> {
-  try {
-    const moduleName = "playwright";
-    const mod = await import(moduleName);
-    const chromium = (mod as Record<string, unknown>).chromium;
-    if (chromium && typeof chromium === "object" && "launch" in chromium) {
-      return { chromium: chromium as PlaywrightModule["chromium"] };
-    }
-  } catch {
-    // Playwright is optional for rendered page fallback.
-  }
-  return null;
+  const chromium = await loadPlaywrightChromiumRuntime();
+  return chromium ? { chromium: chromium as PlaywrightModule["chromium"] } : null;
 }
 
 async function renderPageWithPlaywright(url: string, timeoutMs: number): Promise<WebResearchPage | null> {

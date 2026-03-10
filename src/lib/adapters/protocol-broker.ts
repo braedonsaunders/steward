@@ -6,9 +6,11 @@ import {
   normalizeWinrmOutput,
   powerShellInstallHint,
   preferredWinrmHost,
+  sanitizeWinrmHostCandidate,
   resolvePowerShellRuntime,
   resolveWinrmConnection,
 } from "@/lib/adapters/winrm";
+import { getStewardHostNetworkSummary } from "@/lib/discovery/local";
 import { requestText } from "@/lib/network/http-client";
 import {
   renderMqttBrokerRequest,
@@ -20,9 +22,11 @@ import {
 } from "@/lib/credentials/http-api";
 import { localToolRuntime } from "@/lib/local-tools/runtime";
 import { protocolSessionManager } from "@/lib/protocol-sessions/manager";
+import { protocolDisplayLabel } from "@/lib/protocols/catalog";
 import { vault } from "@/lib/security/vault";
 import { stateStore } from "@/lib/state/store";
 import { runCommand } from "@/lib/utils/shell";
+import { webSessionManager } from "@/lib/web-sessions/manager";
 import type {
   Device,
   DeviceCredential,
@@ -30,6 +34,7 @@ import type {
   OperationExecutionProof,
   OperationExecutionStatus,
   OperationSpec,
+  WinrmAuthentication,
   WebSocketSuccessStrategy,
 } from "@/lib/state/types";
 
@@ -165,12 +170,237 @@ function getCachedWinrmNegotiationFailure(cacheKey: string): CachedWinrmFailure 
   return cached;
 }
 
+function uniqStrings(values: Array<string | undefined | null>): string[] {
+  return Array.from(new Set(values.filter((value): value is string => Boolean(value && value.trim().length > 0)).map((value) => value.trim())));
+}
+
+function buildWinrmHostCandidates(device: Device, explicitHost?: string): string[] {
+  if (explicitHost && explicitHost.trim().length > 0) {
+    return uniqStrings([sanitizeWinrmHostCandidate(explicitHost), sanitizeWinrmHostCandidate(device.ip)]);
+  }
+  return uniqStrings([
+    preferredWinrmHost(device),
+    sanitizeWinrmHostCandidate(device.hostname),
+    sanitizeWinrmHostCandidate(device.name),
+    sanitizeWinrmHostCandidate(device.ip),
+  ]);
+}
+
+function buildWindowsRemoteHostCandidates(device: Device, explicitHost?: string): string[] {
+  if (explicitHost && explicitHost.trim().length > 0) {
+    return uniqStrings([sanitizeWinrmHostCandidate(explicitHost), sanitizeWinrmHostCandidate(device.ip)]);
+  }
+  return uniqStrings([
+    preferredWinrmHost(device),
+    sanitizeWinrmHostCandidate(device.hostname),
+    sanitizeWinrmHostCandidate(device.name),
+    sanitizeWinrmHostCandidate(device.ip),
+  ]);
+}
+
+function commandLooksRemoteForWmi(command: string): boolean {
+  const normalized = command.toLowerCase();
+  if (normalized.includes("$session") || normalized.includes("-cimsession") || normalized.includes("invoke-cimmethod")) {
+    return true;
+  }
+  if (normalized.includes("get-ciminstance") || normalized.includes("get-wmiobject") || normalized.includes("gwmi")) {
+    return normalized.includes("-computername") || normalized.includes("-cimsession");
+  }
+  return false;
+}
+
+function commandLooksRemoteForSmb(command: string): boolean {
+  const normalized = command.toLowerCase();
+  return normalized.includes("$sharepath")
+    || normalized.includes("$shareroot")
+    || normalized.includes("join-path $sharepath")
+    || normalized.includes("join-path $shareroot");
+}
+
+function renderWsmanUrl(host: string, connectionAttempt: { useSsl: boolean; port: number }): string {
+  const scheme = connectionAttempt.useSsl ? "https" : "http";
+  const hostLiteral = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  return `${scheme}://${hostLiteral}:${connectionAttempt.port}/wsman`;
+}
+
+function buildWinrmAuthenticationCandidates(baseAuthentication: WinrmAuthentication, explicitAuthentication?: string, host?: string): WinrmAuthentication[] {
+  const normalizedExplicit = explicitAuthentication?.trim().toLowerCase();
+  if (normalizedExplicit) {
+    return [baseAuthentication];
+  }
+  const hostLooksLikeName = typeof host === "string" && host.length > 0 && !isWinrmIpLiteral(host);
+  return uniqStrings(
+    hostLooksLikeName
+      ? [baseAuthentication, "kerberos", "negotiate", "default"]
+      : [baseAuthentication, "default", "negotiate", "kerberos"],
+  ) as WinrmAuthentication[];
+}
+
+function buildWinrmConnectionAttempts(args: {
+  device: Device;
+  broker: NonNullable<OperationSpec["brokerRequest"]> & { protocol: "winrm" };
+  targetHost: string;
+}): Array<{ port: number; useSsl: boolean; skipCertChecks: boolean; authentication: WinrmAuthentication; hostPlatform: NodeJS.Platform }> {
+  const baseResolution = resolveWinrmConnection(args.device, args.broker);
+  if (!baseResolution.ok) {
+    return [];
+  }
+  const base = baseResolution.value;
+  const observedPorts = Array.from(new Set(
+    args.device.services
+      .filter((service) => service.transport === "tcp" && (service.port === 5985 || service.port === 5986))
+      .map((service) => service.port),
+  ));
+  const explicitPort = typeof args.broker.port === "number" ? args.broker.port : undefined;
+  const explicitUseSsl = typeof args.broker.useSsl === "boolean" ? args.broker.useSsl : undefined;
+  const authCandidates = buildWinrmAuthenticationCandidates(base.authentication, args.broker.authentication, args.targetHost);
+  const transportCandidates = explicitPort || explicitUseSsl !== undefined
+    ? [{ port: base.port, useSsl: base.useSsl }]
+    : uniqStrings([
+      `${base.port}:${base.useSsl ? "ssl" : "plain"}`,
+      ...(observedPorts.includes(5986) ? ["5986:ssl"] : []),
+      ...(observedPorts.includes(5985) ? ["5985:plain"] : []),
+    ]).map((value) => ({
+      port: Number(value.split(":")[0]),
+      useSsl: value.endsWith(":ssl"),
+    }));
+
+  return transportCandidates.flatMap((transport) => authCandidates.map((authentication) => ({
+    port: transport.port,
+    useSsl: transport.useSsl,
+    skipCertChecks: transport.useSsl ? base.skipCertChecks : false,
+    authentication,
+    hostPlatform: base.hostPlatform,
+  })));
+}
+
 function formatWinrmRemediationHints(output: string): string {
   const analysis = analyzeWinrmFailure(output);
   if (analysis.hints.length === 0) {
     return "";
   }
   return ["[remediation]", ...analysis.hints.map((hint) => `- ${hint}`)].join("\n");
+}
+
+function appendHostNetworkSummary(output: string, targetIp?: string): string {
+  const hostNetwork = getStewardHostNetworkSummary(targetIp);
+  return `${output}\n\n[steward-host] ${hostNetwork.summary}`.trim();
+}
+
+function analyzeWmiFailure(output: string, targetIp?: string): { summary: string; output: string; category: string } {
+  const normalized = output.toLowerCase();
+  const withHostSummary = appendHostNetworkSummary(output, targetIp);
+  if (normalized.includes("0x800706ba") || normalized.includes("rpc server is unavailable")) {
+    return {
+      summary: "WMI reached the host but RPC/DCOM session startup failed",
+      category: "rpc_unavailable",
+      output: `${withHostSummary}\n\n[diagnostic] Steward did not prove a bad credential here. This usually means RPC/DCOM reachability, endpoint mapper, or firewall policy blocked the management session.`.trim(),
+    };
+  }
+  if (normalized.includes("access is denied")) {
+    return {
+      summary: "WMI transport connected but execution was denied",
+      category: "access_denied",
+      output: `${withHostSummary}\n\n[diagnostic] The target responded, but WMI authorization failed. Check DCOM/WMI rights for the stored account.`.trim(),
+    };
+  }
+  return {
+    summary: "WMI command failed during remote execution",
+    category: "generic",
+    output: `${withHostSummary}\n\n[diagnostic] Steward could not complete the WMI/DCOM operation. Review the raw broker output before concluding the firewall is the only cause.`.trim(),
+  };
+}
+
+function analyzeSmbFailure(output: string, targetIp?: string): { summary: string; output: string; category: string } {
+  const normalized = output.toLowerCase();
+  const withHostSummary = appendHostNetworkSummary(output, targetIp);
+  if (normalized.includes("network name is no longer available")) {
+    return {
+      summary: "SMB reached the host but the session dropped during share setup",
+      category: "session_dropped",
+      output: `${withHostSummary}\n\n[diagnostic] The SMB path responded and then dropped. This can be caused by server policy, signing requirements, session setup failure, or filtering in the path.`.trim(),
+    };
+  }
+  if (normalized.includes("logon failure") || normalized.includes("access is denied")) {
+    return {
+      summary: "SMB transport connected but share access was denied",
+      category: "access_denied",
+      output: `${withHostSummary}\n\n[diagnostic] The host responded, but the SMB session or share authorization was denied for the stored account.`.trim(),
+    };
+  }
+  return {
+    summary: "SMB command failed during share access",
+    category: "generic",
+    output: `${withHostSummary}\n\n[diagnostic] Steward could not complete the SMB share operation. Review the raw broker output before concluding the firewall is the only cause.`.trim(),
+  };
+}
+
+function looksLikeDomainController(device: Device): boolean {
+  const text = [device.name, device.hostname, device.os, device.role]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  if (/(domain controller|active directory|\bpdc\b|\bdc\d+\b)/.test(text)) {
+    return true;
+  }
+  const ports = new Set(device.services.map((service) => Number(service.port)));
+  return ports.has(53) && ports.has(88) && ports.has(389);
+}
+
+function formatWinrmRemediationHintsForDevice(device: Device, output: string): string {
+  const analysis = analyzeWinrmFailure(output);
+  const hints = new Set<string>(analysis.hints);
+  const hostNetwork = getStewardHostNetworkSummary(device.ip);
+  if (analysis.categories.includes("operation_timeout_or_firewall")) {
+    hints.add("Verify the WinRM firewall rule is scoped for the Steward host or subnet instead of broadening it blindly.");
+  }
+  if (hostNetwork.sameSubnet && /same local subnet|local subnet/i.test(output)) {
+    hints.add("The WSMan fault text mentions 'same local subnet', but Steward is already on the same subnet. Treat that as generic WinRM guidance, not proof of a subnet mismatch.");
+  }
+  if (analysis.categories.includes("cannot_use_ip_address")) {
+    hints.add("If possible, connect by hostname or FQDN so Kerberos can negotiate cleanly instead of relying on IP-based HTTP WinRM.");
+  }
+  if (looksLikeDomainController(device)) {
+    hints.add("This host looks like a domain controller. Do not force the NIC profile or open WinRM to Any as a first step; verify the interface already shows DomainAuthenticated, confirm DNS/SPN alignment, and keep firewall scope narrow.");
+  }
+  if (hints.size === 0) {
+    return formatWinrmRemediationHints(output);
+  }
+  return ["[remediation]", ...Array.from(hints).map((hint) => `- ${hint}`)].join("\n");
+}
+
+function summarizeWinrmFailureStage(output: string): {
+  summaryWhenReachable: string;
+  diagnosticWhenReachable: string;
+  stage: string;
+} {
+  const analysis = analyzeWinrmFailure(output);
+  if (analysis.stage === "test_wsman") {
+    return {
+      stage: analysis.stage,
+      summaryWhenReachable: "WinRM listener responded but WSMan preflight failed during Steward session negotiation",
+      diagnosticWhenReachable: "[diagnostic] WSMan responded on at least one attempted endpoint, but Steward failed during Test-WSMan negotiation before session creation.",
+    };
+  }
+  if (analysis.stage === "session_create") {
+    return {
+      stage: analysis.stage,
+      summaryWhenReachable: "WinRM listener responded but Steward could not create a remote PowerShell session",
+      diagnosticWhenReachable: "[diagnostic] WSMan responded and preflight completed, but New-PSSession failed. This points to WinRM authorization, remoting configuration, or target shell startup rather than basic host reachability.",
+    };
+  }
+  if (analysis.stage === "invoke_command") {
+    return {
+      stage: analysis.stage,
+      summaryWhenReachable: "WinRM session opened but command execution failed inside the remote session",
+      diagnosticWhenReachable: "[diagnostic] Steward created a remote PowerShell session, but the remote command failed after session establishment.",
+    };
+  }
+  return {
+    stage: analysis.stage ?? "unknown",
+    summaryWhenReachable: "WinRM listener responded but Steward could not start a remote PowerShell session",
+    diagnosticWhenReachable: "[diagnostic] WSMan responded on at least one attempted WinRM endpoint, but Steward could not establish a remote PowerShell session. This points to session negotiation, authentication mode, authorization, or remote shell startup failure rather than proving the server is unreachable.",
+  };
 }
 
 interface CachedWinrmFailure {
@@ -247,6 +477,78 @@ function buildWindowsPowerShellSshArgv(command: string): string[] {
   ];
 }
 
+function escapePowerShellSingleQuoted(value: string): string {
+  return value.replace(/'/g, "''");
+}
+
+async function executePowerShellRuntimeScript(script: string, timeoutMs: number): Promise<{
+  ok: boolean;
+  output: string;
+  details: Record<string, unknown>;
+  executable?: string;
+}> {
+  const runtime = await resolvePowerShellRuntime();
+  if (!runtime.available || !runtime.executable) {
+    return {
+      ok: false,
+      output: powerShellInstallHint(process.platform),
+      details: {
+        hostPlatform: process.platform,
+        triedExecutables: runtime.tried,
+        runtimeError: runtime.error ?? null,
+      },
+    };
+  }
+  const attempt = await runCommand(
+    runtime.executable,
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodePowerShellScript(script)],
+    timeoutMs,
+  );
+  return {
+    ok: attempt.ok,
+    output: normalizeWinrmOutput(`${attempt.stdout}${attempt.stderr ? `\n[stderr] ${attempt.stderr}` : ""}`).trim(),
+    executable: runtime.executable,
+    details: {
+      executable: runtime.executable,
+      powerShellVersion: runtime.version ?? null,
+      exitCode: attempt.code,
+    },
+  };
+}
+
+function applyExpectationToOutput(input: {
+  protocol: string;
+  output: string;
+  expectRegex?: string;
+  details: Record<string, unknown>;
+}): BrokerExecutionResult {
+  if (input.expectRegex && !new RegExp(input.expectRegex, "i").test(input.output)) {
+    return brokerResult({
+      status: "failed",
+      phase: "verified",
+      proof: "process",
+      summary: `${protocolDisplayLabel(input.protocol)} command completed but did not match expectation`,
+      output: `${input.output}\n[expectation failed] ${input.expectRegex}`.trim(),
+      details: {
+        ...input.details,
+        matchedExpectation: false,
+        expectRegex: input.expectRegex,
+      },
+    });
+  }
+  return brokerResult({
+    status: "succeeded",
+    phase: input.expectRegex ? "verified" : "executed",
+    proof: input.expectRegex ? "expectation" : "process",
+    summary: `${protocolDisplayLabel(input.protocol)} command completed successfully`,
+    output: input.output,
+    details: {
+      ...input.details,
+      matchedExpectation: Boolean(input.expectRegex),
+    },
+  });
+}
+
 function shouldUseWindowsSshFallback(device: Device): boolean {
   return process.platform === "darwin" && deviceHasObservedSsh(device);
 }
@@ -297,10 +599,14 @@ async function runSshCommandWithCredential(input: {
   secret: string;
   host: string;
   argv: string[];
+  remoteCommand?: string;
   port?: number;
   validationMethod: string;
   validationDetails: Record<string, unknown>;
 }): Promise<BrokerExecutionResult> {
+  const remoteArgs = typeof input.remoteCommand === "string" && input.remoteCommand.trim().length > 0
+    ? [input.remoteCommand]
+    : input.argv;
   const result = process.platform === "win32"
     ? formatCommandOutput(await runCommand(
       "plink",
@@ -313,7 +619,7 @@ async function runSshCommandWithCredential(input: {
         input.host,
         "-pw",
         input.secret,
-        ...input.argv,
+        ...remoteArgs,
       ],
       input.operation.timeoutMs,
     ))
@@ -329,7 +635,7 @@ async function runSshCommandWithCredential(input: {
         "-o",
         "StrictHostKeyChecking=no",
         input.host,
-        ...input.argv,
+        ...remoteArgs,
       ],
       input.operation.timeoutMs,
     ));
@@ -345,6 +651,14 @@ async function runSshCommandWithCredential(input: {
   }
 
   return result;
+}
+
+function shellEscapeSingleQuoted(value: string): string {
+  return value.replace(/'/g, `'"'"'`);
+}
+
+function buildSshRemoteCommand(command: string): string {
+  return `sh -lc '${shellEscapeSingleQuoted(command)}'`;
 }
 
 function redactSensitiveHttpValue(value: string, secret?: string): string {
@@ -457,11 +771,17 @@ async function executeSshBroker(
     });
   }
 
-  const remoteArgv = broker.argv.map((arg) => interpolateOperationValue(arg, device.ip, params));
+  const remoteCommand = typeof broker.command === "string" && broker.command.trim().length > 0
+    ? buildSshRemoteCommand(interpolateOperationValue(broker.command.trim(), device.ip, params))
+    : undefined;
+  const remoteArgv = remoteCommand
+    ? []
+    : (broker.argv ?? []).map((arg) => interpolateOperationValue(arg, device.ip, params));
 
   logCredentialAccess(context, operation, device, "ssh", "granted", {
     accountLabel,
     argv: remoteArgv,
+    remoteCommand,
     credentialStatus: credential.status,
   }, credential.id);
 
@@ -474,6 +794,7 @@ async function executeSshBroker(
     secret,
     host: device.ip,
     argv: remoteArgv,
+    remoteCommand,
     port: broker.port,
     validationMethod: "ssh.command",
     validationDetails: { adapterId: operation.adapterId, operationId: operation.id },
@@ -625,7 +946,7 @@ async function executeWinrmBroker(
 
   const { credential, availableStatuses } = getCredentialForBroker(
     device.id,
-    ["winrm", "windows"],
+    ["winrm"],
     context.allowProvidedCredentials,
     operation.adapterId,
   );
@@ -723,13 +1044,49 @@ async function executeWinrmBroker(
     });
   }
 
+  const hostCandidates = buildWinrmHostCandidates(device, brokerHost);
+  if (hostCandidates.length === 0) {
+    return brokerResult({
+      status: "failed",
+      phase: "not-started",
+      proof: "none",
+      summary: "WinRM target host is invalid",
+      output: "Steward could not derive a valid hostname or IP for WinRM. Discovery likely stored a friendly label instead of a routable host identifier.",
+      details: {
+        deviceName: device.name,
+        deviceHostname: device.hostname ?? null,
+        deviceIp: device.ip,
+        explicitHost: brokerHost ?? null,
+      },
+    });
+  }
+  const connectionAttempts = buildWinrmConnectionAttempts({
+    device,
+    broker: broker as typeof broker & { protocol: "winrm" },
+    targetHost,
+  });
+  if (connectionAttempts.length === 0) {
+    return brokerResult({
+      status: "failed",
+      phase: "not-started",
+      proof: "none",
+      summary: "WinRM request is incompatible with this Steward host",
+      output: "Steward could not derive any usable WinRM host/auth/transport attempts for this request.",
+      details: {
+        targetHost,
+        requestedAuthentication: broker.authentication ?? null,
+        requestedPort: broker.port ?? null,
+        requestedUseSsl: broker.useSsl ?? null,
+      },
+    });
+  }
   const failureCacheKey = winrmFailureCacheKey({
     deviceId: device.id,
-    host: targetHost,
+    host: `${targetHost}|${hostCandidates.join(",")}`,
     ip: device.ip,
     port: connection.value.port,
     useSsl: connection.value.useSsl,
-    authentication: connection.value.authentication,
+    authentication: connectionAttempts.map((attempt) => `${attempt.authentication}:${attempt.port}:${attempt.useSsl ? "ssl" : "plain"}`).join(","),
   });
   const cachedNegotiationFailure = getCachedWinrmNegotiationFailure(failureCacheKey);
   if (cachedNegotiationFailure) {
@@ -746,106 +1103,123 @@ async function executeWinrmBroker(
     });
   }
 
-  const allowIpFallback = connection.value.useSsl || targetHostIsIp;
-  const hostCandidates = Array.from(new Set([
-    targetHost,
-    ...(allowIpFallback ? [device.ip] : []),
-  ].filter((value) => value.length > 0)));
-  const wsmanScheme = connection.value.useSsl ? "https" : "http";
-  const hostCandidateScores = await Promise.all(hostCandidates.map(async (hostCandidate) => {
-    const probe = await requestText(new URL(`${wsmanScheme}://${hostCandidate}:${connection.value.port}/wsman`), {
-      method: "GET",
-      timeoutMs: 2_000,
-      insecureSkipVerify: connection.value.skipCertChecks,
-    });
-    const reachable = probe.statusCode === 405 || probe.statusCode === 401 || probe.ok;
-    return { host: hostCandidate, reachable };
-  }));
-  const orderedHostCandidates = hostCandidateScores
-    .sort((a, b) => Number(b.reachable) - Number(a.reachable))
-    .map((candidate) => candidate.host);
-
   logCredentialAccess(context, operation, device, "winrm", "granted", {
     accountLabel,
-    host: orderedHostCandidates[0],
+    host: hostCandidates[0],
     credentialStatus: credential.status,
-    port: connection.value.port,
-    useSsl: connection.value.useSsl,
-    skipCertChecks: connection.value.skipCertChecks,
-    authentication: connection.value.authentication,
+    attempts: connectionAttempts.map((attempt) => ({
+      port: attempt.port,
+      useSsl: attempt.useSsl,
+      authentication: attempt.authentication,
+    })),
   }, credential.id);
 
   const executableUsed = runtime.executable;
-  const failures: Array<{ host: string; output: string; code: number }> = [];
+  const failures: Array<{
+    host: string;
+    output: string;
+    code: number;
+    port: number;
+    useSsl: boolean;
+    authentication: WinrmAuthentication;
+    wsmanStatusCode: number;
+    wsmanOk: boolean;
+    wsmanError: string | null;
+    wsmanUrl: string;
+  }> = [];
   let successfulHost: string | null = null;
+  let successfulConnection = connection.value;
   let output = "";
 
-  for (const hostCandidate of orderedHostCandidates) {
-    const command = interpolateOperationValue(broker.command, hostCandidate, params);
-    const script = buildWinrmPowerShellScript({
-      host: hostCandidate,
-      username: accountLabel,
-      password: secret,
-      command,
-      connection: connection.value,
-    });
+  outer:
+  for (const connectionAttempt of connectionAttempts) {
+    const hostCandidateScores = await Promise.all(hostCandidates.map(async (hostCandidate) => {
+      const wsmanUrl = renderWsmanUrl(hostCandidate, connectionAttempt);
+      const probe = await requestText(new URL(wsmanUrl), {
+        method: "GET",
+        timeoutMs: 2_000,
+        insecureSkipVerify: connectionAttempt.skipCertChecks,
+      });
+      const reachable = probe.statusCode === 405 || probe.statusCode === 401 || probe.ok;
+      return { host: hostCandidate, reachable, probe, wsmanUrl };
+    }));
+    const orderedHostCandidates = hostCandidateScores
+      .sort((a, b) => Number(b.reachable) - Number(a.reachable))
+      .map((candidate) => candidate.host);
 
-    const attempt = await runCommand(
-      executableUsed,
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodePowerShellScript(script)],
-      operation.timeoutMs,
-    );
-    output = normalizeWinrmOutput(`${attempt.stdout}${attempt.stderr ? `\n[stderr] ${attempt.stderr}` : ""}`).trim();
-    if (attempt.ok) {
-      successfulHost = hostCandidate;
-      break;
+    for (const hostCandidate of orderedHostCandidates) {
+      const command = interpolateOperationValue(broker.command, hostCandidate, params);
+      const script = buildWinrmPowerShellScript({
+        host: hostCandidate,
+        username: accountLabel,
+        password: secret,
+        command,
+        connection: connectionAttempt,
+      });
+
+      const attempt = await runCommand(
+        executableUsed,
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodePowerShellScript(script)],
+        operation.timeoutMs,
+      );
+      output = normalizeWinrmOutput(`${attempt.stdout}${attempt.stderr ? `\n[stderr] ${attempt.stderr}` : ""}`).trim();
+      if (attempt.ok) {
+        successfulHost = hostCandidate;
+        successfulConnection = connectionAttempt;
+        break outer;
+      }
+      const matchingProbeEntry = hostCandidateScores.find((candidate) => candidate.host === hostCandidate);
+      const matchingProbe = matchingProbeEntry?.probe;
+      failures.push({
+        host: hostCandidate,
+        output,
+        code: attempt.code,
+        port: connectionAttempt.port,
+        useSsl: connectionAttempt.useSsl,
+        authentication: connectionAttempt.authentication,
+        wsmanStatusCode: matchingProbe?.statusCode ?? 0,
+        wsmanOk: matchingProbe?.ok ?? false,
+        wsmanError: matchingProbe?.error ?? null,
+        wsmanUrl: matchingProbeEntry?.wsmanUrl ?? renderWsmanUrl(hostCandidate, connectionAttempt),
+      });
     }
-    failures.push({
-      host: hostCandidate,
-      output,
-      code: attempt.code,
-    });
   }
 
   if (!successfulHost) {
-    const wsmanProbe = await requestText(new URL(`${wsmanScheme}://${device.ip}:${connection.value.port}/wsman`), {
-      method: "GET",
-      timeoutMs: 4_000,
-      insecureSkipVerify: connection.value.skipCertChecks,
-    });
-    const listenerReachable = wsmanProbe.statusCode === 405 || wsmanProbe.statusCode === 401 || wsmanProbe.ok;
-    const failureOutput = failures.map((failure) => `host=${failure.host}\n${failure.output}\n[exit code: ${failure.code}]`).join("\n\n");
-    const diagnostic = listenerReachable
-      ? `[diagnostic] WinRM listener reachable at ${device.ip}:${connection.value.port} (HTTP ${wsmanProbe.statusCode}), but remoting session negotiation failed.`
-      : `[diagnostic] WinRM listener probe failed at ${device.ip}:${connection.value.port} (${wsmanProbe.error ?? `HTTP ${wsmanProbe.statusCode}`}).`;
-    const remediation = formatWinrmRemediationHints(failureOutput);
-    const summary = listenerReachable
-      ? `WinRM session negotiation failed via ${executableUsed}`
-      : `WinRM transport connection failed via ${executableUsed}`;
+    const stageSummary = summarizeWinrmFailureStage(failures.map((failure) => failure.output).join("\n\n"));
+    const failureOutput = failures.map((failure) => [
+      `host=${failure.host} port=${failure.port} ssl=${failure.useSsl ? "true" : "false"} auth=${failure.authentication}`,
+      failure.output,
+      `[wsman url] ${failure.wsmanUrl}`,
+      `[wsman probe] ${failure.wsmanError ?? `HTTP ${failure.wsmanStatusCode}`}`,
+      `[exit code: ${failure.code}]`,
+    ].join("\n")).join("\n\n");
+    const anyListenerReachable = failures.some((failure) => failure.wsmanStatusCode === 405 || failure.wsmanStatusCode === 401 || failure.wsmanOk);
+    const hostNetwork = getStewardHostNetworkSummary(device.ip);
+    const diagnostic = anyListenerReachable
+      ? stageSummary.diagnosticWhenReachable
+      : `[diagnostic] Steward could not prove a reachable WSMan endpoint on the attempted WinRM combinations.`;
+    const remediation = formatWinrmRemediationHintsForDevice(device, failureOutput);
+    const summary = anyListenerReachable
+      ? `${stageSummary.summaryWhenReachable} via ${executableUsed}`
+      : `WinRM transport connection failed across attempted host/auth combinations via ${executableUsed}`;
     const details = {
       executable: executableUsed,
       powerShellVersion: runtime.version ?? null,
-      host: orderedHostCandidates[0],
-      attemptedHosts: orderedHostCandidates,
-      port: connection.value.port,
-      useSsl: connection.value.useSsl,
-      skipCertChecks: connection.value.skipCertChecks,
-      authentication: connection.value.authentication,
-      wsmanProbe: {
-        url: `${wsmanScheme}://${device.ip}:${connection.value.port}/wsman`,
-        statusCode: wsmanProbe.statusCode,
-        ok: wsmanProbe.ok,
-        error: wsmanProbe.error ?? null,
-      },
+      host: hostCandidates[0],
+      attemptedHosts: hostCandidates,
+      attemptedConnections: connectionAttempts,
       matchedExpectation: false,
-      ipFallbackEnabled: allowIpFallback,
       targetHost,
       targetHostIsIp,
+      failureStage: stageSummary.stage,
+      hostNetwork,
     };
-    if (listenerReachable) {
+    const fullOutput = `${failureOutput}\n\n${diagnostic}\n\n[steward-host] ${hostNetwork.summary}${remediation ? `\n\n${remediation}` : ""}`.trim();
+    if (anyListenerReachable) {
       winrmNegotiationFailureCache.set(failureCacheKey, {
         summary,
-        output: `${failureOutput}\n\n${diagnostic}${remediation ? `\n\n${remediation}` : ""}`.trim(),
+        output: fullOutput,
         details,
         cachedAt: Date.now(),
       });
@@ -855,7 +1229,7 @@ async function executeWinrmBroker(
       phase: "executed",
       proof: "process",
       summary,
-      output: `${failureOutput}\n\n${diagnostic}${remediation ? `\n\n${remediation}` : ""}`.trim(),
+      output: fullOutput,
       details,
     });
   }
@@ -875,10 +1249,10 @@ async function executeWinrmBroker(
           executable: executableUsed,
           powerShellVersion: runtime.version ?? null,
           host: successfulHost,
-          port: connection.value.port,
-          useSsl: connection.value.useSsl,
-          skipCertChecks: connection.value.skipCertChecks,
-          authentication: connection.value.authentication,
+          port: successfulConnection.port,
+          useSsl: successfulConnection.useSsl,
+          skipCertChecks: successfulConnection.skipCertChecks,
+          authentication: successfulConnection.authentication,
           matchedExpectation: false,
           expectRegex: broker.expectRegex,
         },
@@ -896,11 +1270,12 @@ async function executeWinrmBroker(
       executable: executableUsed,
       powerShellVersion: runtime.version ?? null,
       host: successfulHost,
-      attemptedHosts: orderedHostCandidates,
-      port: connection.value.port,
-      useSsl: connection.value.useSsl,
-      skipCertChecks: connection.value.skipCertChecks,
-      authentication: connection.value.authentication,
+      attemptedHosts: hostCandidates,
+      attemptedConnections: connectionAttempts,
+      port: successfulConnection.port,
+      useSsl: successfulConnection.useSsl,
+      skipCertChecks: successfulConnection.skipCertChecks,
+      authentication: successfulConnection.authentication,
       matchedExpectation: Boolean(broker.expectRegex),
     },
   });
@@ -913,11 +1288,302 @@ async function executeWinrmBroker(
         adapterId: operation.adapterId,
         operationId: operation.id,
         host: successfulHost,
-        port: connection.value.port,
-        useSsl: connection.value.useSsl,
+        port: successfulConnection.port,
+        useSsl: successfulConnection.useSsl,
       },
   });
   return winrmResult;
+}
+
+async function executePowerShellSshBroker(
+  operation: OperationSpec,
+  device: Device,
+  params: Record<string, string>,
+  context: BrokerExecutionContext,
+): Promise<BrokerExecutionResult> {
+  const broker = operation.brokerRequest;
+  if (!broker || broker.protocol !== "powershell-ssh") {
+    return brokerResult({
+      handled: false,
+      status: "failed",
+      phase: "not-started",
+      proof: "none",
+      summary: "PowerShell over SSH broker not applicable",
+      output: "",
+    });
+  }
+
+  const { credential, availableStatuses } = getCredentialForBroker(
+    device.id,
+    ["powershell-ssh", "ssh"],
+    context.allowProvidedCredentials,
+    operation.adapterId,
+  );
+  if (!credential) {
+    return brokerResult({
+      status: "failed",
+      phase: "not-started",
+      proof: "none",
+      summary: "PowerShell over SSH credential required",
+      output: "PowerShell over SSH broker requires a stored powershell-ssh or SSH credential.",
+      details: { availableStatuses },
+    });
+  }
+
+  const secret = await vault.getSecret(credential.vaultSecretRef);
+  if (!secret || secret.trim().length === 0) {
+    return brokerResult({
+      status: "failed",
+      phase: "not-started",
+      proof: "none",
+      summary: "PowerShell over SSH secret missing",
+      output: "Stored PowerShell over SSH or SSH credential is missing a usable secret.",
+      details: { credentialId: credential.id },
+    });
+  }
+
+  const accountLabel = credential.accountLabel?.trim() ?? "";
+  if (accountLabel.length === 0) {
+    return brokerResult({
+      status: "failed",
+      phase: "not-started",
+      proof: "none",
+      summary: "PowerShell over SSH username is required",
+      output: "PowerShell over SSH broker requires an accountLabel username.",
+      details: { credentialId: credential.id },
+    });
+  }
+
+  const targetHost = typeof broker.host === "string" && broker.host.trim().length > 0
+    ? broker.host.trim()
+    : device.ip;
+  const sshResult = await runSshCommandWithCredential({
+    operation,
+    device,
+    context,
+    credential,
+    accountLabel,
+    secret,
+    host: targetHost,
+    argv: buildWindowsPowerShellSshArgv(interpolateOperationValue(broker.command, targetHost, params)),
+    port: broker.port,
+    validationMethod: "powershell-ssh.command",
+    validationDetails: {
+      adapterId: operation.adapterId,
+      operationId: operation.id,
+      host: targetHost,
+      port: broker.port ?? 22,
+    },
+  });
+  if (!sshResult.ok) {
+    return {
+      ...sshResult,
+      summary: "PowerShell over SSH command failed",
+    };
+  }
+  return applyExpectationToOutput({
+    protocol: "powershell-ssh",
+    output: sshResult.output,
+    expectRegex: broker.expectRegex,
+    details: sshResult.details,
+  });
+}
+
+async function executeWmiBroker(
+  operation: OperationSpec,
+  device: Device,
+  params: Record<string, string>,
+  context: BrokerExecutionContext,
+): Promise<BrokerExecutionResult> {
+  const broker = operation.brokerRequest;
+  if (!broker || broker.protocol !== "wmi") {
+    return brokerResult({ handled: false, status: "failed", phase: "not-started", proof: "none", summary: "WMI broker not applicable", output: "" });
+  }
+  if (process.platform !== "win32") {
+    return brokerResult({
+      status: "failed",
+      phase: "not-started",
+      proof: "none",
+      summary: "WMI requires a Windows Steward host",
+      output: "WMI/DCOM execution is only supported when Steward runs on Windows.",
+    });
+  }
+  const { credential, availableStatuses } = getCredentialForBroker(device.id, ["wmi"], context.allowProvidedCredentials, operation.adapterId);
+  if (!credential) {
+    return brokerResult({ status: "failed", phase: "not-started", proof: "none", summary: "WMI credential required", output: "WMI broker requires a stored WMI credential.", details: { availableStatuses } });
+  }
+  const secret = await vault.getSecret(credential.vaultSecretRef);
+  const accountLabel = credential.accountLabel?.trim() ?? "";
+  if (!secret || !accountLabel) {
+    return brokerResult({ status: "failed", phase: "not-started", proof: "none", summary: "WMI credential incomplete", output: "WMI requires a username and password.", details: { credentialId: credential.id } });
+  }
+  if (!commandLooksRemoteForWmi(broker.command)) {
+    return brokerResult({
+      status: "failed",
+      phase: "not-started",
+      proof: "none",
+      summary: "WMI command is not remote-safe",
+      output: "This WMI broker only supports commands that explicitly execute against the remote CIM session. Use $session / -CimSession / -ComputerName, or choose WinRM/PowerShell over SSH for general remote PowerShell commands.",
+      details: { commandPreview: broker.command.slice(0, 240) },
+    });
+  }
+  const namespace = broker.namespace?.trim() || "root\\cimv2";
+  const hostCandidates = buildWindowsRemoteHostCandidates(device, typeof broker.host === "string" ? broker.host.trim() : undefined);
+  const failures: Array<{ host: string; output: string }> = [];
+  for (const targetHost of hostCandidates) {
+    const script = [
+      "$ErrorActionPreference = 'Stop'",
+      "$ProgressPreference = 'SilentlyContinue'",
+      `$secure = ConvertTo-SecureString '${escapePowerShellSingleQuoted(secret)}' -AsPlainText -Force`,
+      `$credential = [System.Management.Automation.PSCredential]::new('${escapePowerShellSingleQuoted(accountLabel)}', $secure)`,
+      `$computerName = '${escapePowerShellSingleQuoted(targetHost)}'`,
+      `$namespace = '${escapePowerShellSingleQuoted(namespace)}'`,
+      "$sessionOptions = $null",
+      "try { $sessionOptions = New-CimSessionOption -Protocol Dcom -ErrorAction Stop } catch { throw ('[stage=cimsession_options] ' + $_.Exception.Message) }",
+      "Write-Output ('[preflight] cim-host=' + $computerName + ' namespace=' + $namespace)",
+      "try { $session = New-CimSession -ComputerName $computerName -Credential $credential -SessionOption $sessionOptions -ErrorAction Stop; Write-Output '[preflight] new-cimsession=ok' } catch { throw ('[stage=cimsession_create] ' + $_.Exception.Message) }",
+      "try {",
+      "$scriptText = @'",
+      interpolateOperationValue(broker.command, targetHost, params),
+      "'@",
+      "$scriptBlock = [ScriptBlock]::Create($scriptText)",
+      "& $scriptBlock",
+      "} finally { if ($session) { Remove-CimSession -CimSession $session -ErrorAction SilentlyContinue } }",
+    ].join("\n");
+    const result = await executePowerShellRuntimeScript(script, operation.timeoutMs);
+    if (result.ok) {
+      await markCredentialValidatedFromUse({ deviceId: device.id, credentialId: credential.id, actor: context.actor, method: "wmi.command", details: { adapterId: operation.adapterId, operationId: operation.id, host: targetHost, namespace } });
+      return applyExpectationToOutput({ protocol: "wmi", output: result.output, expectRegex: broker.expectRegex, details: { ...result.details, host: targetHost, namespace, attemptedHosts: hostCandidates } });
+    }
+    failures.push({ host: targetHost, output: result.output });
+  }
+  const failureOutput = failures.map((failure) => `host=${failure.host}\n${failure.output}`).join("\n\n");
+  const analysis = analyzeWmiFailure(failureOutput, device.ip);
+  return brokerResult({ status: "failed", phase: "executed", proof: "process", summary: analysis.summary, output: analysis.output, details: { host: hostCandidates[0] ?? device.ip, attemptedHosts: hostCandidates, namespace, category: analysis.category, hostNetwork: getStewardHostNetworkSummary(device.ip) } });
+}
+
+async function executeSmbBroker(
+  operation: OperationSpec,
+  device: Device,
+  params: Record<string, string>,
+  context: BrokerExecutionContext,
+): Promise<BrokerExecutionResult> {
+  const broker = operation.brokerRequest;
+  if (!broker || broker.protocol !== "smb") {
+    return brokerResult({ handled: false, status: "failed", phase: "not-started", proof: "none", summary: "SMB broker not applicable", output: "" });
+  }
+  if (process.platform !== "win32") {
+    return brokerResult({ status: "failed", phase: "not-started", proof: "none", summary: "SMB requires a Windows Steward host", output: "SMB administrative share operations are currently supported only when Steward runs on Windows." });
+  }
+  const { credential, availableStatuses } = getCredentialForBroker(device.id, ["smb"], context.allowProvidedCredentials, operation.adapterId);
+  if (!credential) {
+    return brokerResult({ status: "failed", phase: "not-started", proof: "none", summary: "SMB credential required", output: "SMB broker requires a stored SMB credential.", details: { availableStatuses } });
+  }
+  const secret = await vault.getSecret(credential.vaultSecretRef);
+  const accountLabel = credential.accountLabel?.trim() ?? "";
+  if (!secret || !accountLabel) {
+    return brokerResult({ status: "failed", phase: "not-started", proof: "none", summary: "SMB credential incomplete", output: "SMB requires a username and password.", details: { credentialId: credential.id } });
+  }
+  if (!commandLooksRemoteForSmb(broker.command)) {
+    return brokerResult({
+      status: "failed",
+      phase: "not-started",
+      proof: "none",
+      summary: "SMB command is not share-scoped",
+      output: "This SMB broker only supports commands that operate on the mapped remote share through $sharePath or $shareRoot. General Windows commands like systeminfo or Get-SmbShare do not execute remotely over SMB alone.",
+      details: { commandPreview: broker.command.slice(0, 240) },
+    });
+  }
+  const share = broker.share?.trim() || "C$";
+  const hostCandidates = buildWindowsRemoteHostCandidates(device, typeof broker.host === "string" ? broker.host.trim() : undefined);
+  const failures: Array<{ host: string; output: string }> = [];
+  for (const targetHost of hostCandidates) {
+    const script = [
+      "$ErrorActionPreference = 'Stop'",
+      "$ProgressPreference = 'SilentlyContinue'",
+      `$secure = ConvertTo-SecureString '${escapePowerShellSingleQuoted(secret)}' -AsPlainText -Force`,
+      `$credential = [System.Management.Automation.PSCredential]::new('${escapePowerShellSingleQuoted(accountLabel)}', $secure)`,
+      `$computerName = '${escapePowerShellSingleQuoted(targetHost)}'`,
+      `$shareName = '${escapePowerShellSingleQuoted(share)}'`,
+      "$shareRoot = if ($shareName.StartsWith('\\\\')) { $shareName } else { '\\\\' + $computerName + '\\' + $shareName }",
+      "$driveName = 'STW' + [Guid]::NewGuid().ToString('N').Substring(0, 8)",
+      "$mapped = $false",
+      "Write-Output ('[preflight] smb-share=' + $shareRoot)",
+      "try { New-SmbMapping -LocalPath ($driveName + ':') -RemotePath $shareRoot -UserName $credential.UserName -Password (New-Object System.Net.NetworkCredential('', $credential.Password).Password) -Persistent $false -ErrorAction Stop | Out-Null; $mapped = $true; Write-Output '[preflight] new-smbmapping=ok' } catch {",
+      "  try { New-PSDrive -Name $driveName -PSProvider FileSystem -Root $shareRoot -Credential $credential -ErrorAction Stop | Out-Null; $mapped = $true; Write-Output '[preflight] new-psdrive=ok' } catch { throw ('[stage=share_setup] ' + $_.Exception.Message) }",
+      "}",
+      "try {",
+      "$sharePath = $driveName + ':\\'",
+      "$scriptText = @'",
+      interpolateOperationValue(broker.command, targetHost, params),
+      "'@",
+      "$scriptBlock = [ScriptBlock]::Create($scriptText)",
+      "& $scriptBlock",
+      "} finally { if ($mapped) { Remove-SmbMapping -LocalPath ($driveName + ':') -Force -ErrorAction SilentlyContinue | Out-Null; Remove-PSDrive -Name $driveName -Force -ErrorAction SilentlyContinue | Out-Null } }",
+    ].join("\n");
+    const result = await executePowerShellRuntimeScript(script, operation.timeoutMs);
+    if (result.ok) {
+      await markCredentialValidatedFromUse({ deviceId: device.id, credentialId: credential.id, actor: context.actor, method: "smb.command", details: { adapterId: operation.adapterId, operationId: operation.id, host: targetHost, share } });
+      return applyExpectationToOutput({ protocol: "smb", output: result.output, expectRegex: broker.expectRegex, details: { ...result.details, host: targetHost, share, attemptedHosts: hostCandidates } });
+    }
+    failures.push({ host: targetHost, output: result.output });
+  }
+  const failureOutput = failures.map((failure) => `host=${failure.host}\n${failure.output}`).join("\n\n");
+  const analysis = analyzeSmbFailure(failureOutput, device.ip);
+  return brokerResult({ status: "failed", phase: "executed", proof: "process", summary: analysis.summary, output: analysis.output, details: { host: hostCandidates[0] ?? device.ip, attemptedHosts: hostCandidates, share, category: analysis.category, hostNetwork: getStewardHostNetworkSummary(device.ip) } });
+}
+
+async function executeRdpBroker(
+  operation: OperationSpec,
+  device: Device,
+  params: Record<string, string>,
+  context: BrokerExecutionContext,
+): Promise<BrokerExecutionResult> {
+  const broker = operation.brokerRequest;
+  if (!broker || broker.protocol !== "rdp") {
+    return brokerResult({ handled: false, status: "failed", phase: "not-started", proof: "none", summary: "RDP broker not applicable", output: "" });
+  }
+  if (process.platform !== "win32") {
+    return brokerResult({ status: "failed", phase: "not-started", proof: "none", summary: "RDP launch requires a Windows Steward host", output: "RDP client launch is currently supported only when Steward runs on Windows." });
+  }
+  const targetHost = typeof broker.host === "string" && broker.host.trim().length > 0 ? broker.host.trim() : device.ip;
+  const port = broker.port ?? 3389;
+  const action = broker.action ?? "launch";
+  const { credential } = getCredentialForBroker(device.id, ["rdp"], context.allowProvidedCredentials, operation.adapterId);
+  const secret = credential ? await vault.getSecret(credential.vaultSecretRef) : undefined;
+  const accountLabel = credential?.accountLabel?.trim() ?? "";
+  const renderedHost = interpolateOperationValue(targetHost, device.ip, params);
+  const script = action === "check"
+    ? [
+      "$ErrorActionPreference = 'Stop'",
+      `$ok = Test-NetConnection -ComputerName '${escapePowerShellSingleQuoted(renderedHost)}' -Port ${port} -InformationLevel Quiet`,
+      "if (-not $ok) { throw 'RDP reachability check failed.' }",
+      `'RDP reachable at ${escapePowerShellSingleQuoted(renderedHost)}:${port}'`,
+    ].join("\n")
+    : [
+      "$ErrorActionPreference = 'Stop'",
+      `$computerName = '${escapePowerShellSingleQuoted(renderedHost)}'`,
+      `$port = ${port}`,
+      "$target = if ($port -eq 3389) { $computerName } else { $computerName + ':' + $port }",
+      ...(secret && accountLabel
+        ? [
+          `$username = '${escapePowerShellSingleQuoted(accountLabel)}'`,
+          `$password = '${escapePowerShellSingleQuoted(secret)}'`,
+          'cmdkey /generic:("TERMSRV/" + $computerName) /user:$username /pass:$password | Out-Null',
+        ]
+        : []),
+      `$arguments = @('/v:' + $target${broker.admin ? ", '/admin'" : ""})`,
+      'Start-Process -FilePath "mstsc.exe" -ArgumentList $arguments | Out-Null',
+      '"RDP client launched for $target"',
+    ].join("\n");
+  const result = await executePowerShellRuntimeScript(script, operation.timeoutMs);
+  if (!result.ok) {
+    return brokerResult({ status: "failed", phase: "executed", proof: "process", summary: action === "check" ? "RDP reachability check failed" : "RDP launch failed", output: result.output, details: { ...result.details, host: renderedHost, port, action } });
+  }
+  if (credential && secret && accountLabel) {
+    await markCredentialValidatedFromUse({ deviceId: device.id, credentialId: credential.id, actor: context.actor, method: action === "check" ? "rdp.check" : "rdp.launch", details: { adapterId: operation.adapterId, operationId: operation.id, host: renderedHost, port, action } });
+  }
+  return brokerResult({ status: "succeeded", phase: "executed", proof: "process", summary: action === "check" ? "RDP reachability verified" : "RDP client launched", output: result.output, details: { ...result.details, host: renderedHost, port, action } });
 }
 
 async function executeHttpBroker(
@@ -1040,9 +1706,20 @@ async function executeHttpBroker(
       url.searchParams.set(key, value);
     }
 
+    const session = await webSessionManager.resolveSessionForUrl({
+      deviceId: device.id,
+      targetUrl: url.toString(),
+      explicitSessionId: broker.sessionId,
+    });
+    const sessionCookie = session ? await webSessionManager.buildCookieHeader(session.id, url.toString()) : undefined;
+    const requestHeaders = {
+      ...renderedHeaders,
+      ...(sessionCookie && !renderedHeaders.Cookie ? { Cookie: sessionCookie } : {}),
+    };
+
     const response = await requestText(url, {
       method: broker.method,
-      headers: renderedHeaders,
+      headers: requestHeaders,
       insecureSkipVerify: broker.insecureSkipVerify ?? false,
       body,
       timeoutMs: operation.timeoutMs,
@@ -1079,16 +1756,18 @@ async function executeHttpBroker(
       proof: broker.expectRegex ? "expectation" : "response",
       summary: `${broker.method} ${redactedUrl} returned ${response.statusCode}`,
       output,
-      details: {
-        method: broker.method,
-        url: redactedUrl,
-        statusCode: response.statusCode,
-        matchedExpectation: Boolean(broker.expectRegex),
-        responseBody: redactedBody,
-        responseJson,
-        authApplied: credentialApplied,
-      },
-    });
+        details: {
+          method: broker.method,
+          url: redactedUrl,
+          statusCode: response.statusCode,
+          matchedExpectation: Boolean(broker.expectRegex),
+          responseBody: redactedBody,
+          responseJson,
+          authApplied: credentialApplied,
+          sessionId: session?.id,
+          sessionCookieApplied: Boolean(sessionCookie),
+        },
+      });
     if (credential && credentialApplied) {
       await markCredentialValidatedFromUse({
         deviceId: device.id,
@@ -1388,6 +2067,16 @@ async function executeWebSocketBroker(
   for (const [key, value] of Object.entries(query)) {
     url.searchParams.set(key, value);
   }
+  const session = await webSessionManager.resolveSessionForUrl({
+    deviceId: device.id,
+    targetUrl: url.toString(),
+    explicitSessionId: broker.sessionId,
+  });
+  const sessionCookie = session ? await webSessionManager.buildCookieHeader(session.id, url.toString()) : undefined;
+  const requestHeaders = {
+    ...headers,
+    ...(sessionCookie && !headers.Cookie ? { Cookie: sessionCookie } : {}),
+  };
 
   const connectTimeoutMs = Math.max(250, Math.min(operation.timeoutMs, broker.connectTimeoutMs ?? 4_000));
   const responseTimeoutMs = Math.max(250, Math.min(operation.timeoutMs, broker.responseTimeoutMs ?? 1_500));
@@ -1433,8 +2122,10 @@ async function executeWebSocketBroker(
       connectTimeoutMs,
       responseTimeoutMs,
       protocols,
-      headers: Object.keys(headers),
-      termination: extraError ? "error" : termination ?? "completed",
+        headers: Object.keys(requestHeaders),
+        sessionId: session?.id,
+        sessionCookieApplied: Boolean(sessionCookie),
+        termination: extraError ? "error" : termination ?? "completed",
       ...(extraError ? { error: extraError } : {}),
       ...(broker.expectRegex ? { expectRegex: broker.expectRegex, expectationMatched } : {}),
     });
@@ -1596,7 +2287,7 @@ async function executeWebSocketBroker(
       };
       socket = new WebSocketCtor(url, {
         ...(protocols.length > 0 ? { protocols } : {}),
-        ...(Object.keys(headers).length > 0 ? { headers } : {}),
+        ...(Object.keys(requestHeaders).length > 0 ? { headers: requestHeaders } : {}),
       });
     } catch (error) {
       finalize(error instanceof Error ? error.message : String(error));
@@ -1702,6 +2393,22 @@ export async function executeBrokerOperation(
 
   if (operation.brokerRequest.protocol === "winrm") {
     return executeWinrmBroker(operation, device, params, context);
+  }
+
+  if (operation.brokerRequest.protocol === "powershell-ssh") {
+    return executePowerShellSshBroker(operation, device, params, context);
+  }
+
+  if (operation.brokerRequest.protocol === "wmi") {
+    return executeWmiBroker(operation, device, params, context);
+  }
+
+  if (operation.brokerRequest.protocol === "smb") {
+    return executeSmbBroker(operation, device, params, context);
+  }
+
+  if (operation.brokerRequest.protocol === "rdp") {
+    return executeRdpBroker(operation, device, params, context);
   }
 
   return brokerResult({

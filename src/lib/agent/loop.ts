@@ -26,6 +26,7 @@ import {
   isServiceContractDue,
 } from "@/lib/monitoring/contracts";
 import { protocolSessionManager } from "@/lib/protocol-sessions/manager";
+import { webSessionManager } from "@/lib/web-sessions/manager";
 import { graphStore } from "@/lib/state/graph";
 import { stateStore } from "@/lib/state/store";
 import { runShell } from "@/lib/utils/shell";
@@ -840,6 +841,10 @@ const inferCredentialTypes = (protocols: string[]): string[] => {
   const requirements = new Set<string>();
   if (protocols.includes("ssh")) requirements.add("ssh");
   if (protocols.includes("winrm")) requirements.add("winrm");
+  if (protocols.includes("powershell-ssh")) requirements.add("powershell-ssh");
+  if (protocols.includes("wmi")) requirements.add("wmi");
+  if (protocols.includes("smb")) requirements.add("smb");
+  if (protocols.includes("rdp")) requirements.add("rdp");
   if (protocols.includes("snmp")) requirements.add("snmp");
   if (protocols.includes("http-api")) requirements.add("api/web-admin");
   if (protocols.includes("docker")) requirements.add("docker");
@@ -1494,6 +1499,7 @@ const actPhase = async (devices: Device[]): Promise<{
   localToolRuntime.expireStaleApprovals();
   await localToolRuntime.runScheduledHealthChecks();
   await protocolSessionManager.sweep();
+  await webSessionManager.sweep();
   await stateStore.setRecommendations(recommendations.slice(0, 400));
 
   return {
@@ -1673,6 +1679,9 @@ export const ensureStewardLoop = (): void => {
   sessionSweepHandle = setInterval(() => {
     void protocolSessionManager.sweep().catch((error) => {
       console.error("Protocol session sweep failed", error);
+    });
+    void webSessionManager.sweep().catch((error) => {
+      console.error("Web session sweep failed", error);
     });
     void processNotificationJobs().catch((error) => {
       console.error("Notification worker failed", error);

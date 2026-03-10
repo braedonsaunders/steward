@@ -18,7 +18,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { AdoptionRun, DeviceCredential, DeviceProfileBinding } from "@/lib/state/types";
+import { protocolDisplayLabel, SUPPORTED_CREDENTIAL_PROTOCOLS } from "@/lib/protocols/catalog";
 import { cn } from "@/lib/utils";
+
+function credentialProtocolLabel(protocol: string): string {
+  return protocolDisplayLabel(protocol);
+}
+
+function credentialStatusLabel(status: string): string {
+  return status === "pending" ? "pending" : "stored";
+}
 
 interface AdoptionSnapshot {
   run: AdoptionRun | null;
@@ -26,24 +35,12 @@ interface AdoptionSnapshot {
   profiles: DeviceProfileBinding[];
 }
 
-const CREDENTIAL_TYPE_OPTIONS = [
-  "ssh",
-  "winrm",
-  "windows",
-  "snmp",
-  "http-api",
-  "docker",
-  "kubernetes",
-  "mqtt",
-  "rtsp",
-  "printing",
-] as const;
+const CREDENTIAL_TYPE_OPTIONS = SUPPORTED_CREDENTIAL_PROTOCOLS;
 
 export function DeviceCredentialsPanel({ deviceId, className }: { deviceId: string; className?: string }) {
   const [snapshot, setSnapshot] = useState<AdoptionSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [credentialValidating, setCredentialValidating] = useState<Record<string, boolean>>({});
 
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [editingCredentialId, setEditingCredentialId] = useState<string | null>(null);
@@ -192,22 +189,6 @@ export function DeviceCredentialsPanel({ deviceId, className }: { deviceId: stri
     }
   };
 
-  const validateCredential = async (credentialId: string) => {
-    setCredentialValidating((prev) => ({ ...prev, [credentialId]: true }));
-    try {
-      const res = await fetch(`/api/devices/${deviceId}/credentials/${credentialId}/validate`, withClientApiToken({ method: "POST" }));
-      const data = (await res.json()) as { error?: string };
-      if (!res.ok) {
-          throw new Error(data.error ?? "Failed to mark credential as validated");
-      }
-      await refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to mark credential as validated");
-    } finally {
-      setCredentialValidating((prev) => ({ ...prev, [credentialId]: false }));
-    }
-  };
-
   return (
     <Card className={cn("bg-card/85", className)}>
       <CardHeader className="pb-3">
@@ -234,7 +215,7 @@ export function DeviceCredentialsPanel({ deviceId, className }: { deviceId: stri
             snapshot!.credentials.map((credential) => (
               <div key={credential.id} className="flex items-center justify-between rounded-md border px-2 py-1.5 text-xs">
                 <div>
-                  <p className="font-medium">{credential.protocol}</p>
+                  <p className="font-medium">{credentialProtocolLabel(credential.protocol)}</p>
                   <p className="text-muted-foreground">
                     {credential.protocol === "http-api"
                       ? describeHttpApiCredentialAuth(credential.scopeJson)
@@ -244,22 +225,11 @@ export function DeviceCredentialsPanel({ deviceId, className }: { deviceId: stri
                     <p className="text-[10px] text-muted-foreground">{credential.accountLabel}</p>
                   ) : null}
                   <p className="text-[10px] text-muted-foreground">
-                    {credential.lastValidatedAt
-                      ? `Last validated ${new Date(credential.lastValidatedAt).toLocaleString()}`
-                      : "Not validated yet"}
+                    Manually entered credential
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Badge variant="outline">{credential.status}</Badge>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-6 px-2 text-[10px]"
-                    disabled={Boolean(credentialValidating[credential.id])}
-                    onClick={() => void validateCredential(credential.id)}
-                  >
-                    {credentialValidating[credential.id] ? "Marking..." : "Mark Validated"}
-                  </Button>
+                  <Badge variant="outline">{credentialStatusLabel(credential.status)}</Badge>
                   <Button
                     size="sm"
                     variant="outline"
@@ -303,7 +273,7 @@ export function DeviceCredentialsPanel({ deviceId, className }: { deviceId: stri
               <SelectTrigger id="cred-type"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {CREDENTIAL_TYPE_OPTIONS.map((type) => (
-                  <SelectItem key={type} value={type}>{type}</SelectItem>
+                  <SelectItem key={type} value={type}>{protocolDisplayLabel(type)}</SelectItem>
                 ))}
               </SelectContent>
             </Select>

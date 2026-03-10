@@ -151,17 +151,44 @@ function isSyntheticDiscoveryName(value: string): boolean {
     || /^iot-\d{1,3}(?:-\d{1,3}){3}$/.test(normalized);
 }
 
+function isValidWinrmHostnameCandidate(value: string): boolean {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return false;
+  }
+  if (isIpLiteral(trimmed)) {
+    return true;
+  }
+  if (/\s/.test(trimmed)) {
+    return false;
+  }
+  return /^[a-z0-9.-]+$/i.test(trimmed)
+    && !trimmed.startsWith(".")
+    && !trimmed.endsWith(".")
+    && !trimmed.includes("..");
+}
+
+export function sanitizeWinrmHostCandidate(value: string | null | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!isValidWinrmHostnameCandidate(trimmed) || isSyntheticDiscoveryName(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
+}
+
 export function preferredWinrmHost(device: Device): string {
-  const hostname = device.hostname?.trim() ?? "";
-  const name = device.name.trim();
+  const hostname = sanitizeWinrmHostCandidate(device.hostname) ?? "";
+  const name = sanitizeWinrmHostCandidate(device.name) ?? "";
 
   const candidates = [hostname, name]
     .filter((value) => value.length > 0)
-    .filter((value) => !isIpLiteral(value))
-    .filter((value) => !isSyntheticDiscoveryName(value));
+    .filter((value) => !isIpLiteral(value));
 
   const fqdn = candidates.find((value) => value.includes("."));
-  return fqdn ?? candidates[0] ?? device.ip;
+  return fqdn ?? candidates[0] ?? sanitizeWinrmHostCandidate(device.ip) ?? device.ip;
 }
 
 export async function resolvePowerShellRuntime(forceRefresh = false): Promise<PowerShellRuntimeResolution> {
@@ -295,9 +322,11 @@ export function buildWinrmPowerShellScript(input: {
     `$invokeParams = @{ ComputerName = '${escapePowerShellSingleQuoted(input.host)}'; Credential = $credential; Authentication = '${toPowerShellAuthenticationValue(connection.authentication)}' }`,
     connection.port ? `$invokeParams.Port = ${connection.port}` : "",
     connection.useSsl ? "$invokeParams.UseSSL = $true" : "",
+    "$sessionOptionArgs = @{ NoMachineProfile = $true; OpenTimeout = 15000; OperationTimeout = 180000; IdleTimeout = 240000 }",
     connection.skipCertChecks
-      ? "$invokeParams.SessionOption = New-PSSessionOption -SkipCACheck -SkipCNCheck -SkipRevocationCheck"
+      ? "$sessionOptionArgs.SkipCACheck = $true; $sessionOptionArgs.SkipCNCheck = $true; $sessionOptionArgs.SkipRevocationCheck = $true"
       : "",
+    "$invokeParams.SessionOption = New-PSSessionOption @sessionOptionArgs",
     shouldSeedTrustedHost
       ? "$trustedHostsPath = 'WSMan:\\localhost\\Client\\TrustedHosts'"
       : "",
@@ -334,11 +363,25 @@ export function buildWinrmPowerShellScript(input: {
     shouldSeedTrustedHost
       ? "}"
       : "",
+    shouldSeedTrustedHost
+      ? "}"
+      : "",
+    "$resolvedAddresses = @()",
+    "try { $resolvedAddresses = [System.Net.Dns]::GetHostAddresses($invokeParams.ComputerName) | ForEach-Object { $_.IPAddressToString } } catch { $resolvedAddresses = @() }",
+    "if ($resolvedAddresses.Count -gt 0) { Write-Output ('[preflight] dns-resolve=ok host=' + $invokeParams.ComputerName + ' addresses=' + ($resolvedAddresses -join ',')) } else { Write-Output ('[preflight] dns-resolve=unresolved host=' + $invokeParams.ComputerName) }",
+    "$wsmanScheme = if ($invokeParams.ContainsKey('UseSSL') -and $invokeParams.UseSSL) { 'https' } else { 'http' }",
+    "$wsmanUri = $wsmanScheme + '://' + $invokeParams.ComputerName + ':' + $invokeParams.Port + '/wsman'",
+    "Write-Output ('[preflight] wsman-url=' + $wsmanUri + ' auth=' + $invokeParams.Authentication)",
+    "$testWsmanParams = @{ ComputerName = $invokeParams.ComputerName; Credential = $credential; Authentication = $invokeParams.Authentication; Port = $invokeParams.Port; ErrorAction = 'Stop' }",
+    "if ($invokeParams.ContainsKey('UseSSL') -and $invokeParams.UseSSL) { $testWsmanParams.UseSSL = $true }",
+    "try { Test-WSMan @testWsmanParams | Out-Null; Write-Output '[preflight] test-wsman=ok' } catch { throw ('[stage=test_wsman] ' + $_.Exception.Message) }",
     "$scriptText = @'",
     input.command,
     "'@",
     "$scriptBlock = [ScriptBlock]::Create($scriptText)",
-    "Invoke-Command @invokeParams -ScriptBlock $scriptBlock",
+    "$session = $null",
+    "try { $session = New-PSSession @invokeParams -ErrorAction Stop; Write-Output '[preflight] new-pssession=ok' } catch { throw ('[stage=session_create] ' + $_.Exception.Message) }",
+    "try { Invoke-Command -Session $session -ScriptBlock $scriptBlock -ErrorAction Stop } catch { throw ('[stage=invoke_command] ' + $_.Exception.Message) } finally { if ($session) { Remove-PSSession -Session $session -ErrorAction SilentlyContinue } }",
   ].filter((line) => line.length > 0).join("\n");
 }
 
@@ -405,12 +448,18 @@ export function normalizeWinrmOutput(raw: string): string {
 export interface WinrmFailureAnalysis {
   categories: string[];
   hints: string[];
+  stage?: string;
 }
 
 export function analyzeWinrmFailure(output: string): WinrmFailureAnalysis {
   const categories = new Set<string>();
   const hints: string[] = [];
   const normalized = output.toLowerCase();
+  const stageMatch = output.match(/\[stage=([^\]]+)\]/i);
+  const stage = stageMatch?.[1]?.trim().toLowerCase();
+  if (stage) {
+    categories.add(`stage_${stage}`);
+  }
 
   if (normalized.includes("cannotuseipaddress") || normalized.includes("default authentication may be used with an ip address")) {
     categories.add("cannot_use_ip_address");
@@ -419,7 +468,7 @@ export function analyzeWinrmFailure(output: string): WinrmFailureAnalysis {
 
   if (normalized.includes("winrmoperationtimeout") || normalized.includes("winrm cannot complete the operation")) {
     categories.add("operation_timeout_or_firewall");
-    hints.push("WinRM reached the listener but remoting negotiation timed out. Verify Windows Firewall WinRM rules and network profile.");
+    hints.push("The WSMan listener responded, but the remote PowerShell session did not start successfully. Check firewall scope, authentication negotiation, WinRM policy, and remote shell startup health.");
   }
 
   if (normalized.includes("access is denied")) {
@@ -427,13 +476,47 @@ export function analyzeWinrmFailure(output: string): WinrmFailureAnalysis {
     hints.push("Credentials were accepted for transport but rejected for remote execution. Verify account rights for WinRM remote management.");
   }
 
-  if (normalized.includes("kerberos") && normalized.includes("cannot")) {
+  if (
+    normalized.includes("kerberos")
+    && (
+      normalized.includes("0x80090322")
+      || normalized.includes("the winrm client cannot process the request")
+      || normalized.includes("cannot find the computer")
+      || normalized.includes("unknown security error")
+      || normalized.includes("a specified logon session does not exist")
+      || normalized.includes("the kerberos client received")
+      || normalized.includes("kerberos authentication failed")
+    )
+  ) {
     categories.add("kerberos_negotiation");
     hints.push("Kerberos negotiation failed. Confirm DNS/SPN alignment and that Steward can resolve the host FQDN.");
+  }
+
+  if (normalized.includes("dns-resolve=unresolved")) {
+    categories.add("dns_resolution");
+    hints.push("Steward could not resolve the target hostname locally. Verify DNS resolution for the FQDN from the Steward host.");
+  }
+
+  if (stage === "test_wsman") {
+    hints.push("WSMan preflight failed before session creation. Focus on endpoint reachability, auth negotiation, and WinRM policy before shell startup.");
+  }
+
+  if (stage === "session_create") {
+    hints.push("WSMan preflight succeeded, but New-PSSession failed. Focus on WinRM authorization, remoting configuration, and shell startup policy.");
+  }
+
+  if (stage === "invoke_command") {
+    hints.push("Remote session was created, but command execution failed inside the session. Check PowerShell remoting rights and target-side execution policy or module availability.");
+  }
+
+  if (normalized.includes("pssessionstatebroken")) {
+    categories.add("session_state_broken");
+    hints.push("The remote session failed during creation. Check WinRM service health, group policy, and whether the target can start a PowerShell remoting session interactively.");
   }
 
   return {
     categories: Array.from(categories),
     hints,
+    stage,
   };
 }

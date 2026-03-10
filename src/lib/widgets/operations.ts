@@ -36,6 +36,24 @@ function readBooleanAlias(value: unknown): boolean | undefined {
   return undefined;
 }
 
+function readPortAlias(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isInteger(value)) {
+    return value;
+  }
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+    return Number(value.trim());
+  }
+  return undefined;
+}
+
+function normalizeHttpMethod(value: unknown): unknown {
+  return typeof value === "string" ? value.trim().toUpperCase() : value;
+}
+
+function normalizeHttpScheme(value: unknown): unknown {
+  return typeof value === "string" ? value.trim().toLowerCase() : value;
+}
+
 function normalizeHttpBrokerInput(value: unknown): unknown {
   if (!isRecord(value)) {
     return value;
@@ -48,6 +66,10 @@ function normalizeHttpBrokerInput(value: unknown): unknown {
 
   return {
     ...value,
+    method: normalizeHttpMethod(value.method),
+    scheme: normalizeHttpScheme(value.scheme),
+    schemes: Array.isArray(value.schemes) ? value.schemes.map((entry) => normalizeHttpScheme(entry)) : value.schemes,
+    port: readPortAlias(value.port) ?? value.port,
     ...(typeof insecureSkipVerify === "boolean" ? { insecureSkipVerify } : {}),
   };
 }
@@ -64,6 +86,8 @@ const HttpBrokerSchema = z.object({
   body: z.string().optional(),
   insecureSkipVerify: z.boolean().optional(),
   expectRegex: z.string().optional(),
+  sessionId: z.string().min(1).optional(),
+  sessionHolder: z.string().min(1).optional(),
 });
 
 const SshBrokerSchema = z.object({
@@ -82,6 +106,39 @@ const WinrmBrokerSchema = z.object({
   expectRegex: z.string().optional(),
 });
 
+const PowerShellSshBrokerSchema = z.object({
+  protocol: z.literal("powershell-ssh"),
+  command: z.string().min(1),
+  host: z.string().min(1).optional(),
+  port: z.number().int().min(1).max(65535).optional(),
+  expectRegex: z.string().optional(),
+});
+
+const WmiBrokerSchema = z.object({
+  protocol: z.literal("wmi"),
+  command: z.string().min(1),
+  host: z.string().min(1).optional(),
+  namespace: z.string().min(1).optional(),
+  expectRegex: z.string().optional(),
+});
+
+const SmbBrokerSchema = z.object({
+  protocol: z.literal("smb"),
+  command: z.string().min(1),
+  host: z.string().min(1).optional(),
+  share: z.string().min(1).optional(),
+  port: z.number().int().min(1).max(65535).optional(),
+  expectRegex: z.string().optional(),
+});
+
+const RdpBrokerSchema = z.object({
+  protocol: z.literal("rdp"),
+  host: z.string().min(1).optional(),
+  port: z.number().int().min(1).max(65535).optional(),
+  action: z.enum(["check", "launch"]).optional(),
+  admin: z.boolean().optional(),
+});
+
 const WebSocketBrokerSchema = z.object({
   protocol: z.literal("websocket"),
   scheme: z.enum(["ws", "wss"]).optional(),
@@ -97,6 +154,8 @@ const WebSocketBrokerSchema = z.object({
   collectMessages: z.number().int().min(1).max(50).optional(),
   expectRegex: z.string().optional(),
   successStrategy: z.enum(["auto", "transport", "response", "expectation"]).optional(),
+  sessionId: z.string().min(1).optional(),
+  sessionHolder: z.string().min(1).optional(),
 });
 
 const MqttBrokerSchema = z.object({
@@ -159,6 +218,10 @@ export const WidgetOperationSchema = z.preprocess(normalizeWidgetOperationInput,
     WebSocketBrokerSchema,
     MqttBrokerSchema,
     WinrmBrokerSchema,
+    PowerShellSshBrokerSchema,
+    WmiBrokerSchema,
+    SmbBrokerSchema,
+    RdpBrokerSchema,
   ]).optional(),
   args: z.record(z.string(), ValueSchema).optional(),
   expectedSemanticTarget: z.string().max(240).optional(),
@@ -280,6 +343,18 @@ function inferAdapterId(input: WidgetOperationInput): string {
   }
   if (input.brokerRequest?.protocol === "winrm") {
     return "winrm";
+  }
+  if (input.brokerRequest?.protocol === "powershell-ssh") {
+    return "powershell-ssh";
+  }
+  if (input.brokerRequest?.protocol === "wmi") {
+    return "wmi";
+  }
+  if (input.brokerRequest?.protocol === "smb") {
+    return "smb";
+  }
+  if (input.brokerRequest?.protocol === "rdp") {
+    return "rdp";
   }
   if (input.brokerRequest?.protocol === "mqtt") {
     return "mqtt";

@@ -3,6 +3,7 @@ import { getDefaultProvider } from "@/lib/llm/config";
 import { buildLanguageModel } from "@/lib/llm/providers";
 import { llmHealthController } from "@/lib/llm/health";
 import { applyPromptFirewall } from "@/lib/llm/prompt-firewall";
+import { isWindowsPlatformDevice } from "@/lib/protocols/catalog";
 import type { AdoptionQuestionOption, Device } from "@/lib/state/types";
 
 export interface DeviceCredentialIntent {
@@ -213,6 +214,21 @@ function fallbackProfile(device: Device): DeviceAdoptionProfile {
   if (device.protocols.includes("winrm")) {
     credentialIntents.push({ protocol: "winrm", reason: "Windows service management and diagnostics", priority: "high" });
   }
+  if (device.protocols.includes("powershell-ssh")) {
+    credentialIntents.push({ protocol: "powershell-ssh", reason: "PowerShell remoting over SSH for Windows automation", priority: "medium" });
+  }
+  if (device.protocols.includes("wmi")) {
+    credentialIntents.push({ protocol: "wmi", reason: "Windows inventory and DCOM/RPC management", priority: "medium" });
+  }
+  if (device.protocols.includes("smb")) {
+    credentialIntents.push({ protocol: "smb", reason: "Windows share access, artifact collection, and file staging", priority: "medium" });
+  }
+  if (device.protocols.includes("rdp")) {
+    credentialIntents.push({ protocol: "rdp", reason: "Interactive Windows remote control and GUI access", priority: "low" });
+  }
+  if (device.protocols.includes("vnc")) {
+    credentialIntents.push({ protocol: "vnc", reason: "Cross-platform remote desktop control and GUI access", priority: "low" });
+  }
   if (device.protocols.includes("snmp")) {
     credentialIntents.push({ protocol: "snmp", reason: "Network and device telemetry collection", priority: "medium" });
   }
@@ -240,7 +256,7 @@ function fallbackProfile(device: Device): DeviceAdoptionProfile {
 
   const questions: OnboardingQuestionDraft[] = [];
   const isWindowsWorkstation = device.type === "workstation"
-    && (device.protocols.includes("windows") || device.protocols.includes("rdp") || device.protocols.includes("winrm"));
+    && (isWindowsPlatformDevice(device) || device.protocols.includes("rdp") || device.protocols.includes("winrm"));
 
   if (askQuestionForWorkloads) {
     const discoveredServicesLabel = device.services
@@ -414,8 +430,8 @@ export async function generateDeviceAdoptionProfile(
          "- If existingAssuranceCount > 0, do not require critical_services_confirm again unless telemetry clearly conflicts.",
          "- RDP-only Windows endpoints are usually workstations, not servers.",
          "- Do not request WinRM credentials unless WinRM is actually observed or explicitly confirmed in telemetry.",
-         "- Use only these protocols for credentialIntents: ssh, winrm, snmp, http-api, docker, kubernetes, mqtt, rtsp, printing.",
-         "- Adapter candidates and questions may reference rdp as an exposure-only surface, but do not request RDP credentials.",
+         "- Use only these protocols for credentialIntents: ssh, winrm, powershell-ssh, wmi, smb, rdp, snmp, http-api, docker, kubernetes, mqtt, rtsp, printing.",
+         "- Distinguish Windows platform identity from specific access transports. Request only the protocols actually supported or clearly needed.",
         `Known adapter ids: ${context.adapterIds.join(", ") || "none"}`,
         firewall.tainted
           ? `Telemetry was sanitized by prompt firewall. Reasons: ${firewall.reasons.join(", ")}`

@@ -166,7 +166,8 @@ export type OperationExecutionProof = "none" | "process" | "transport" | "respon
 
 export interface SshBrokerRequest {
   protocol: "ssh";
-  argv: string[];
+  command?: string;
+  argv?: string[];
   port?: number;
 }
 
@@ -182,6 +183,8 @@ export interface HttpBrokerRequest {
   body?: string;
   insecureSkipVerify?: boolean;
   expectRegex?: string;
+  sessionId?: string;
+  sessionHolder?: string;
 }
 
 export interface WebSocketBrokerRequest {
@@ -199,6 +202,8 @@ export interface WebSocketBrokerRequest {
   collectMessages?: number;
   expectRegex?: string;
   successStrategy?: WebSocketSuccessStrategy;
+  sessionId?: string;
+  sessionHolder?: string;
 }
 
 export interface MqttPublishMessage {
@@ -245,6 +250,39 @@ export interface WinrmBrokerRequest {
   expectRegex?: string;
 }
 
+export interface PowerShellSshBrokerRequest {
+  protocol: "powershell-ssh";
+  command: string;
+  host?: string;
+  port?: number;
+  expectRegex?: string;
+}
+
+export interface WmiBrokerRequest {
+  protocol: "wmi";
+  command: string;
+  host?: string;
+  namespace?: string;
+  expectRegex?: string;
+}
+
+export interface SmbBrokerRequest {
+  protocol: "smb";
+  command: string;
+  host?: string;
+  share?: string;
+  port?: number;
+  expectRegex?: string;
+}
+
+export interface RdpBrokerRequest {
+  protocol: "rdp";
+  host?: string;
+  port?: number;
+  action?: "check" | "launch";
+  admin?: boolean;
+}
+
 export interface LocalToolBrokerRequest {
   protocol: "local-tool";
   toolId: string;
@@ -263,7 +301,11 @@ export type ProtocolBrokerRequest =
   | WebSocketBrokerRequest
   | MqttBrokerRequest
   | LocalToolBrokerRequest
-  | WinrmBrokerRequest;
+  | WinrmBrokerRequest
+  | PowerShellSshBrokerRequest
+  | WmiBrokerRequest
+  | SmbBrokerRequest
+  | RdpBrokerRequest;
 
 export interface OperationSafetyProfile {
   dryRunSupported: boolean;
@@ -586,7 +628,7 @@ export interface LocalToolExecutionResult {
   durationMs: number;
 }
 
-export type ProtocolSessionProtocol = "mqtt" | "websocket";
+export type ProtocolSessionProtocol = "mqtt" | "websocket" | "web-session" | "rdp" | "vnc";
 export type ProtocolSessionDesiredState = "active" | "idle" | "stopped";
 export type ProtocolSessionStatus = "idle" | "connecting" | "connected" | "blocked" | "error" | "stopped";
 export type ProtocolSessionArbitrationMode = "shared" | "exclusive" | "single-connection";
@@ -724,6 +766,9 @@ export interface DeviceCredential {
 export type AccessMethodKind =
   | "ssh"
   | "winrm"
+  | "powershell-ssh"
+  | "wmi"
+  | "smb"
   | "snmp"
   | "http-api"
   | "docker"
@@ -1535,7 +1580,7 @@ export interface ChatSession {
 
 export type ChatToolEventStatus = "running" | "completed" | "failed";
 
-export type ChatToolEventKind = "tool" | "probe" | "terminal";
+export type ChatToolEventKind = "tool" | "probe" | "terminal" | "desktop";
 
 export interface ChatToolEvent {
   id: string;
@@ -1619,3 +1664,4 @@ export interface StewardState {
   systemSettings: SystemSettings;
   authSettings: AuthSettings;
 }
+

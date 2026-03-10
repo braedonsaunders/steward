@@ -37,5 +37,5 @@ COPY --from=builder /root/.cache/ms-playwright /ms-playwright
 RUN mkdir -p /app/.steward && chown -R nextjs:nodejs /app/.steward /ms-playwright
 
 USER nextjs
-EXPOSE 3000
+EXPOSE 3000 3001
 CMD ["node", "server.js"]

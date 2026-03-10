@@ -3,6 +3,9 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
+  --font-ui: "Aptos", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-heading: "Aptos Display", "Segoe UI Variable Display", "Segoe UI", "Trebuchet MS", sans-serif;
+  --font-mono: "Cascadia Mono", "IBM Plex Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   --background: oklch(0.98 0.01 140);
   --foreground: oklch(0.25 0.03 180);
   --card: oklch(0.995 0.004 120 / 86%);

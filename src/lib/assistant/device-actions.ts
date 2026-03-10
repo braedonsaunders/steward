@@ -93,7 +93,7 @@ const DEVICE_TYPE_MAP: Record<string, DeviceType> = {
 const AdhocPlanSchema = z.object({
   family: z.string().min(1).max(80),
   rationale: z.string().min(1).max(1_200),
-  requiredProtocol: z.enum(["ssh", "winrm", "docker", "http-api"]),
+  requiredProtocol: z.enum(["ssh", "winrm", "powershell-ssh", "wmi", "smb", "rdp", "vnc", "docker", "http-api"]),
   mutateCommandTemplates: z.array(z.string().min(1).max(800)).min(1).max(6),
   verifyCommandTemplates: z.array(z.string().min(1).max(800)).min(1).max(6),
   rollbackCommandTemplates: z.array(z.string().min(1).max(800)).max(6).default([]),
@@ -373,6 +373,7 @@ function chooseProtocol(device: Device): AdhocPlan["requiredProtocol"] | null {
   const protocols = new Set(device.protocols.map((value) => value.toLowerCase()));
   if (protocols.has("ssh")) return "ssh";
   if (protocols.has("winrm")) return "winrm";
+  if (protocols.has("powershell-ssh")) return "powershell-ssh";
   if (protocols.has("docker")) return "docker";
   if (protocols.has("http-api")) return "http-api";
   return null;
@@ -413,6 +414,21 @@ function fallbackPlanForDevice(device: Device, input: string): AdhocPlan | null 
       ],
       verifyCommandTemplates: [
         `pwsh -NoLogo -NonInteractive -Command "Invoke-Command -ComputerName {{host}} -ScriptBlock { Get-Service -Name '${service}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status }"`,
+      ],
+      rollbackCommandTemplates: [],
+    };
+  }
+
+  if (protocol === "powershell-ssh") {
+    return {
+      family: "custom-install",
+      rationale: `Install and configure ${service} on ${device.name} via PowerShell over SSH.`,
+      requiredProtocol: "powershell-ssh",
+      mutateCommandTemplates: [
+        `ssh {{host}} "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"winget install --id ${service} -e --accept-package-agreements --accept-source-agreements\""`,
+      ],
+      verifyCommandTemplates: [
+        `ssh {{host}} "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"Get-Service -Name '${service}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status\""`,
       ],
       rollbackCommandTemplates: [],
     };

@@ -6,6 +6,7 @@ import {
   type DeviceAdoptionProfile,
 } from "@/lib/adoption/profile";
 import { buildObservedAccessMethods } from "@/lib/devices/management-model";
+import { isWindowsPlatformDevice, normalizeCredentialProtocol } from "@/lib/protocols/catalog";
 import { getAdoptionRecord, getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
 import { getDb } from "@/lib/state/db";
 import { stateStore } from "@/lib/state/store";
@@ -80,19 +81,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function normalizeCredentialProtocol(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "http" || normalized === "https") return "http-api";
-  if (normalized === "mqtts") return "mqtt";
-  if (normalized === "windows") return "winrm";
-  return normalized;
-}
-
 function readStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value
     .map((item) => String(item).trim())
     .filter((item) => item.length > 0);
+}
+
+function inferFallbackProfileMatches(device: Device): AdapterProfileMatch[] {
+  if (isWindowsPlatformDevice(device)) {
+    const type = String(device.type || "").toLowerCase();
+    const text = [device.name, device.hostname, device.os, device.role].filter(Boolean).join(" ").toLowerCase();
+    const isServer = type === "server" || /domain controller|active directory|windows server/.test(text);
+    const protocols = device.protocols
+      .map((protocol) => normalizeCredentialProtocol(protocol))
+      .filter((protocol, index, values) => ["winrm", "powershell-ssh", "wmi", "smb", "rdp", "vnc"].includes(protocol) && values.indexOf(protocol) === index);
+    return [{
+      profileId: isServer ? "steward.windows-server" : "steward.windows-workstation",
+      adapterId: isServer ? "steward.windows-server" : "steward.windows-workstation",
+      name: isServer ? "Windows Server" : "Windows Workstation",
+      kind: "fallback",
+      confidence: 0.55,
+      summary: "Heuristic Windows profile fallback based on device classification and observed services.",
+      requiredAccessMethods: protocols,
+      requiredCredentialProtocols: protocols,
+    }];
+  }
+  return [];
 }
 
 function parseJsonRecord(value: string | null | undefined): Record<string, unknown> {
@@ -513,8 +528,9 @@ function buildProfileBindings(args: {
 }
 
 function preferredAccessKeyForKind(kind: string, accessMethods: AccessMethod[]): string | null {
+  const requestedKinds = kind === "http-api" ? ["web-session", "http-api"] : kind === "web-session" ? ["web-session", "http-api"] : [kind];
   const candidates = accessMethods
-    .filter((method) => method.kind === kind)
+    .filter((method) => requestedKinds.includes(method.kind))
     .sort((left, right) => {
       const statusRank = (value: AccessMethod["status"]) => (
         value === "validated" ? 0
@@ -533,6 +549,10 @@ function preferredAccessKeyForKind(kind: string, accessMethods: AccessMethod[]):
       }
       if (left.secure !== right.secure) {
         return left.secure ? -1 : 1;
+      }
+      const preferredKindRank = (value: string) => value === "web-session" ? 0 : value === "http-api" ? 1 : 2;
+      if (preferredKindRank(left.kind) !== preferredKindRank(right.kind)) {
+        return preferredKindRank(left.kind) - preferredKindRank(right.kind);
       }
       return (left.port ?? 0) - (right.port ?? 0);
     });
@@ -703,10 +723,11 @@ async function syncDeviceAdoptionState(
   const existingDraft = run.status === "completed" ? null : readDraft(run);
   const draftSuppressed = run.status === "completed" || (isDraftSuppressed(run, device) && !existingDraft);
   const matches = await adapterRegistry.getDeviceProfileMatches(device);
-  const selectedProfileIds = selectedProfileIdsForDraft(matches, existingProfiles, existingDraft);
+  const effectiveMatches = matches.length > 0 ? matches : inferFallbackProfileMatches(device);
+  const selectedProfileIds = selectedProfileIdsForDraft(effectiveMatches, existingProfiles, existingDraft);
   const profiles = buildProfileBindings({
     deviceId,
-    matches,
+    matches: effectiveMatches,
     existing: existingProfiles,
     selectedProfileIds,
     completed: run.status === "completed",
@@ -734,7 +755,6 @@ async function syncDeviceAdoptionState(
 
   const availableCredentialProtocols = new Set(
     credentials
-      .filter((credential) => credential.status !== "invalid")
       .map((credential) => normalizeCredentialProtocol(credential.protocol)),
   );
   const missingRequiredCredentials = requiredCredentialProtocols.filter(
@@ -1189,6 +1209,66 @@ export async function startDeviceAdoption(
   });
 
   return snapshot;
+}
+
+export async function reopenDeviceOnboarding(
+  deviceId: string,
+  actor: "user" | "steward" = "user",
+): Promise<DeviceAdoptionSnapshot> {
+  const device = stateStore.getDeviceById(deviceId);
+  if (!device) {
+    throw new Error(`Device not found: ${deviceId}`);
+  }
+
+  if (getDeviceAdoptionStatus(device) !== "adopted") {
+    throw new Error("Device must be adopted before onboarding can be reopened");
+  }
+
+  const now = nowIso();
+  const nextRun: AdoptionRun = {
+    id: randomUUID(),
+    deviceId,
+    status: "awaiting_user",
+    stage: "draft",
+    profileJson: {},
+    summary: `Steward is onboarding ${device.name}.`,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  stateStore.upsertAdoptionRun(nextRun);
+
+  const nextAdoption = {
+    ...getAdoptionRecord(device),
+    status: "adopted",
+    onboardingVersion: ADOPTION_ONBOARDING_VERSION,
+    runId: nextRun.id,
+    runStatus: nextRun.status,
+    runStage: nextRun.stage,
+  } as Record<string, unknown>;
+  delete nextAdoption.completedAt;
+  delete nextAdoption.draftSuppressedAt;
+
+  await stateStore.upsertDevice({
+    ...device,
+    lastChangedAt: now,
+    metadata: {
+      ...device.metadata,
+      adoption: nextAdoption,
+    },
+  });
+
+  await stateStore.addAction({
+    actor,
+    kind: "config",
+    message: `Reopened onboarding for ${device.name}`,
+    context: {
+      deviceId: device.id,
+      runId: nextRun.id,
+    },
+  });
+
+  return syncDeviceAdoptionState(deviceId, { createIfMissing: true });
 }
 
 export async function finalizeAdoptionRunIfReady(deviceId: string): Promise<DeviceAdoptionSnapshot> {

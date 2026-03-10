@@ -1,17 +1,14 @@
 import { stateStore } from "@/lib/state/store";
+import { normalizeCredentialProtocol } from "@/lib/protocols/catalog";
 import type { Device, PlaybookDefinition } from "@/lib/state/types";
-
-function normalizeProtocol(protocol: string): string {
-  const value = protocol.trim().toLowerCase();
-  if (value === "windows") return "winrm";
-  if (value === "http") return "http-api";
-  if (value === "https") return "http-api";
-  return value;
-}
 
 const CREDENTIAL_GATED_PROTOCOLS = new Set([
   "ssh",
   "winrm",
+  "powershell-ssh",
+  "wmi",
+  "smb",
+  "rdp",
   "snmp",
   "http-api",
   "docker",
@@ -25,7 +22,7 @@ export function getMissingCredentialProtocolsForPlaybook(
 ): string[] {
   const required = new Set<string>();
   for (const protocol of playbook.preconditions.requiredProtocols) {
-    const normalized = normalizeProtocol(protocol);
+    const normalized = normalizeCredentialProtocol(protocol);
     if (CREDENTIAL_GATED_PROTOCOLS.has(normalized)) {
       required.add(normalized);
     }
@@ -35,7 +32,7 @@ export function getMissingCredentialProtocolsForPlaybook(
     return [];
   }
 
-  const available = new Set(stateStore.getUsableCredentialProtocols(device.id).map(normalizeProtocol));
+  const available = new Set(stateStore.getUsableCredentialProtocols(device.id).map(normalizeCredentialProtocol));
   const missing = Array.from(required).filter((protocol) => !available.has(protocol));
   return missing;
 }

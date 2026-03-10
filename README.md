@@ -12,33 +12,22 @@
     |
     <a href="#screenshots"><strong>Screenshots</strong></a>
     |
-    <a href="#what-exists-today"><strong>What Exists Today</strong></a>
+    <a href="#what-this-repo-actually-ships"><strong>What This Repo Ships</strong></a>
     |
-    <a href="#roadmap"><strong>Roadmap</strong></a>
+    <a href="#api-surface"><strong>API Surface</strong></a>
   </p>
   <p>
     <img alt="Self-hosted" src="https://img.shields.io/badge/self--hosted-yes-0f766e?style=for-the-badge" />
     <img alt="SQLite-backed state" src="https://img.shields.io/badge/state-SQLite-1d4ed8?style=for-the-badge" />
     <img alt="Agent loop" src="https://img.shields.io/badge/agent-discover%20-%3E%20understand%20-%3E%20act%20-%3E%20learn-111827?style=for-the-badge" />
     <img alt="RBAC" src="https://img.shields.io/badge/access-RBAC%20%2B%20SSO-7c3aed?style=for-the-badge" />
-    <img alt="No env config" src="https://img.shields.io/badge/config-no%20runtime%20.env-b91c1c?style=for-the-badge" />
+    <img alt="Remote access" src="https://img.shields.io/badge/remote-RDP%20%2F%20VNC%20%2F%20terminal-0f172a?style=for-the-badge" />
   </p>
 </div>
 
-Steward is built for the teams that have real infrastructure but no actual IT department. If you are the founder who "handles IT," the office manager who reboots the NAS, or the solo operator with a serious homelab, Steward aims to be the first system that behaves more like an employee than a dashboard.
+Steward is a self-hosted IT operations control plane for small networks. This repo already ships a working local-first system with discovery, persistent state, graph-backed inventory, chat over live infrastructure context, policy-gated remediation, secure credential storage, device onboarding, widgets, automations, and operator access control.
 
-> Status: this repo already ships a substantial self-hosted control plane with discovery, chat, incidents, approvals, policies, playbooks, vault, and RBAC. It is not yet the full end-state described in the long-term product vision. The current implementation checklist lives in [tasks.md](./tasks.md), and the systems backlog lives in [docs/world-class-system-program.md](./docs/world-class-system-program.md).
-
-## Why this hits differently
-
-Most infrastructure tools stop at "here is a graph" or "here is an alert."
-Steward is trying to close the loop:
-
-- Discover what is on the network without installing agents everywhere.
-- Explain what changed, what is at risk, and why it matters in plain English.
-- Take action through policy-gated playbooks instead of dumping more toil on the operator.
-- Build durable institutional memory in local state so the system gets sharper over time.
-- Keep configuration in SQLite-backed settings, not a graveyard of environment variables.
+> Status: this repository already implements a substantial control plane. The implementation checklist lives in [tasks.md](./tasks.md).
 
 ## Screenshots
 
@@ -67,60 +56,134 @@ Steward is trying to close the loop:
   </tr>
 </table>
 
-## What exists today
+## What This Repo Actually Ships
 
-### Today, in this repo
+- A Next.js 16 + React 19 application with both operator UI and JSON APIs
+- A persistent `discover -> understand -> act -> learn` agent loop with manual and scheduled execution
+- SQLite-backed state, audit history, settings history, graph projections, protocol sessions, widget state, dashboard layout state, and device adoption records
+- An encrypted vault for device credentials, provider secrets, OAuth tokens, and web research API keys using OS-native key protection plus AES-256-GCM
+- Device discovery across passive ARP, mDNS, SSDP, multicast discovery, active nmap sweeps, reverse DNS, packet capture hints, browser observation, and service fingerprinting
+- Device classification heuristics that infer type, vendor, OS family, management protocols, and confidence scores
+- A graph-backed topology model linking devices, services, workloads, assurances, access methods, profiles, and site/subnet membership
+- Incidents, recommendations, approvals, playbook runs, daily digests, and action logs
+- A policy engine with autonomy tiers, action classes, maintenance windows, quantitative risk scoring, TTL-based approvals, escalation, rollback hooks, and quarantine on repeated failure
+- A broker-first execution layer for SSH, HTTP, WebSocket, MQTT, WinRM, PowerShell over SSH, WMI, SMB, RDP, VNC-backed remote desktop, and local-tool operations
+- Device-scoped chat with live context, graph queries, onboarding flows, browser-backed web sessions, remote terminal access, and widget generation
+- Adapter management with file-backed and managed adapter packages, manifests, tool skills, runtime config, and adapter-contributed playbooks
+- Device widgets, widget controls, per-device automations, and dashboard widget pages
+- RBAC, local auth bootstrap, session auth, API token auth, OIDC SSO, and LDAP login
+- DB-backed runtime, system, auth-token, and auth settings with mutation history and as-of reads
 
-- Persistent agent loop: `discover -> understand -> act -> learn`
-- Mixed discovery pipeline: ARP, active scan, mDNS, SSDP, and UDP service probes
-- Live device, service, and dependency graph
-- Incidents, recommendations, approvals, and playbook runs
-- Policy engine with action classes, risk scoring, maintenance windows, and rollback gates
-- Conversational interface over live inventory and graph data
-- Multi-provider LLM support
-- Encrypted vault for provider secrets and device credentials
-- Local users, RBAC, OIDC SSO, and LDAP auth
-- DB-backed runtime, system, and auth-token settings with history
+## Core Capabilities
 
-### Where it is headed
+### Discovery and inventory
 
-- Protocol-native execution brokers across more device families
-- Deeper device-specific onboarding and adoption workflows
-- Broader deterministic findings across storage, backup, certificates, workloads, and network drift
-- Better baselines, anomaly detection, and graph-backed diagnosis
-- Notifications, weekly reporting, and multi-site federation
+Steward combines passive and active discovery so it can do more than ping a subnet. The current implementation uses ARP data, mDNS, SSDP, multicast discovery, nmap scans, reverse DNS, packet intel via `tshark`, browser-based observation of web consoles, TLS and HTTP inspection, SSH banner capture, SNMP and DNS probing, WinRM endpoint checks, MQTT broker checks, SMB negotiation, and NetBIOS hints.
+
+Each device record carries services, protocols, evidence, metadata, timestamps, adoption state, and graph relationships. Discovery is not a one-shot import; it is part of the recurring agent loop.
+
+### Operator control plane
+
+The app already exposes real operator surfaces for:
+
+- Dashboard
+- Digest
+- Devices
+- Discovery
+- Topology
+- Incidents
+- Activity
+- Approvals
+- Policies
+- Chat
+- Adapters
+- Access control
+- Settings
+
+Per-device pages go beyond inventory. They include access methods, stored credentials, adapter/profile binding, workloads, assurances, findings, chat, widgets, automations, remote desktop, and remote terminal access.
+
+### Safe automation and remediation
+
+Steward does not jump straight from detection to mutation. The repo has a real approval and execution pipeline with policy evaluation, risk scoring, approval TTLs, escalation, safety gates, execution lanes, idempotency keys, verification steps, rollback sequences, and failure quarantine.
+
+Built-in playbooks currently cover:
+
+- systemd, Docker, and Windows service recovery
+- TLS certificate renewal
+- rsync backup retry
+- NAS snapshot verification
+- disk cleanup
+- configuration backup over SSH or HTTP
+
+### Assistant, remotes, and generated surfaces
+
+The conversational layer runs against live local state, not a static prompt. It can answer from devices, incidents, graph structure, recent changes, and device-scoped context, then route into first-party operations.
+
+The current codebase also includes:
+
+- Browser-backed web sessions for recurring appliance UIs
+- In-app remote desktop sessions for RDP and VNC via `guacd`
+- A per-device remote terminal that selects SSH, WinRM, or PowerShell-over-SSH based on observed access
+- Generated device widgets with first-class controls backed by the operation runtime
+- Per-device automations that can run widget controls on manual, interval, or daily schedules
+
+### Extensibility
+
+Steward is already designed to be extended in-repo. Adapters can contribute discovery, enrichment, capability mapping, deterministic profile matching, tool skills, and playbooks. The app includes adapter package CRUD, config editing, tool-skill configuration, and built-in starter adapters for HTTP surfaces, Docker operations, and SNMP-derived network intelligence.
+
+## LLM and Provider Support
+
+The repo supports multiple model backends and local endpoints. Current provider support includes:
+
+- OpenAI
+- Anthropic
+- Google
+- Mistral
+- Groq
+- xAI
+- Cohere
+- DeepSeek
+- Perplexity
+- Fireworks
+- Together AI
+- OpenRouter
+- Ollama
+- LM Studio
+- Custom OpenAI-compatible endpoints
+
+Web research is also configurable through DB-backed settings and can use Brave scraping, DuckDuckGo scraping, Brave API, Serper, or SerpAPI.
 
 ## Quickstart
 
 ### Local development
 
-1. Install dependencies:
-
 ```bash
 npm install
-```
-
-`postinstall` bootstraps Playwright's browser runtime and checks required network tools.
-
-2. Start Steward:
-
-```bash
 npm run dev
 ```
 
-3. Open [http://localhost:3010](http://localhost:3010)
-4. Open [http://localhost:3010/access](http://localhost:3010/access) to bootstrap the first account and configure auth.
-5. Add model providers, credentials, and runtime settings from the UI or API.
-6. Steward persists its local state under `.steward/`.
+Open [http://localhost:3010](http://localhost:3010).
 
-### Docker
+First-time flow:
+
+1. Visit `/access` and bootstrap the first account.
+2. Configure at least one LLM provider.
+3. Run the agent loop from the UI or call `POST /api/agent/run`.
+4. Review discovered devices.
+5. Add credentials only where Steward should actually manage a device.
+6. Tune runtime and system settings from the UI.
+
+### Docker compose
 
 ```bash
-docker build -t steward .
-docker run --rm -p 3000:3000 -v "$(pwd)/.steward:/app/.steward" steward
+docker compose up --build
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+This stack includes:
+
+- Steward on port `3010`
+- `guacd` for in-app remote desktop sessions
+- Persistent local state mounted at `./.steward`
 
 ### Production scripts
 
@@ -139,84 +202,29 @@ Windows PowerShell:
 ./scripts/run-prod.ps1
 ```
 
-PM2:
+## Host tooling
 
-```bash
-npm i -g pm2
-./scripts/install-prod.sh
-npm run build
-pm2 start ecosystem.config.cjs
-pm2 save
-```
+The repo expects real network tooling. The install scripts and postinstall hooks ensure or attempt to install:
 
-Useful commands:
+- `nmap`
+- `tshark`
+- SNMP tools
+- Playwright browser runtime
+- PowerShell
+- `guacd` or Docker-based `guacd` for remote desktop features
 
-- `pm2 status`
-- `pm2 logs steward`
-- `pm2 restart steward`
-- `pm2 stop steward`
+## State and Security Model
 
-## First 10 minutes
+Steward stores local data under `.steward/`:
 
-After Steward boots, do these in order:
+- `steward_state.db`
+- `steward_audit.db`
+- `vault.enc.json`
+- `vault.key`
 
-1. Bootstrap the first account at [http://localhost:3010/access](http://localhost:3010/access) if you are running locally.
-2. Add at least one model provider so the conversational layer can answer with live context.
-3. Run the agent loop from the UI or call `POST /api/agent/run` to populate the first pass of discovery state.
-4. Review discovered devices, incidents, and recommendations before granting deeper credentials.
-5. Set an API auth token before exposing the instance outside a trusted local environment.
+Runtime and product settings are persisted in SQLite. Provider secrets and device credentials are stored in the encrypted vault. API access can be gated by a DB-backed auth token, and operator access can be managed through local users, OIDC, or LDAP.
 
-Enable the API guard token:
-
-```bash
-curl -X POST http://localhost:3010/api/settings/auth-token \
-  -H 'content-type: application/json' \
-  -d '{"token":"replace-with-a-strong-token"}'
-```
-
-Then send either:
-
-- `Authorization: Bearer <token>`
-- `x-steward-token: <token>`
-
-## No `.env` product config
-
-This repo has a hard rule: runtime product configuration does not live in environment variables.
-
-- Runtime settings are stored in SQLite-backed settings history.
-- System settings are stored in SQLite-backed settings history.
-- API auth token guard is DB-backed.
-- Provider secrets and tokens live in the encrypted vault.
-
-That keeps configuration inspectable, auditable, and queryable over time instead of disappearing into process state.
-
-## How it works
-
-### 1. Discover
-
-Steward starts by listening and scanning. It combines passive signals with active enumeration to find devices, ports, services, and likely management protocols.
-
-### 2. Understand
-
-It classifies devices, builds graph relationships, records evidence, and keeps a living model of what depends on what.
-
-### 3. Act
-
-It creates incidents and recommendations, evaluates policy, and executes playbooks only when allowed by autonomy tier, risk, and safety gates.
-
-### 4. Learn
-
-It stores history, settings, approvals, and observations locally so future explanations and actions have context.
-
-## Architecture snapshot
-
-- Control plane: agent loop, policy engine, playbook runtime, conversation layer, notifications and digest generation
-- Data: SQLite-backed state and audit durability, encrypted vault, graph projections
-- Access: local auth, RBAC, OIDC, LDAP
-- Execution: approvals, risk-scored actions, rollback-aware playbooks
-- UX: inbox, topology, device detail, incident timelines, policy UI, chat workspace
-
-## API surface
+## API Surface
 
 Core endpoints:
 
@@ -235,10 +243,13 @@ Settings:
 Inventory and operations:
 
 - `GET/POST /api/devices`
+- `GET /api/devices/:id/adoption`
+- `GET/POST /api/devices/:id/credentials`
+- `GET/POST /api/devices/:id/widgets`
+- `GET/POST /api/devices/:id/automations`
 - `GET/PATCH /api/incidents`
-- `GET/PATCH /api/recommendations`
 - `GET /api/approvals`
-- `POST /api/approvals/[id]`
+- `POST /api/approvals/:id`
 - `GET/POST /api/playbooks/runs`
 - `GET /api/audit-events`
 - `GET/POST /api/digest`
@@ -254,63 +265,27 @@ Identity and providers:
 - `GET /api/providers/models`
 - `GET/POST /api/vault`
 
-## Persistence layout
+Remote access:
 
-Steward stores local data under `.steward/`:
-
-- State DB: `.steward/steward_state.db`
-- Audit DB: `.steward/steward_audit.db`
-- Vault: `.steward/vault.enc.json`
-- Vault key material: `.steward/vault.key`
-
-## Who this is for
-
-- Small businesses with a server closet and nobody whose real job is IT
-- Solo operators running homelabs, edge sites, or client infrastructure
-- Small MSP teams that want automation without deploying agents everywhere
-- Technical founders who want operational leverage, not another dashboard
-
-## What makes it credible
-
-- Self-hosted first
-- Local state and audit durability
-- Policy-gated actions instead of blind automation
-- Honest separation between what works now and what is still in backlog
-- Architecture designed around mixed real-world infrastructure, not cloud-only demos
-
-## Roadmap
-
-If you want the blunt version of what is implemented versus what still needs work, start here:
-
-- Current implementation checklist: [tasks.md](./tasks.md)
-- World-class systems backlog: [docs/world-class-system-program.md](./docs/world-class-system-program.md)
-- Capability cutover register: [docs/world-class-capability-cutover-task-register.md](./docs/world-class-capability-cutover-task-register.md)
-
-Near-term focus areas:
-
-- Broader protocol-native execution
-- Stronger credential governance
-- More deterministic findings across storage, certificates, backup, and network gear
-- Better anomaly intelligence and graph-backed diagnosis
-- Notification delivery and multi-site readiness
+- `GET/POST /api/remote-desktop/sessions`
+- `POST /api/remote-desktop/sessions/:id/viewer-bootstrap`
+- `GET/POST /api/devices/:id/remote-terminal`
 
 ## Contributing
 
-Issues, architecture critiques, and focused PRs are welcome.
 If you are contributing:
 
-- Keep product and runtime configuration DB-backed.
-- Do not introduce `.env`-driven product behavior.
-- Prefer deterministic execution paths and auditable state transitions.
-- Read [tasks.md](./tasks.md) before picking a major change.
+- Keep runtime and product configuration DB-backed
+- Prefer deterministic execution paths and auditable state transitions
+- Read [tasks.md](./tasks.md) before picking a major change
 
 ## Replace the screenshot placeholders
 
 The README visuals are wired to files in `docs/screenshots/`.
 
-- Keep the same filenames and swap the SVGs for real PNG, JPG, or GIF captures later.
-- Best results: 1600px wide images with a 16:10 or 16:9 aspect ratio.
-- Prefer crisp captures of the inbox, chat workspace, device detail, and topology views.
+- Keep the same filenames and swap the SVGs for real PNG, JPG, or GIF captures later
+- Best results: 1600px wide images with a 16:10 or 16:9 aspect ratio
+- Prefer crisp captures of the inbox, chat workspace, device detail, and topology views
 
 ## License
 

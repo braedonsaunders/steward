@@ -185,13 +185,19 @@ function inferRequiredProtocols(
   if (monitorType === "desktop_ui_assertion") {
     const requirements: string[] = [];
     if (present.has("winrm")) requirements.push("winrm");
+    if (present.has("powershell-ssh")) requirements.push("powershell-ssh");
+    if (present.has("wmi")) requirements.push("wmi");
     if (present.has("ssh")) requirements.push("ssh");
-    if (requirements.length === 0) requirements.push("winrm");
+    if (present.has("rdp")) requirements.push("rdp");
+    if (present.has("vnc")) requirements.push("vnc");
+    if (requirements.length === 0) requirements.push("rdp");
     return requirements;
   }
 
   if (present.has("ssh")) return ["ssh"];
   if (present.has("winrm")) return ["winrm"];
+  if (present.has("powershell-ssh")) return ["powershell-ssh"];
+  if (present.has("wmi")) return ["wmi"];
   if (present.has("docker")) return ["docker"];
   return ["ssh"];
 }
@@ -202,6 +208,12 @@ function buildServiceCommandTemplate(protocol: string, serviceName: string): str
   }
   if (protocol === "winrm") {
     return `pwsh -NoLogo -NonInteractive -Command "Invoke-Command -ComputerName {{host}} -ScriptBlock { (Get-Service -Name '${serviceName}').Status }"`;
+  }
+  if (protocol === "powershell-ssh") {
+    return `ssh {{host}} "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"(Get-Service -Name '${serviceName}').Status\""`;
+  }
+  if (protocol === "wmi") {
+    return `pwsh -NoLogo -NonInteractive -Command "$session=New-CimSession -ComputerName {{host}}; try { (Get-CimInstance -CimSession $session -ClassName Win32_Service -Filter \"Name='${serviceName}'\").State } finally { if ($session) { Remove-CimSession $session } }"`;
   }
   if (protocol === "docker") {
     return `docker -H tcp://{{host}} ps --filter name=${serviceName}`;
@@ -214,6 +226,18 @@ function buildServiceBrokerRequest(protocol: string, serviceName: string): Proto
     return {
       protocol: "winrm",
       command: `(Get-Service -Name '${serviceName}').Status`,
+    };
+  }
+  if (protocol === "powershell-ssh") {
+    return {
+      protocol: "powershell-ssh",
+      command: `(Get-Service -Name '${serviceName}').Status`,
+    };
+  }
+  if (protocol === "wmi") {
+    return {
+      protocol: "wmi",
+      command: `(Get-CimInstance -CimSession $session -ClassName Win32_Service -Filter \"Name='${serviceName}'\").State`,
     };
   }
   return undefined;
@@ -229,6 +253,14 @@ function adapterIdForBroker(protocol: ProtocolBrokerRequest["protocol"]): string
       return "ssh";
     case "winrm":
       return "winrm";
+    case "powershell-ssh":
+      return "powershell-ssh";
+    case "wmi":
+      return "wmi";
+    case "smb":
+      return "smb";
+    case "rdp":
+      return "rdp";
     case "http":
     case "websocket":
       return "http-api";
@@ -254,7 +286,7 @@ export function buildCustomMonitorContractFromPrompt(
   const cleanedPrompt = prompt.trim();
   const monitorType = inferMonitorType(cleanedPrompt);
   const explicitProtocols = toStringArray(
-    (cleanedPrompt.match(/\b(?:using|via)\s+(ssh|winrm|docker|http-api|snmp|mqtt|rdp|vnc)\b/ig) ?? [])
+    (cleanedPrompt.match(/\b(?:using|via)\s+(ssh|winrm|powershell-ssh|wmi|smb|docker|http-api|snmp|mqtt|rdp|vnc)\b/ig) ?? [])
       .map((token) => token.replace(/\b(using|via)\s+/i, "")),
   );
   let requiredProtocols = inferRequiredProtocols(monitorType, device, explicitProtocols);

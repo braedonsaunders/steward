@@ -3,12 +3,16 @@
 import { execFileSync } from "node:child_process";
 
 const DEFAULT_PORT = 3010;
-const rawPort = process.argv[2] ?? String(DEFAULT_PORT);
-const port = Number.parseInt(rawPort, 10);
+const rawPorts = process.argv.slice(2);
+const ports = rawPorts.length > 0 ? rawPorts : [String(DEFAULT_PORT)];
 
-if (!Number.isInteger(port) || port < 1 || port > 65535) {
-  console.error(`[dev] Invalid port: ${rawPort}`);
-  process.exit(1);
+function parsePort(value) {
+  const port = Number.parseInt(value, 10);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    console.error(`[dev] Invalid port: ${value}`);
+    process.exit(1);
+  }
+  return port;
 }
 
 function parsePidList(text) {
@@ -31,7 +35,6 @@ function listListeningPidsUnix(targetPort) {
     );
     return parsePidList(output);
   } catch (error) {
-    // lsof exits 1 when no results found.
     if (typeof error === "object" && error !== null && "status" in error && error.status === 1) {
       return [];
     }
@@ -118,7 +121,7 @@ function signalProcess(pid, signal) {
   }
 }
 
-async function main() {
+async function freePort(port) {
   const pids = listListeningPids(port).filter((pid) => pid !== process.pid);
 
   if (pids.length === 0) {
@@ -147,8 +150,6 @@ async function main() {
   console.log(`[dev] Freed port ${port}.`);
 }
 
-main().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(`[dev] Port cleanup failed: ${message}`);
-  process.exit(1);
-});
+for (const port of ports.map(parsePort)) {
+  await freePort(port);
+}

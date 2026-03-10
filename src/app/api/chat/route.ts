@@ -13,7 +13,11 @@ import { buildAssistantContext } from "@/lib/assistant/context";
 import { maybeUpdateOperatorNotes } from "@/lib/assistant/operator-notes";
 import { buildStewardSystemPrompt } from "@/lib/assistant/prompt";
 import { buildAdapterSkillTools } from "@/lib/assistant/tool-skills";
-import { planWidgetRoute, type WidgetRoutePlan } from "@/lib/assistant/widget-routing";
+import {
+  planWidgetRoute,
+  shouldExposeWidgetManagementForTurn,
+  type WidgetRoutePlan,
+} from "@/lib/assistant/widget-routing";
 import { buildOnboardingSystemPrompt, isOnboardingSession } from "@/lib/adoption/conversation";
 import { summarizeDeviceContractForPrompt } from "@/lib/devices/contract-management";
 import { getDefaultProvider } from "@/lib/llm/config";
@@ -29,8 +33,11 @@ const ONBOARDING_MAX_OUTPUT_TOKENS = 12_000;
 const CHAT_MAX_STEPS = 16;
 const CHAT_MAX_AUTO_CONTINUATIONS = 3;
 const CHAT_AUTO_CONTINUE_FINISH_REASONS = new Set(["length", "tool-calls", "max-steps"]);
-const BROWSER_PREVIEW_MAX_CHARS = 240_000;
-const CHAT_BROWSER_ARTIFACT_DIR = path.join(getDataDir(), "artifacts", "browser-browse");
+const BROWSER_PREVIEW_MAX_CHARS = 16_000;
+const REMOTE_DESKTOP_PREVIEW_MAX_CHARS = 16_000;
+const CHAT_ARTIFACTS_DIR = path.join(getDataDir(), "artifacts");
+const CHAT_BROWSER_ARTIFACT_DIR = path.join(CHAT_ARTIFACTS_DIR, "browser-browse");
+const CHAT_REMOTE_DESKTOP_ARTIFACT_DIR = path.join(CHAT_ARTIFACTS_DIR, "remote-desktop");
 
 export const runtime = "nodejs";
 
@@ -51,6 +58,59 @@ function toFriendlyChatError(rawMessage: string, provider: LLMProvider): string 
     return "OpenAI authentication issue. Try disconnecting and reconnecting via OAuth in Settings, or add a Platform API key directly.";
   }
   return rawMessage;
+}
+
+function stringifyUnknownError(value: unknown): string {
+  if (value instanceof Error) {
+    return value.message;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  if (!value || typeof value !== "object") {
+    return String(value);
+  }
+
+  const record = value as Record<string, unknown>;
+  for (const key of ["message", "error", "reason", "detail", "cause"]) {
+    const candidate = record[key];
+    if (candidate instanceof Error && candidate.message.trim().length > 0) {
+      return candidate.message;
+    }
+    if (typeof candidate === "string" && candidate.trim().length > 0) {
+      return candidate;
+    }
+  }
+
+  try {
+    const seen = new WeakSet<object>();
+    const json = JSON.stringify(value, (_key, nested) => {
+      if (nested instanceof Error) {
+        return {
+          name: nested.name,
+          message: nested.message,
+          stack: nested.stack,
+        };
+      }
+      if (typeof nested === "object" && nested !== null) {
+        if (seen.has(nested)) {
+          return "[Circular]";
+        }
+        seen.add(nested);
+      }
+      return nested;
+    });
+    if (typeof json === "string" && json.trim().length > 0 && json !== "{}") {
+      return json;
+    }
+  } catch {
+    // no-op
+  }
+
+  return "An unknown structured error occurred.";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -138,6 +198,7 @@ async function executePlannedWidgetAction(args: {
   attachedDeviceName: string;
   provider: LLMProvider;
   model?: string;
+  verificationMode?: "strict" | "warn-on-connectivity";
 }): Promise<unknown> {
   if (args.plan.route !== "widget") {
     throw new Error("Widget route plan is not executable.");
@@ -200,6 +261,7 @@ async function executePlannedWidgetAction(args: {
       actor: "steward",
       targetWidgetId: widget?.id,
       targetWidgetSlug: widget ? undefined : toolArgs.widget_slug,
+      verificationMode: args.verificationMode,
     });
     await stateStore.addAction({
       actor: "steward",
@@ -219,6 +281,7 @@ async function executePlannedWidgetAction(args: {
       deviceName: args.attachedDeviceName,
       updatedExisting: generated.updatedExisting,
       summary: generated.summary,
+      warnings: generated.warnings,
       widget: generated.widget,
     };
   }
@@ -236,17 +299,28 @@ function buildDirectWidgetResponse(output: unknown, fallbackSummary: string): st
     ? widgetRecord.name.trim()
     : "";
   const summary = typeof output.summary === "string" ? output.summary.trim() : "";
+  const warnings = Array.isArray(output.warnings)
+    ? output.warnings.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    : [];
 
   if (widgetName && summary) {
-    return `${fallbackSummary}. ${summary}`;
+    return `${fallbackSummary}. ${summary}${warnings.length > 0 ? ` ${warnings.join(" ")}` : ""}`;
   }
   if (widgetName) {
-    return fallbackSummary;
+    return `${fallbackSummary}${warnings.length > 0 ? `. ${warnings.join(" ")}` : ""}`;
   }
   if (summary) {
-    return summary;
+    return `${summary}${warnings.length > 0 ? ` ${warnings.join(" ")}` : ""}`;
+  }
+  if (warnings.length > 0) {
+    return `${fallbackSummary}. ${warnings.join(" ")}`;
   }
   return fallbackSummary;
+}
+
+function isPromptTooLongError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /prompt is too long|context length|maximum context|too many tokens/i.test(message);
 }
 
 function previewValue(value: unknown, maxChars = 900): string | undefined {
@@ -273,6 +347,9 @@ function previewValue(value: unknown, maxChars = 900): string | undefined {
 
 function inferToolKind(toolName: string, inputPreview?: string, outputPreview?: string): ChatToolEventKind {
   const combined = `${toolName}\n${inputPreview ?? ""}\n${outputPreview ?? ""}`.toLowerCase();
+  if (/remote[_-]?desktop|steward_remote_desktop|\brdp\b|\bvnc\b/.test(combined)) {
+    return "desktop";
+  }
   if (/shell|terminal|nmap|curl|ssh|shasum|ping|traceroute/.test(combined)) {
     return "terminal";
   }
@@ -390,7 +467,118 @@ function summarizeBrowserOutputPreview(output: Record<string, unknown>): string 
   return previewValue(minimal, 8_000);
 }
 
-function persistChatBrowserInlineScreenshot(base64: string, mimeType: string): string | undefined {
+function summarizeRemoteDesktopOutputPreview(output: Record<string, unknown>): string | undefined {
+  const stepResults = Array.isArray(output.stepResults) ? output.stepResults : [];
+  const normalizedSteps = stepResults
+    .filter(isRecord)
+    .slice(0, 40)
+    .map((step) => {
+      const action = typeof step.action === "string" ? step.action : "step";
+      const label = typeof step.label === "string" ? step.label : undefined;
+      const ok = typeof step.ok === "boolean" ? step.ok : true;
+      const compact: Record<string, unknown> = { action, ok, ...(label ? { label } : {}) };
+      if (typeof step.x === "number") compact.x = step.x;
+      if (typeof step.y === "number") compact.y = step.y;
+      if (typeof step.fromX === "number") compact.fromX = step.fromX;
+      if (typeof step.fromY === "number") compact.fromY = step.fromY;
+      if (typeof step.toX === "number") compact.toX = step.toX;
+      if (typeof step.toY === "number") compact.toY = step.toY;
+      if (typeof step.text === "string") compact.text = clampText(step.text, 800);
+      if (typeof step.key === "string") compact.key = step.key;
+      if (typeof step.direction === "string") compact.direction = step.direction;
+      if (typeof step.amount === "number") compact.amount = step.amount;
+      if (typeof step.result === "string") compact.result = clampText(step.result, 800);
+      if (typeof step.path === "string") compact.path = step.path;
+      if (typeof step.screenshotBase64 === "string" && step.screenshotBase64.length > 0) {
+        const mimeType = typeof step.mimeType === "string" ? step.mimeType : "image/png";
+        const persistedPath = persistChatRemoteDesktopInlineScreenshot(step.screenshotBase64, mimeType);
+        if (persistedPath) {
+          compact.path = persistedPath;
+        } else {
+          compact.screenshotBase64 = step.screenshotBase64;
+        }
+      }
+      if (typeof step.mimeType === "string") compact.mimeType = step.mimeType;
+      return compact;
+    });
+
+  const latestFrame = typeof output.screenshotBase64 === "string" && output.screenshotBase64.length > 0
+    ? (() => {
+      const mimeType = typeof output.mimeType === "string" ? output.mimeType : "image/png";
+      const persistedPath = persistChatRemoteDesktopInlineScreenshot(output.screenshotBase64, mimeType);
+      return persistedPath
+        ? { latestFramePath: persistedPath, latestFrameMimeType: mimeType }
+        : { latestFrameBase64: output.screenshotBase64, latestFrameMimeType: mimeType };
+    })()
+    : undefined;
+
+  const compact: Record<string, unknown> = {
+    ok: output.ok === false ? false : true,
+    sessionId: typeof output.sessionId === "string" ? output.sessionId : undefined,
+    deviceId: typeof output.deviceId === "string" ? output.deviceId : undefined,
+    deviceName: typeof output.deviceName === "string" ? output.deviceName : undefined,
+    protocol: typeof output.protocol === "string" ? output.protocol : undefined,
+    viewerPath: typeof output.viewerPath === "string" ? output.viewerPath : undefined,
+    stepsExecuted: typeof output.stepsExecuted === "number" ? output.stepsExecuted : normalizedSteps.length,
+    stepResults: normalizedSteps,
+    ...(latestFrame ?? {}),
+  };
+
+  const stringifyPreview = (value: Record<string, unknown>): string | undefined => {
+    try {
+      const serialized = JSON.stringify(value);
+      return serialized.length <= REMOTE_DESKTOP_PREVIEW_MAX_CHARS ? serialized : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const direct = stringifyPreview(compact);
+  if (direct) {
+    return direct;
+  }
+
+  const withoutInlineScreenshots: Record<string, unknown> = {
+    ...compact,
+    stepResults: normalizedSteps.map((step) => {
+      if (typeof step.screenshotBase64 !== "string") {
+        return step;
+      }
+      const bytes = Math.floor((step.screenshotBase64.length * 3) / 4);
+      const rest = { ...step };
+      delete rest.screenshotBase64;
+      return {
+        ...rest,
+        screenshotOmitted: true,
+        screenshotBytesEstimate: bytes,
+      };
+    }),
+  };
+
+  const withoutScreenshots = stringifyPreview(withoutInlineScreenshots);
+  if (withoutScreenshots) {
+    return withoutScreenshots;
+  }
+
+  const minimal: Record<string, unknown> = {
+    ok: compact.ok,
+    deviceName: compact.deviceName,
+    protocol: compact.protocol,
+    viewerPath: compact.viewerPath,
+    stepsExecuted: compact.stepsExecuted,
+    stepResults: Array.isArray(withoutInlineScreenshots.stepResults)
+      ? (withoutInlineScreenshots.stepResults as unknown[]).slice(0, 12)
+      : [],
+  };
+  return previewValue(minimal, 8_000);
+}
+
+function persistChatInlineScreenshot(
+  base64: string,
+  mimeType: string,
+  artifactDir: string,
+  relativePrefix: string,
+): string | undefined {
   const normalizedMime = mimeType.toLowerCase();
   const ext = normalizedMime.includes("jpeg") || normalizedMime.includes("jpg")
     ? "jpg"
@@ -402,14 +590,22 @@ function persistChatBrowserInlineScreenshot(base64: string, mimeType: string): s
     if (bytes.byteLength === 0) {
       return undefined;
     }
-    mkdirSync(CHAT_BROWSER_ARTIFACT_DIR, { recursive: true });
+    mkdirSync(artifactDir, { recursive: true });
     const fileName = `${Date.now()}-${randomUUID()}.${ext}`;
-    const absolutePath = path.join(CHAT_BROWSER_ARTIFACT_DIR, fileName);
+    const absolutePath = path.join(artifactDir, fileName);
     writeFileSync(absolutePath, bytes);
-    return `artifacts/browser-browse/${fileName}`;
+    return `${relativePrefix}/${fileName}`;
   } catch {
     return undefined;
   }
+}
+
+function persistChatBrowserInlineScreenshot(base64: string, mimeType: string): string | undefined {
+  return persistChatInlineScreenshot(base64, mimeType, CHAT_BROWSER_ARTIFACT_DIR, "artifacts/browser-browse");
+}
+
+function persistChatRemoteDesktopInlineScreenshot(base64: string, mimeType: string): string | undefined {
+  return persistChatInlineScreenshot(base64, mimeType, CHAT_REMOTE_DESKTOP_ARTIFACT_DIR, "artifacts/remote-desktop");
 }
 
 function normalizeFinishReason(value: unknown): string | undefined {
@@ -479,8 +675,35 @@ function summarizeToolExecution(output: unknown, toolName?: string): {
       }
       return {
         status: "completed",
-        summary: summaryParts.join(" • ") || "Browser flow completed.",
+        summary: summaryParts.join(" | ") || "Browser flow completed.",
         outputPreview: browserPreview ?? previewValue(output, 1200),
+      };
+    }
+
+    if (toolName === "steward_remote_desktop") {
+      const remotePreview = summarizeRemoteDesktopOutputPreview(output);
+      const failedText = typeof output.error === "string" ? output.error.trim() : "";
+      if (output.ok === false || failedText.length > 0) {
+        return {
+          status: "failed",
+          summary: failedText || "Remote desktop flow failed.",
+          outputPreview: remotePreview ?? previewValue(output, 1200),
+        };
+      }
+      const summaryParts: string[] = [];
+      if (typeof output.deviceName === "string" && output.deviceName.trim().length > 0) {
+        summaryParts.push(output.deviceName.trim());
+      }
+      if (typeof output.protocol === "string" && output.protocol.trim().length > 0) {
+        summaryParts.push(output.protocol.trim().toUpperCase());
+      }
+      if (typeof output.stepsExecuted === "number") {
+        summaryParts.push(`${output.stepsExecuted} step${output.stepsExecuted === 1 ? "" : "s"}`);
+      }
+      return {
+        status: "completed",
+        summary: summaryParts.join(" | ") || "Remote desktop flow completed.",
+        outputPreview: remotePreview ?? previewValue(output, 1200),
       };
     }
 
@@ -1005,6 +1228,12 @@ export async function POST(request: NextRequest) {
     const historyExcludingCurrent = sessionId && !payload.data.suppressUserMessage
       ? persistedHistory.slice(0, -1)
       : persistedHistory;
+    const widgetTurnRequested = attachedDevice
+      ? shouldExposeWidgetManagementForTurn({
+        history: historyExcludingCurrent,
+        userInput: payload.data.input,
+      })
+      : false;
 
     const widgetRoutePlan = attachedDevice
       ? await planWidgetRoute({
@@ -1027,11 +1256,12 @@ export async function POST(request: NextRequest) {
       try {
         const output = await executePlannedWidgetAction({
           plan: widgetRoutePlan,
-          attachedDeviceId: attachedDevice.id,
-          attachedDeviceName: attachedDevice.name,
-          provider,
-          model: payload.data.model,
-        });
+            attachedDeviceId: attachedDevice.id,
+            attachedDeviceName: attachedDevice.name,
+            provider,
+            model: payload.data.model,
+            verificationMode: onboardingSession ? "warn-on-connectivity" : "strict",
+          });
 
         const execution = summarizeToolExecution(output, "steward_manage_widget");
         const toolEvent: ChatToolEvent = {
@@ -1116,7 +1346,7 @@ export async function POST(request: NextRequest) {
           metadata,
         });
       } catch (widgetError) {
-        const rawMessage = widgetError instanceof Error ? widgetError.message : String(widgetError);
+        const rawMessage = stringifyUnknownError(widgetError);
         const friendlyMessage = toFriendlyChatError(rawMessage, provider);
         const failedToolEvent: ChatToolEvent = {
           id: toolEventId,
@@ -1197,7 +1427,8 @@ export async function POST(request: NextRequest) {
     const tools = await buildAdapterSkillTools({
       attachedDeviceId: attachedDevice?.id,
       allowPreOnboardingExecution: onboardingSession,
-      includeWidgetManagementTool: onboardingSession,
+      includeWidgetManagementTool: onboardingSession && widgetTurnRequested,
+      widgetVerificationMode: onboardingSession ? "warn-on-connectivity" : "strict",
       provider,
       model: payload.data.model,
     });
@@ -1311,8 +1542,27 @@ export async function POST(request: NextRequest) {
           return;
         }
         completed = true;
-        const rawMessage = rawError instanceof Error ? rawError.message : String(rawError);
+        const rawMessage = stringifyUnknownError(rawError);
         const friendlyMessage = toFriendlyChatError(rawMessage, provider);
+
+        if (toolEvents.length > 0 && isPromptTooLongError(rawError)) {
+          const fallback = `${buildToolOnlyFallback(toolEvents)}\n\nI hit Steward's prompt budget while summarizing the tool results. Ask a narrower follow-up like 'summarize the backup status from the last run' and I'll continue from the existing evidence.`;
+          if (sessionId) {
+            stateStore.addChatMessage({
+              id: randomUUID(),
+              sessionId,
+              role: "assistant",
+              content: fallback,
+              provider,
+              error: false,
+              createdAt: new Date().toISOString(),
+              metadata: { toolEvents, interrupted: true },
+            });
+          }
+          send({ type: "text-delta", text: fallback });
+          send({ type: "finish", provider, text: fallback, reasoning: reasoningText, metadata: { toolEvents, interrupted: true } });
+          return;
+        }
 
         if (sessionId) {
           const metadata: ChatMessageMetadata | undefined = toolEvents.length > 0
@@ -1674,7 +1924,7 @@ export async function POST(request: NextRequest) {
       return new Response(null, { status: 204 });
     }
 
-    const rawMessage = error instanceof Error ? error.message : String(error);
+    const rawMessage = stringifyUnknownError(error);
     const friendlyMessage = toFriendlyChatError(rawMessage, provider);
 
     // Persist the friendly error message to the session
