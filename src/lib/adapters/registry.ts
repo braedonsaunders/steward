@@ -460,6 +460,7 @@ function shouldRefreshBuiltinFiles(
   manifestPath: string,
   normalizedManifest: AdapterManifest,
   entryPath: string,
+  entrySource: string,
 ): boolean {
   if (!existsSync(manifestPath) || !existsSync(entryPath)) {
     return true;
@@ -467,7 +468,9 @@ function shouldRefreshBuiltinFiles(
 
   try {
     const existingManifest = readManifest(path.dirname(manifestPath));
-    return existingManifest.version !== normalizedManifest.version;
+    const existingEntry = readFileSync(entryPath, "utf-8");
+    return JSON.stringify(existingManifest) !== JSON.stringify(normalizedManifest)
+      || existingEntry !== entrySource.trimStart();
   } catch {
     return true;
   }
@@ -486,7 +489,12 @@ function ensureBuiltinAdaptersInstalled(): void {
     const targetDir = path.join(dir, builtin.dirName);
     const manifestPath = path.join(targetDir, "manifest.json");
     const entryPath = path.join(targetDir, normalizedManifest.entry ?? "index.js");
-    const refreshBuiltin = shouldRefreshBuiltinFiles(manifestPath, normalizedManifest, entryPath);
+    const refreshBuiltin = shouldRefreshBuiltinFiles(
+      manifestPath,
+      normalizedManifest,
+      entryPath,
+      builtin.entrySource,
+    );
 
     mkdirSync(targetDir, { recursive: true });
 

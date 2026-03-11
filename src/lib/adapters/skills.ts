@@ -119,6 +119,9 @@ export function buildAdapterSkillMarkdown(manifest: AdapterManifest): string {
     "## Operating Guidance",
     "Prefer deterministic actions first, then escalate to mutating actions only when policy allows.",
     "For any mutating workflow, include a preflight, verification, and rollback-aware path.",
+    "Vendor-specific profile matchers must be narrow. Do not claim a device from generic HTTP, SNMP, or open-port evidence alone.",
+    "Require at least one vendor/product-specific identity signal and one corroborating management or protocol signal before returning a primary vendor profile.",
+    "If the evidence only proves a generic web console, defer to Steward's generic HTTP/web-surface profile instead of a branded adapter.",
     "",
   ].join("\n");
 }

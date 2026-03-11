@@ -1,3 +1,4 @@
+import vm from "node:vm";
 import { randomUUID } from "node:crypto";
 import { generateText } from "ai";
 import { z } from "zod";
@@ -6,12 +7,13 @@ import { stateStore } from "@/lib/state/store";
 import type { DeviceWidget, DeviceWidgetOperationRun, LLMProvider } from "@/lib/state/types";
 import { buildDeviceWidgetContext } from "@/lib/widgets/context";
 import { DeviceWidgetControlListSchema } from "@/lib/widgets/controls";
-import { previewWidgetOperation } from "@/lib/widgets/operations";
+import { previewWidgetOperation, WidgetOperationSchema } from "@/lib/widgets/operations";
 import { MAX_WIDGET_DESCRIPTION_LENGTH } from "@/lib/widgets/description";
 
 const WIDGET_GENERATOR_MAX_OUTPUT_TOKENS = 7_000;
 const WIDGET_GENERATOR_MAX_AUTO_CONTINUATIONS = 2;
 const WIDGET_GENERATOR_AUTO_CONTINUE_FINISH_REASONS = new Set(["length", "tool-calls", "max-steps"]);
+const WIDGET_STARTUP_VERIFICATION_MAX_OPERATIONS = 8;
 const WIDGET_JSON_RESPONSE_SHAPE = [
   "{",
   '  "name": "string",',
@@ -406,18 +408,481 @@ function buildDraftWidgetForVerification(args: {
   };
 }
 
+function describeVerificationError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function createVerificationElement(tagName = "div"): Record<string, unknown> {
+  const listeners = new Map<string, Set<(...args: unknown[]) => unknown>>();
+  const element: Record<string, unknown> = {
+    nodeName: tagName.toUpperCase(),
+    style: {},
+    dataset: {},
+    className: "",
+    id: "",
+    value: "",
+    checked: false,
+    disabled: false,
+    hidden: false,
+    innerHTML: "",
+    textContent: "",
+    classList: {
+      add: () => undefined,
+      remove: () => undefined,
+      toggle: () => false,
+      contains: () => false,
+    },
+    appendChild: (child: unknown) => child,
+    removeChild: (child: unknown) => child,
+    replaceChildren: () => undefined,
+    querySelector: () => createVerificationElement("div"),
+    querySelectorAll: () => [],
+    closest: () => null,
+    focus: () => undefined,
+    blur: () => undefined,
+    setAttribute: (key: string, value: unknown) => {
+      element[key] = value;
+    },
+    getAttribute: (key: string) => {
+      const value = element[key];
+      return typeof value === "string" ? value : null;
+    },
+    removeAttribute: (key: string) => {
+      delete element[key];
+    },
+    addEventListener: (event: string, listener: (...args: unknown[]) => unknown) => {
+      const existing = listeners.get(event) ?? new Set<(...args: unknown[]) => unknown>();
+      existing.add(listener);
+      listeners.set(event, existing);
+    },
+    removeEventListener: (event: string, listener: (...args: unknown[]) => unknown) => {
+      listeners.get(event)?.delete(listener);
+    },
+    dispatchEvent: (event: { type?: string }) => {
+      const type = typeof event?.type === "string" ? event.type : "";
+      const current = listeners.get(type);
+      if (!current) {
+        return true;
+      }
+      for (const listener of Array.from(current)) {
+        listener(event);
+      }
+      return true;
+    },
+  };
+
+  return new Proxy(element, {
+    get(target, prop, receiver) {
+      if (Reflect.has(target, prop)) {
+        return Reflect.get(target, prop, receiver);
+      }
+      if (prop === "firstChild" || prop === "lastChild" || prop === "firstElementChild") {
+        return null;
+      }
+      return undefined;
+    },
+    set(target, prop, value, receiver) {
+      return Reflect.set(target, prop, value, receiver);
+    },
+  });
+}
+
+function unwrapVerificationResult(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  if (isRecord(value.operationResult)) {
+    return value.operationResult;
+  }
+  return value;
+}
+
+function normalizeVerificationHttpResponse(result: unknown): {
+  body: string;
+  json: unknown;
+  statusCode: number | null;
+  url: string;
+} {
+  const resolved = unwrapVerificationResult(result);
+  const details = resolved && isRecord(resolved.details) ? resolved.details : null;
+  const body = details && typeof details.responseBody === "string" ? details.responseBody : "";
+  const json = details && Object.prototype.hasOwnProperty.call(details, "responseJson")
+    ? details.responseJson
+    : (() => {
+      const trimmed = body.trim();
+      if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) {
+        return null;
+      }
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        return null;
+      }
+    })();
+  return {
+    body,
+    json,
+    statusCode: details && typeof details.statusCode === "number" ? details.statusCode : null,
+    url: details && typeof details.url === "string" ? details.url : "",
+  };
+}
+
+function normalizeVerificationMqttMessages(result: unknown): Array<Record<string, unknown>> {
+  const resolved = unwrapVerificationResult(result);
+  const details = resolved && isRecord(resolved.details) ? resolved.details : null;
+  const messages = details && Array.isArray(details.messages) ? details.messages : [];
+  return messages
+    .filter((message): message is Record<string, unknown> => isRecord(message))
+    .map((message) => {
+      const payload = typeof message.payload === "string" ? message.payload : "";
+      let json: unknown = null;
+      if (payload.length > 0) {
+        try {
+          json = JSON.parse(payload);
+        } catch {
+          json = null;
+        }
+      }
+      return {
+        topic: typeof message.topic === "string" ? message.topic : "",
+        payload,
+        payloadBytes: typeof message.payloadBytes === "number" ? message.payloadBytes : payload.length,
+        payloadTruncated: Boolean(message.payloadTruncated),
+        qos: typeof message.qos === "number" ? message.qos : 0,
+        retain: Boolean(message.retain),
+        dup: Boolean(message.dup),
+        json,
+      };
+    });
+}
+
+async function validateGeneratedWidgetStartupJs(args: {
+  context: DeviceWidgetGenerationContext;
+  widget: GeneratedWidget;
+  draftWidget: DeviceWidget;
+}): Promise<string[]> {
+  if (args.widget.js.trim().length === 0) {
+    return [];
+  }
+
+  const issues = new Set<string>();
+  const documentElement = createVerificationElement("html");
+  const bodyElement = createVerificationElement("body");
+  const surfaceElement = createVerificationElement("div");
+  const documentListeners = new Map<string, Set<(...args: unknown[]) => unknown>>();
+  const windowListeners = new Map<string, Set<(...args: unknown[]) => unknown>>();
+  const timeouts = new Map<number, () => unknown>();
+  const intervals = new Map<number, () => unknown>();
+  const animationFrames = new Map<number, (timestamp: number) => unknown>();
+  let timerId = 1;
+  let operationCount = 0;
+
+  const addListener = (
+    bucket: Map<string, Set<(...args: unknown[]) => unknown>>,
+    event: string,
+    listener: (...args: unknown[]) => unknown,
+  ) => {
+    const existing = bucket.get(event) ?? new Set<(...args: unknown[]) => unknown>();
+    existing.add(listener);
+    bucket.set(event, existing);
+  };
+
+  const invokeListeners = async (
+    bucket: Map<string, Set<(...args: unknown[]) => unknown>>,
+    event: string,
+    payload?: unknown,
+  ) => {
+    for (const listener of Array.from(bucket.get(event) ?? [])) {
+      try {
+        await Promise.resolve(listener(payload));
+      } catch (error) {
+        issues.add(`Widget JavaScript listener for ${event} failed during verification: ${describeVerificationError(error)}`);
+      }
+    }
+  };
+
+  const flushMicrotasks = async () => {
+    for (let index = 0; index < 6; index += 1) {
+      await Promise.resolve();
+    }
+  };
+
+  const previewStartupOperation = async (source: string, operation: unknown) => {
+    operationCount += 1;
+    if (operationCount > WIDGET_STARTUP_VERIFICATION_MAX_OPERATIONS) {
+      throw new Error(`Widget startup triggered more than ${WIDGET_STARTUP_VERIFICATION_MAX_OPERATIONS} Steward operations during verification.`);
+    }
+    const parsed = WidgetOperationSchema.safeParse(operation);
+    if (!parsed.success) {
+      throw new Error(`Invalid startup operation: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
+    }
+    const result = await previewWidgetOperation({
+      device: args.context.device,
+      widget: args.draftWidget,
+      input: parsed.data,
+    });
+    if (!result.ok) {
+      const detail = result.summary.trim().length > 0 ? result.summary.trim() : result.output.trim();
+      issues.add(`Live verification failed for ${source}: ${detail || "unknown error"}`);
+    }
+    return result;
+  };
+
+  const toMqttOperation = (request: unknown) => {
+    const source = isRecord(request) ? request : {};
+    const {
+      mode,
+      timeoutMs,
+      args: operationArgs,
+      expectedSemanticTarget,
+      ...brokerRequest
+    } = source;
+    const publishMessages = Array.isArray(brokerRequest.publishMessages) ? brokerRequest.publishMessages : [];
+    return {
+      mode: mode === "mutate" || mode === "read" ? mode : (publishMessages.length > 0 ? "mutate" : "read"),
+      kind: "mqtt.message",
+      adapterId: "mqtt",
+      timeoutMs: typeof timeoutMs === "number" ? timeoutMs : 10_000,
+      brokerRequest: {
+        protocol: "mqtt",
+        ...brokerRequest,
+      },
+      ...(isRecord(operationArgs) ? { args: operationArgs } : {}),
+      ...(typeof expectedSemanticTarget === "string" && expectedSemanticTarget.trim().length > 0
+        ? { expectedSemanticTarget }
+        : {}),
+    };
+  };
+
+  const noop = () => undefined;
+  const documentObject = {
+    readyState: "complete",
+    body: bodyElement,
+    documentElement,
+    createElement: (tagName: string) => createVerificationElement(tagName),
+    createTextNode: (text: unknown) => ({ textContent: String(text ?? "") }),
+    getElementById: (id: string) => (id === "steward-widget-surface" ? surfaceElement : createVerificationElement("div")),
+    querySelector: () => createVerificationElement("div"),
+    querySelectorAll: () => [],
+    addEventListener: (event: string, listener: (...args: unknown[]) => unknown) => addListener(documentListeners, event, listener),
+    removeEventListener: (event: string, listener: (...args: unknown[]) => unknown) => documentListeners.get(event)?.delete(listener),
+  };
+
+  const sandbox: Record<string, unknown> = {
+    console: {
+      log: noop,
+      warn: noop,
+      error: noop,
+      info: noop,
+      debug: noop,
+    },
+    document: documentObject,
+    navigator: { userAgent: "StewardWidgetVerifier/1.0" },
+    location: { href: "https://steward.local/widget-verifier", origin: "https://steward.local" },
+    performance: { now: () => Date.now() },
+    URL,
+    URLSearchParams,
+    AbortController,
+    setTimeout: (callback: unknown) => {
+      const id = timerId += 1;
+      if (typeof callback === "function") {
+        timeouts.set(id, callback as () => unknown);
+      }
+      return id;
+    },
+    clearTimeout: (id: number) => {
+      timeouts.delete(id);
+    },
+    setInterval: (callback: unknown) => {
+      const id = timerId += 1;
+      if (typeof callback === "function") {
+        intervals.set(id, callback as () => unknown);
+      }
+      return id;
+    },
+    clearInterval: (id: number) => {
+      intervals.delete(id);
+    },
+    requestAnimationFrame: (callback: unknown) => {
+      const id = timerId += 1;
+      if (typeof callback === "function") {
+        animationFrames.set(id, callback as (timestamp: number) => unknown);
+      }
+      return id;
+    },
+    cancelAnimationFrame: (id: number) => {
+      animationFrames.delete(id);
+    },
+    fetch: () => Promise.reject(new Error("Widgets must use StewardWidget.runOperation instead of direct fetch calls.")),
+    ResizeObserver: class {
+      observe = noop;
+      disconnect = noop;
+    },
+    MutationObserver: class {
+      observe = noop;
+      disconnect = noop;
+    },
+  };
+
+  const windowObject = {
+    ...sandbox,
+    addEventListener: (event: string, listener: (...args: unknown[]) => unknown) => addListener(windowListeners, event, listener),
+    removeEventListener: (event: string, listener: (...args: unknown[]) => unknown) => windowListeners.get(event)?.delete(listener),
+    StewardWidget: {
+      context: args.context,
+      controls: args.draftWidget.controls,
+      getContext: async () => args.context,
+      refreshContext: async () => args.context,
+      onContext: () => noop,
+      getControls: async () => args.draftWidget.controls,
+      getOperations: async () => [],
+      getState: async () => ({}),
+      setState: async (nextState: unknown) => nextState,
+      runOperation: async (operation: unknown) => {
+        const result = await previewStartupOperation("widget JavaScript startup operation", operation);
+        if (!result.ok) {
+          const error = new Error(result.summary || result.output || "Widget operation failed.");
+          Object.defineProperty(error, "result", { value: result, enumerable: false, configurable: true });
+          throw error;
+        }
+        return result;
+      },
+      runOperationDetailed: async (operation: unknown) => previewStartupOperation("widget JavaScript startup operation", operation),
+      buildMqttOperation: (request: unknown) => toMqttOperation(request),
+      runMqtt: async (request: unknown) => previewStartupOperation("widget JavaScript startup MQTT operation", toMqttOperation(request)),
+      invokeControl: async (controlId: string) => {
+        const control = args.draftWidget.controls.find((candidate) => candidate.id === controlId);
+        if (!control) {
+          throw new Error(`Unknown widget control: ${controlId}`);
+        }
+        if (control.execution.kind !== "operation") {
+          return { ok: true, status: "succeeded", summary: "Control verified", output: "", details: {} };
+        }
+        const result = await previewStartupOperation(`widget JavaScript startup control ${controlId}`, control.execution.operation);
+        if (!result.ok) {
+          const error = new Error(result.summary || result.output || "Widget control failed.");
+          Object.defineProperty(error, "result", { value: result, enumerable: false, configurable: true });
+          throw error;
+        }
+        return result;
+      },
+      invokeControlDetailed: async (controlId: string) => {
+        const control = args.draftWidget.controls.find((candidate) => candidate.id === controlId);
+        if (!control) {
+          throw new Error(`Unknown widget control: ${controlId}`);
+        }
+        if (control.execution.kind !== "operation") {
+          return { ok: true, status: "succeeded", summary: "Control verified", output: "", details: {} };
+        }
+        return previewStartupOperation(`widget JavaScript startup control ${controlId}`, control.execution.operation);
+      },
+      getControlOperationResult: (result: unknown) => unwrapVerificationResult(result),
+      getControlOutput: (result: unknown) => {
+        const resolved = unwrapVerificationResult(result);
+        return resolved && typeof resolved.output === "string" ? resolved.output : "";
+      },
+      getMqttMessages: (result: unknown) => normalizeVerificationMqttMessages(result),
+      getHttpResponse: (result: unknown) => normalizeVerificationHttpResponse(result),
+      getHttpJson: (result: unknown) => normalizeVerificationHttpResponse(result).json,
+      setLayout: () => ({ mode: "content" }),
+      setStatus: noop,
+      ready: noop,
+    },
+  };
+
+  sandbox.window = windowObject;
+  sandbox.self = windowObject;
+  sandbox.globalThis = windowObject;
+  sandbox.HTMLElement = class {};
+  sandbox.Event = class {
+    type: string;
+    constructor(type: string) {
+      this.type = type;
+    }
+  };
+  sandbox.CustomEvent = class {
+    type: string;
+    detail: unknown;
+    constructor(type: string, init?: { detail?: unknown }) {
+      this.type = type;
+      this.detail = init?.detail;
+    }
+  };
+  Object.assign(windowObject, {
+    HTMLElement: sandbox.HTMLElement,
+    Event: sandbox.Event,
+    CustomEvent: sandbox.CustomEvent,
+  });
+
+  try {
+    const context = vm.createContext(sandbox, {
+      codeGeneration: { strings: false, wasm: false },
+    });
+    const script = new vm.Script(args.widget.js, { filename: "widget-verification.js" });
+    script.runInContext(context, { timeout: 1_000 });
+    await flushMicrotasks();
+    await invokeListeners(documentListeners, "DOMContentLoaded", { type: "DOMContentLoaded" });
+    await invokeListeners(windowListeners, "load", { type: "load" });
+    await flushMicrotasks();
+
+    for (let pass = 0; pass < 3; pass += 1) {
+      const nextTimeouts = Array.from(timeouts.values());
+      timeouts.clear();
+      for (const callback of nextTimeouts) {
+        try {
+          await Promise.resolve(callback());
+        } catch (error) {
+          issues.add(`Widget JavaScript timeout callback failed during verification: ${describeVerificationError(error)}`);
+        }
+      }
+
+      const nextIntervals = Array.from(intervals.values());
+      intervals.clear();
+      for (const callback of nextIntervals) {
+        try {
+          await Promise.resolve(callback());
+        } catch (error) {
+          issues.add(`Widget JavaScript interval callback failed during verification: ${describeVerificationError(error)}`);
+        }
+      }
+
+      const nextFrames = Array.from(animationFrames.values());
+      animationFrames.clear();
+      for (const callback of nextFrames) {
+        try {
+          await Promise.resolve(callback(Date.now()));
+        } catch (error) {
+          issues.add(`Widget JavaScript animation callback failed during verification: ${describeVerificationError(error)}`);
+        }
+      }
+
+      await flushMicrotasks();
+      if (nextTimeouts.length === 0 && nextIntervals.length === 0 && nextFrames.length === 0) {
+        break;
+      }
+    }
+  } catch (error) {
+    issues.add(`Widget JavaScript failed during startup verification: ${describeVerificationError(error)}`);
+  }
+
+  return Array.from(issues);
+}
+
 async function validateGeneratedWidgetOperationally(args: {
   context: DeviceWidgetGenerationContext;
   widget: GeneratedWidget;
   targetWidget?: DeviceWidget | null;
 }): Promise<string[]> {
-  const verifiableControls = args.widget.controls.filter(canAutoVerifyControl).slice(0, 2);
-  if (verifiableControls.length === 0) {
-    return [];
-  }
-
   const issues: string[] = [];
   const draftWidget = buildDraftWidgetForVerification(args);
+  const startupIssues = await validateGeneratedWidgetStartupJs({
+    context: args.context,
+    widget: args.widget,
+    draftWidget,
+  });
+  issues.push(...startupIssues);
+
+  const verifiableControls = args.widget.controls.filter(canAutoVerifyControl).slice(0, 6);
   for (const control of verifiableControls) {
     if (control.execution.kind !== "operation") {
       continue;

@@ -171,6 +171,14 @@ export interface SshBrokerRequest {
   port?: number;
 }
 
+export interface TelnetBrokerRequest {
+  protocol: "telnet";
+  command: string;
+  host?: string;
+  port?: number;
+  expectRegex?: string;
+}
+
 export interface HttpBrokerRequest {
   protocol: "http";
   method: HttpRequestMethod;
@@ -297,6 +305,7 @@ export interface LocalToolBrokerRequest {
 
 export type ProtocolBrokerRequest =
   | SshBrokerRequest
+  | TelnetBrokerRequest
   | HttpBrokerRequest
   | WebSocketBrokerRequest
   | MqttBrokerRequest
@@ -765,6 +774,7 @@ export interface DeviceCredential {
 
 export type AccessMethodKind =
   | "ssh"
+  | "telnet"
   | "winrm"
   | "powershell-ssh"
   | "wmi"
@@ -1582,6 +1592,15 @@ export type ChatToolEventStatus = "running" | "completed" | "failed";
 
 export type ChatToolEventKind = "tool" | "probe" | "terminal" | "desktop";
 
+export type ChatToolWidgetMutationAction = "created" | "updated" | "deleted";
+
+export interface ChatToolWidgetMutation {
+  action: ChatToolWidgetMutationAction;
+  deviceId: string;
+  widgetId: string;
+  widgetSlug?: string;
+}
+
 export interface ChatToolEvent {
   id: string;
   toolName: string;
@@ -1595,6 +1614,7 @@ export interface ChatToolEvent {
   summary?: string;
   outputPreview?: string;
   error?: string;
+  widgetMutation?: ChatToolWidgetMutation;
 }
 
 export interface ChatMessageMetadata {

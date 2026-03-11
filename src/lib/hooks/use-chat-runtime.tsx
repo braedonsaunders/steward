@@ -161,6 +161,7 @@ export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
   const sessionsRef = useRef<ChatSessionRecord[]>([]);
   const freshSessionIdsRef = useRef<Set<string>>(new Set());
   const refreshSessionsRequestIdRef = useRef(0);
+  const pendingSessionLoadsRef = useRef<Map<string, Promise<ChatMessageRecord[]>>>(new Map());
   const activeStreamAbortRef = useRef<AbortController | null>(null);
   const activeStreamSessionIdRef = useRef<string | null>(null);
   const manuallyStoppedSessionIdsRef = useRef<Set<string>>(new Set());
@@ -220,34 +221,62 @@ export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
 
   const loadSessionMessages = useCallback(
     async (sessionId: string, options?: { silent?: boolean }): Promise<ChatMessageRecord[]> => {
+      const existingRequest = pendingSessionLoadsRef.current.get(sessionId);
+      if (existingRequest) {
+        if (!options?.silent) {
+          setLoadingSessionIds((prev) => ({ ...prev, [sessionId]: true }));
+        }
+
+        try {
+          return await existingRequest;
+        } finally {
+          if (!options?.silent) {
+            setLoadingSessionIds((prev) => {
+              const next = { ...prev };
+              delete next[sessionId];
+              return next;
+            });
+          }
+        }
+      }
+
       if (!options?.silent) {
         setLoadingSessionIds((prev) => ({ ...prev, [sessionId]: true }));
       }
 
-      try {
-        const res = await fetch(`/api/chat/sessions/${sessionId}`, withClientApiToken({ cache: "no-store" }));
-        const data = (await res.json()) as ChatSessionRecord & { messages: ChatMessageRecord[] };
-        const nextMessages = data.messages ?? [];
-        const { messages: _messages, ...session } = data;
-        void _messages;
+      const request = (async (): Promise<ChatMessageRecord[]> => {
+        try {
+          const res = await fetch(`/api/chat/sessions/${sessionId}`, withClientApiToken({ cache: "no-store" }));
+          const data = (await res.json()) as ChatSessionRecord & { messages: ChatMessageRecord[] };
+          const nextMessages = data.messages ?? [];
+          const { messages: _messages, ...session } = data;
+          void _messages;
 
-        upsertSessionRecord(session);
-        setMessagesBySession((prev) => ({
-          ...prev,
-          [sessionId]: nextMessages,
-        }));
-        setLoadedSessionIds((prev) => ({ ...prev, [sessionId]: true }));
-        return nextMessages;
-      } catch {
-        if (!options?.silent) {
+          upsertSessionRecord(session);
           setMessagesBySession((prev) => ({
             ...prev,
-            [sessionId]: [],
+            [sessionId]: nextMessages,
           }));
           setLoadedSessionIds((prev) => ({ ...prev, [sessionId]: true }));
+          return nextMessages;
+        } catch {
+          if (!options?.silent) {
+            setMessagesBySession((prev) => ({
+              ...prev,
+              [sessionId]: [],
+            }));
+            setLoadedSessionIds((prev) => ({ ...prev, [sessionId]: true }));
+          }
+          return [];
         }
-        return [];
+      })();
+
+      pendingSessionLoadsRef.current.set(sessionId, request);
+
+      try {
+        return await request;
       } finally {
+        pendingSessionLoadsRef.current.delete(sessionId);
         if (!options?.silent) {
           setLoadingSessionIds((prev) => {
             const next = { ...prev };

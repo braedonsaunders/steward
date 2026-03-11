@@ -48,6 +48,7 @@ export interface DeviceAdoptionProfile {
 
 const SUPPORTED_CREDENTIAL_PROTOCOLS = new Set([
   "ssh",
+  "telnet",
   "winrm",
   "snmp",
   "http-api",

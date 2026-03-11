@@ -509,28 +509,30 @@ module.exports = {
 };
 `;
 
-const WINDOWS_SERVER_ADAPTER_SOURCE = `
+const WINDOWS_SERVER_ADAPTER_SOURCE = String.raw`
+function hasPort(services, port, pattern) {
+  return (services || []).some((svc) =>
+    Number(svc.port) === port || (pattern ? pattern.test(String(svc.name || "")) : false));
+}
+
 function hasWinrmPort(services) {
-  return services.some((svc) =>
-    Number(svc.port) === 5985
-      || Number(svc.port) === 5986
-      || /winrm/i.test(String(svc.name || "")));
+  return hasPort(services, 5985, /winrm/i) || hasPort(services, 5986, /winrm/i);
 }
 
 function hasSshPort(services) {
-  return services.some((svc) => Number(svc.port) === 22 || /ssh/i.test(String(svc.name || "")));
+  return hasPort(services, 22, /ssh/i);
 }
 
 function hasWmiPort(services) {
-  return services.some((svc) => Number(svc.port) === 135 || /msrpc|wmi/i.test(String(svc.name || "")));
+  return hasPort(services, 135, /msrpc|wmi/i);
 }
 
 function hasSmbPort(services) {
-  return services.some((svc) => Number(svc.port) === 445 || /smb|cifs|microsoft-ds/i.test(String(svc.name || "")));
+  return hasPort(services, 445, /smb|cifs|microsoft-ds/i);
 }
 
 function hasRdpPort(services) {
-  return services.some((svc) => Number(svc.port) === 3389 || /rdp/i.test(String(svc.name || "")));
+  return hasPort(services, 3389, /rdp/i);
 }
 
 function primaryWindowsProtocol(services) {
@@ -542,126 +544,25 @@ function primaryWindowsProtocol(services) {
   return null;
 }
 
-function workstationSnapshotOperation(protocol) {
-  if (protocol === "powershell-ssh") {
-    return {
-      adapterId: "powershell-ssh",
-      kind: "shell.command",
-      mode: "read",
-      timeoutMs: 25000,
-      brokerRequest: {
-        protocol: "powershell-ssh",
-        command: "Get-CimInstance Win32_OperatingSystem | Select-Object CSName,Caption,Version,LastBootUpTime; Get-CimInstance Win32_ComputerSystem | Select-Object Manufacturer,Model,UserName,TotalPhysicalMemory",
-      },
-      expectedSemanticTarget: "windows:workstation-snapshot",
-      safety: {
-        dryRunSupported: false,
-        requiresConfirmedRevert: false,
-        criticality: "low",
-      },
-    };
-  }
-  if (protocol === "wmi") {
-    return {
-      adapterId: "wmi",
-      kind: "shell.command",
-      mode: "read",
-      timeoutMs: 25000,
-      brokerRequest: {
-        protocol: "wmi",
-        command: "Get-CimInstance -CimSession $session -ClassName Win32_OperatingSystem | Select-Object CSName,Caption,Version,LastBootUpTime; Get-CimInstance -CimSession $session -ClassName Win32_ComputerSystem | Select-Object Manufacturer,Model,UserName,TotalPhysicalMemory",
-      },
-      expectedSemanticTarget: "windows:workstation-snapshot",
-      safety: {
-        dryRunSupported: false,
-        requiresConfirmedRevert: false,
-        criticality: "low",
-      },
-    };
-  }
-  if (protocol === "smb") {
-    return {
-      adapterId: "smb",
-      kind: "shell.command",
-      mode: "read",
-      timeoutMs: 25000,
-      brokerRequest: {
-        protocol: "smb",
-        share: "C$",
-        command: "Get-ChildItem $sharePath\\Users | Select-Object -First 20 Name,LastWriteTime",
-      },
-      expectedSemanticTarget: "windows:smb-user-profile-audit",
-      safety: {
-        dryRunSupported: false,
-        requiresConfirmedRevert: false,
-        criticality: "low",
-      },
-    };
-  }
-  return {
-    adapterId: "winrm",
-    kind: "shell.command",
-    mode: "read",
-    timeoutMs: 25000,
-    commandTemplate: "Get-CimInstance Win32_OperatingSystem | Select-Object CSName,Caption,Version,LastBootUpTime; Get-CimInstance Win32_ComputerSystem | Select-Object Manufacturer,Model,UserName,TotalPhysicalMemory",
-    expectedSemanticTarget: "windows:workstation-snapshot",
-    safety: {
-      dryRunSupported: false,
-      requiresConfirmedRevert: false,
-      criticality: "low",
-    },
-  };
+function deviceText(device) {
+  return [
+    device.name,
+    device.hostname,
+    device.os,
+    device.role,
+    device.vendor,
+  ].filter(Boolean).join(" ").toLowerCase();
 }
 
-function workstationServiceRestartOperation(protocol, serviceName) {
-  if (protocol === "powershell-ssh") {
-    return {
-      adapterId: "powershell-ssh",
-      kind: "service.restart",
-      mode: "mutate",
-      timeoutMs: 25000,
-      brokerRequest: {
-        protocol: "powershell-ssh",
-        command: "Restart-Service -Name '" + serviceName + "' -ErrorAction Stop; (Get-Service -Name '" + serviceName + "').Status",
-        expectRegex: "Running",
-      },
-      expectedSemanticTarget: "service:" + serviceName,
-      safety: { dryRunSupported: false, requiresConfirmedRevert: false, criticality: "medium" },
-    };
-  }
-  if (protocol === "wmi") {
-    return {
-      adapterId: "wmi",
-      kind: "service.restart",
-      mode: "mutate",
-      timeoutMs: 25000,
-      brokerRequest: {
-        protocol: "wmi",
-        command: "$svc = Get-CimInstance -CimSession $session -ClassName Win32_Service -Filter \"Name='" + serviceName + "'\"; Invoke-CimMethod -InputObject $svc -MethodName StopService | Out-Null; Start-Sleep -Seconds 2; Invoke-CimMethod -InputObject $svc -MethodName StartService | Out-Null; (Get-CimInstance -CimSession $session -ClassName Win32_Service -Filter \"Name='" + serviceName + "'\").State",
-        expectRegex: "Running",
-      },
-      expectedSemanticTarget: "service:" + serviceName,
-      safety: { dryRunSupported: false, requiresConfirmedRevert: false, criticality: "medium" },
-    };
-  }
-  return null;
-}
-
-function workstationSmbFileStageOperation(relativePath, content) {
-  return {
-    adapterId: "smb",
-    kind: "file.copy",
-    mode: "mutate",
-    timeoutMs: 25000,
-    brokerRequest: {
-      protocol: "smb",
-      share: "C$",
-      command: "$targetPath = Join-Path $sharePath '" + relativePath.replace(/\\/g, "\\\\") + "'; $targetDir = Split-Path -Parent $targetPath; New-Item -ItemType Directory -Path $targetDir -Force | Out-Null; Set-Content -Path $targetPath -Value @'\n" + content + "\n'@ -Force; Get-Content $targetPath",
-      expectRegex: "Steward",
-    },
-    expectedSemanticTarget: "file:" + relativePath.replace(/\\/g, "/"),
-    safety: { dryRunSupported: false, requiresConfirmedRevert: false, criticality: "medium" },
-  };
+function isWindowsServer(device, services) {
+  const type = String(device.type || device.typeHint || "").toLowerCase();
+  const text = deviceText(device);
+  const windowsLike = text.includes("windows") || text.includes("microsoft")
+    || hasWinrmPort(services) || hasWmiPort(services) || hasSmbPort(services)
+    || hasRdpPort(services) || hasSshPort(services);
+  const serverLike = type === "server"
+    || /windows server|domain controller|active directory|hyper-v|exchange|sql server/.test(text);
+  return windowsLike && serverLike;
 }
 
 function serverServiceInventoryOperation(protocol) {
@@ -713,21 +614,24 @@ function serverServiceInventoryOperation(protocol) {
     kind: "shell.command",
     mode: "read",
     timeoutMs: 25000,
-    commandTemplate: "Invoke-Command -ComputerName {{host}} -ScriptBlock { Get-Service | Select-Object -First 25 Name,Status,StartType }",
+    brokerRequest: {
+      protocol: "winrm",
+      command: "Get-Service | Select-Object -First 25 Name,Status,StartType",
+    },
     expectedSemanticTarget: "windows:services",
     safety: { dryRunSupported: false, requiresConfirmedRevert: false, criticality: "low" },
   };
 }
 
 function serverServiceRestartOperation(protocol, serviceName) {
-  if (protocol === "powershell-ssh") {
+  if (protocol === "powershell-ssh" || protocol === "winrm") {
     return {
-      adapterId: "powershell-ssh",
+      adapterId: protocol,
       kind: "service.restart",
       mode: "mutate",
       timeoutMs: 25000,
       brokerRequest: {
-        protocol: "powershell-ssh",
+        protocol,
         command: "Restart-Service -Name '" + serviceName + "' -ErrorAction Stop; (Get-Service -Name '" + serviceName + "').Status",
         expectRegex: "Running",
       },
@@ -743,7 +647,7 @@ function serverServiceRestartOperation(protocol, serviceName) {
       timeoutMs: 25000,
       brokerRequest: {
         protocol: "wmi",
-        command: "$svc = Get-CimInstance -CimSession $session -ClassName Win32_Service -Filter \"Name='" + serviceName + "'\"; Invoke-CimMethod -InputObject $svc -MethodName StopService | Out-Null; Start-Sleep -Seconds 2; Invoke-CimMethod -InputObject $svc -MethodName StartService | Out-Null; (Get-CimInstance -CimSession $session -ClassName Win32_Service -Filter \"Name='" + serviceName + "'\").State",
+        command: "$svc = Get-CimInstance -CimSession $session -ClassName Win32_Service -Filter \\\"Name='" + serviceName + "'\\\"; Invoke-CimMethod -InputObject $svc -MethodName StopService | Out-Null; Start-Sleep -Seconds 2; Invoke-CimMethod -InputObject $svc -MethodName StartService | Out-Null; (Get-CimInstance -CimSession $session -ClassName Win32_Service -Filter \\\"Name='" + serviceName + "'\\\").State",
         expectRegex: "Running",
       },
       expectedSemanticTarget: "service:" + serviceName,
@@ -762,7 +666,7 @@ function serverSmbFileStageOperation(relativePath, content) {
     brokerRequest: {
       protocol: "smb",
       share: "C$",
-      command: "$targetPath = Join-Path $sharePath '" + relativePath.replace(/\\/g, "\\\\") + "'; $targetDir = Split-Path -Parent $targetPath; New-Item -ItemType Directory -Path $targetDir -Force | Out-Null; Set-Content -Path $targetPath -Value @'\n" + content + "\n'@ -Force; Get-Content $targetPath",
+      command: "$targetPath = Join-Path $sharePath '" + relativePath.replace(/\\/g, "\\\\") + "'; $targetDir = Split-Path -Parent $targetPath; New-Item -ItemType Directory -Path $targetDir -Force | Out-Null; Set-Content -Path $targetPath -Value '" + content.replace(/'/g, "''") + "' -Force; Get-Content $targetPath",
       expectRegex: "Steward",
     },
     expectedSemanticTarget: "file:" + relativePath.replace(/\\/g, "/"),
@@ -773,11 +677,8 @@ function serverSmbFileStageOperation(relativePath, content) {
 module.exports = {
   enrich(candidate, context) {
     const config = context.getConfig();
-    if (config.enabled === false) {
-      return candidate;
-    }
-
-    if (!primaryWindowsProtocol(candidate.services || [])) {
+    const services = candidate.services || [];
+    if (config.enabled === false || !isWindowsServer(candidate, services)) {
       return candidate;
     }
 
@@ -789,35 +690,25 @@ module.exports = {
         windowsServer: {
           managedBy: "steward.windows-server",
           patchRing: config.patchRing || "stable",
+          preferredProtocol: primaryWindowsProtocol(services),
         },
       },
     };
   },
 
-  match(device, context) {
+  match(device) {
     const services = device.services || [];
     const preferredProtocol = primaryWindowsProtocol(services);
-    if (!preferredProtocol) {
+    if (!preferredProtocol || !isWindowsServer(device, services)) {
       return [];
     }
 
     const type = String(device.type || "").toLowerCase();
-    const text = [
-      device.name,
-      device.hostname,
-      device.os,
-      device.role,
-      device.vendor,
-    ].filter(Boolean).join(" ").toLowerCase();
-    const serverLike = type === "server" || /windows server|domain controller|active directory|hyper-v/.test(text);
-    if (!serverLike) {
-      return [];
-    }
-
+    const text = deviceText(device);
     let confidence = 0.52;
     if (type === "server") confidence += 0.22;
     if (/windows server|active directory|domain controller/.test(text)) confidence += 0.18;
-    if (device.protocols.includes("winrm")) confidence += 0.08;
+    if ((device.protocols || []).includes("winrm")) confidence += 0.08;
     if (preferredProtocol !== "winrm") confidence += 0.04;
 
     return [{
@@ -825,13 +716,13 @@ module.exports = {
       name: "Windows Server",
       kind: "primary",
       confidence: Math.min(0.96, confidence),
-       summary: "Windows server with explicit remote-management transports for service, patch, and event-log workflows.",
+      summary: "Windows server with explicit remote-management transports for service, patch, and event-log workflows.",
       evidence: {
         type: device.type,
         protocols: device.protocols,
       },
-       requiredAccessMethods: [preferredProtocol],
-       requiredCredentialProtocols: [preferredProtocol],
+      requiredAccessMethods: [preferredProtocol],
+      requiredCredentialProtocols: [preferredProtocol],
       defaultWorkloads: [
         {
           workloadKey: "server-availability",
@@ -850,41 +741,37 @@ module.exports = {
       ],
       defaultAssurances: [
         {
-           assuranceKey: preferredProtocol + "-reachability",
-           workloadKey: "server-availability",
-           displayName: preferredProtocol.toUpperCase() + " reachability",
-           criticality: "high",
-           checkIntervalSec: 60,
-           monitorType: preferredProtocol === "rdp" ? "rdp_exposure" : "winrm_reachability",
-           requiredProtocols: [preferredProtocol],
-           rationale: "Steward needs a verified Windows management transport before it can manage this server safely.",
-         },
-       ],
-     }];
+          assuranceKey: preferredProtocol + "-reachability",
+          workloadKey: "server-availability",
+          displayName: preferredProtocol.toUpperCase() + " reachability",
+          criticality: "high",
+          checkIntervalSec: 60,
+          monitorType: preferredProtocol === "rdp" ? "rdp_exposure" : "winrm_reachability",
+          requiredProtocols: [preferredProtocol],
+          rationale: "Steward needs a verified Windows management transport before it can manage this server safely.",
+        },
+      ],
+    }];
   },
 
   capabilities(device, context) {
     const config = context.getConfig();
-    if (config.enabled === false) {
-      return [];
-    }
-    const preferredProtocol = primaryWindowsProtocol(device.services || []);
-    if (!preferredProtocol) {
+    const services = device.services || [];
+    const preferredProtocol = primaryWindowsProtocol(services);
+    if (config.enabled === false || !preferredProtocol || !isWindowsServer(device, services)) {
       return [];
     }
 
-    return [
-      {
-        id: "capability.windows-server",
-        title: "Windows Server Operations",
-        protocol: preferredProtocol,
-        actions: [
-          "Collect service inventory",
-          "Review update posture",
-          "Inspect critical event logs",
-        ],
-      },
-    ];
+    return [{
+      id: "capability.windows-server",
+      title: "Windows Server Operations",
+      protocol: preferredProtocol,
+      actions: [
+        "Collect service inventory",
+        "Review update posture",
+        "Inspect critical event logs",
+      ],
+    }];
   },
 
   playbooks(context) {
@@ -1035,7 +922,7 @@ module.exports = {
 };
 `;
 
-const WINDOWS_WORKSTATION_ADAPTER_SOURCE = `
+const WINDOWS_WORKSTATION_ADAPTER_SOURCE = String.raw`
 function hasRdpPort(services) {
   return services.some((svc) =>
     Number(svc.port) === 3389 || /rdp/i.test(String(svc.name || "")));
@@ -1048,6 +935,18 @@ function hasWinrmPort(services) {
       || /winrm/i.test(String(svc.name || "")));
 }
 
+function hasSshPort(services) {
+  return services.some((svc) => Number(svc.port) === 22 || /ssh/i.test(String(svc.name || "")));
+}
+
+function hasWmiPort(services) {
+  return services.some((svc) => Number(svc.port) === 135 || /msrpc|wmi/i.test(String(svc.name || "")));
+}
+
+function hasSmbPort(services) {
+  return services.some((svc) => Number(svc.port) === 445 || /smb|cifs|microsoft-ds/i.test(String(svc.name || "")));
+}
+
 function hasServerPorts(services) {
   return services.some((svc) =>
     [53, 88, 389, 5985, 5986, 1433, 1521, 3306, 5432, 6379, 27017].includes(Number(svc.port)));
@@ -1058,6 +957,15 @@ function looksWindows(candidate) {
   const vendor = String(candidate.vendor || "").toLowerCase();
   const hostname = String(candidate.hostname || "").toLowerCase();
   return os.includes("windows") || vendor.includes("microsoft") || hostname.includes("win");
+}
+
+function primaryWindowsProtocol(services) {
+  if (hasWinrmPort(services)) return "winrm";
+  if (hasSshPort(services)) return "powershell-ssh";
+  if (hasWmiPort(services)) return "wmi";
+  if (hasSmbPort(services)) return "smb";
+  if (hasRdpPort(services)) return "rdp";
+  return null;
 }
 
 function looksWorkstation(candidate) {
@@ -1085,6 +993,115 @@ function isWorkstationTarget(candidate, services) {
   return typeHint === "workstation"
     || looksWorkstation(candidate)
     || (hasRdpPort(services) && !hasServerPorts(services));
+}
+
+function workstationSnapshotOperation(protocol) {
+  if (protocol === "powershell-ssh") {
+    return {
+      adapterId: "powershell-ssh",
+      kind: "shell.command",
+      mode: "read",
+      timeoutMs: 25000,
+      brokerRequest: {
+        protocol: "powershell-ssh",
+        command: "Get-CimInstance Win32_OperatingSystem | Select-Object CSName,Caption,Version,LastBootUpTime; Get-CimInstance Win32_ComputerSystem | Select-Object Manufacturer,Model,UserName,TotalPhysicalMemory",
+      },
+      expectedSemanticTarget: "windows:workstation-snapshot",
+      safety: { dryRunSupported: false, requiresConfirmedRevert: false, criticality: "low" },
+    };
+  }
+  if (protocol === "wmi") {
+    return {
+      adapterId: "wmi",
+      kind: "shell.command",
+      mode: "read",
+      timeoutMs: 25000,
+      brokerRequest: {
+        protocol: "wmi",
+        command: "Get-CimInstance -CimSession $session -ClassName Win32_OperatingSystem | Select-Object CSName,Caption,Version,LastBootUpTime; Get-CimInstance -CimSession $session -ClassName Win32_ComputerSystem | Select-Object Manufacturer,Model,UserName,TotalPhysicalMemory",
+      },
+      expectedSemanticTarget: "windows:workstation-snapshot",
+      safety: { dryRunSupported: false, requiresConfirmedRevert: false, criticality: "low" },
+    };
+  }
+  if (protocol === "smb") {
+    return {
+      adapterId: "smb",
+      kind: "shell.command",
+      mode: "read",
+      timeoutMs: 25000,
+      brokerRequest: {
+        protocol: "smb",
+        share: "C$",
+        command: "Get-ChildItem $sharePath\\Users | Select-Object -First 20 Name,LastWriteTime",
+      },
+      expectedSemanticTarget: "windows:smb-user-profile-audit",
+      safety: { dryRunSupported: false, requiresConfirmedRevert: false, criticality: "low" },
+    };
+  }
+  return {
+    adapterId: "winrm",
+    kind: "shell.command",
+    mode: "read",
+    timeoutMs: 25000,
+    brokerRequest: {
+      protocol: "winrm",
+      command: "Get-CimInstance Win32_OperatingSystem | Select-Object CSName,Caption,Version,LastBootUpTime; Get-CimInstance Win32_ComputerSystem | Select-Object Manufacturer,Model,UserName,TotalPhysicalMemory",
+    },
+    expectedSemanticTarget: "windows:workstation-snapshot",
+    safety: { dryRunSupported: false, requiresConfirmedRevert: false, criticality: "low" },
+  };
+}
+
+function workstationServiceRestartOperation(protocol, serviceName) {
+  if (protocol === "powershell-ssh" || protocol === "winrm") {
+    return {
+      adapterId: protocol,
+      kind: "service.restart",
+      mode: "mutate",
+      timeoutMs: 25000,
+      brokerRequest: {
+        protocol,
+        command: "Restart-Service -Name '" + serviceName + "' -ErrorAction Stop; (Get-Service -Name '" + serviceName + "').Status",
+        expectRegex: "Running",
+      },
+      expectedSemanticTarget: "service:" + serviceName,
+      safety: { dryRunSupported: false, requiresConfirmedRevert: false, criticality: "medium" },
+    };
+  }
+  if (protocol === "wmi") {
+    return {
+      adapterId: "wmi",
+      kind: "service.restart",
+      mode: "mutate",
+      timeoutMs: 25000,
+      brokerRequest: {
+        protocol: "wmi",
+        command: "$svc = Get-CimInstance -CimSession $session -ClassName Win32_Service -Filter \\\"Name='" + serviceName + "'\\\"; Invoke-CimMethod -InputObject $svc -MethodName StopService | Out-Null; Start-Sleep -Seconds 2; Invoke-CimMethod -InputObject $svc -MethodName StartService | Out-Null; (Get-CimInstance -CimSession $session -ClassName Win32_Service -Filter \\\"Name='" + serviceName + "'\\\").State",
+        expectRegex: "Running",
+      },
+      expectedSemanticTarget: "service:" + serviceName,
+      safety: { dryRunSupported: false, requiresConfirmedRevert: false, criticality: "medium" },
+    };
+  }
+  return null;
+}
+
+function workstationSmbFileStageOperation(relativePath, content) {
+  return {
+    adapterId: "smb",
+    kind: "file.copy",
+    mode: "mutate",
+    timeoutMs: 25000,
+    brokerRequest: {
+      protocol: "smb",
+      share: "C$",
+      command: "$targetPath = Join-Path $sharePath '" + relativePath.replace(/\\/g, "\\\\") + "'; $targetDir = Split-Path -Parent $targetPath; New-Item -ItemType Directory -Path $targetDir -Force | Out-Null; Set-Content -Path $targetPath -Value '" + content.replace(/'/g, "''") + "' -Force; Get-Content $targetPath",
+      expectRegex: "Steward",
+    },
+    expectedSemanticTarget: "file:" + relativePath.replace(/\\/g, "/"),
+    safety: { dryRunSupported: false, requiresConfirmedRevert: false, criticality: "medium" },
+  };
 }
 
 module.exports = {
@@ -1939,7 +1956,7 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
       id: "steward.http-surface",
       name: "HTTP Surface",
       description: "Classifies and manages appliance-style web consoles with configurable HTTP port hints.",
-      version: "1.0.0",
+      version: "1.0.1",
       author: "Steward",
       entry: "index.js",
       provides: ["enrichment", "protocol"],
@@ -2104,7 +2121,7 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
             mode: "read",
             adapterId: "shell",
             timeoutMs: 15000,
-            commandTemplate: "sh -lc 'curl -fsS -k --max-time 8 http://{{host}}/favicon.ico | shasum -a 256'",
+            commandTemplate: `node -e "const http=require('node:http');const https=require('node:https');const crypto=require('node:crypto');const urls=['http://{{host}}/favicon.ico','https://{{host}}/favicon.ico'];const fetchIcon=(url)=>new Promise((resolve,reject)=>{const client=url.startsWith('https:')?https:http;const req=client.get(url,{rejectUnauthorized:false,timeout:8000},(response)=>{const status=response.statusCode??0;if(status>=300&&status<400&&response.headers.location){const redirect=new URL(response.headers.location,url).toString();response.resume();fetchIcon(redirect).then(resolve,reject);return;}if(status!==200){response.resume();reject(new Error('HTTP '+status));return;}const chunks=[];response.on('data',(chunk)=>chunks.push(chunk));response.on('end',()=>resolve(Buffer.concat(chunks)));});req.on('timeout',()=>req.destroy(new Error('timeout')));req.on('error',reject);});(async()=>{let lastError;for(const url of urls){try{const body=await fetchIcon(url);process.stdout.write(crypto.createHash('sha256').update(body).digest('hex')+'  favicon.ico\\n');return;}catch(error){lastError=error;}}console.error(lastError instanceof Error?lastError.message:String(lastError));process.exit(1);})();"`,
             expectedSemanticTarget: "network:intel:favicon",
           },
         },
@@ -2543,7 +2560,7 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
       id: "steward.windows-server",
       name: "Windows Server",
       description: "Remote Windows server adapter with WinRM-based classification and operational skills.",
-      version: "1.1.0",
+      version: "1.1.1",
       author: "Steward",
       entry: "index.js",
       provides: ["enrichment", "protocol", "playbooks", "profile"],
@@ -2741,7 +2758,7 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
       id: "steward.windows-workstation",
       name: "Windows Workstation",
       description: "Desktop/laptop adapter for Windows workstations, gaming PCs, and RDP-exposed personal machines.",
-      version: "1.0.1",
+      version: "1.0.2",
       author: "Steward",
       entry: "index.js",
       provides: ["enrichment", "protocol", "playbooks", "profile"],

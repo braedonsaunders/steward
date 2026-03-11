@@ -52,6 +52,7 @@ import { PROVIDER_REGISTRY } from "@/lib/llm/registry";
 import type {
   ChatToolEvent,
   ChatToolEventKind,
+  ChatToolWidgetMutation,
   Device,
   LLMProvider,
 } from "@/lib/state/types";
@@ -68,6 +69,7 @@ export interface ChatWorkspaceProps {
   sessionRefreshToken?: number;
   preferredSessionId?: string;
   sessionScope?: "all" | "device";
+  onWidgetMutation?: (mutation: ChatToolWidgetMutation) => void;
 }
 
 type ChatMessage = ChatMessageRecord;
@@ -1238,6 +1240,7 @@ export function ChatWorkspace({
   sessionRefreshToken,
   preferredSessionId,
   sessionScope = "all",
+  onWidgetMutation,
 }: ChatWorkspaceProps = {}) {
   const { devices, providerConfigs, loading: contextLoading } = useSteward();
   const {
@@ -1278,6 +1281,7 @@ export function ChatWorkspace({
   const deepLinkAppliedRef = useRef(false);
   const onboardingKickoffAttemptedRef = useRef<Set<string>>(new Set());
   const pendingPreferredSessionIdRef = useRef<string | null>(null);
+  const emittedWidgetMutationIdsRef = useRef<Set<string>>(new Set());
   const enabledProviders = providerConfigs.filter((config) => config.enabled);
   const deviceById = useMemo(
     () => new Map(devices.map((device) => [device.id, device])),
@@ -1491,6 +1495,34 @@ export function ChatWorkspace({
     void loadSessionMessages(activeSessionId);
   }, [activeSessionId, activeSessionLoaded, loadSessionMessages, messagesLoading]);
 
+  useEffect(() => {
+    if (!onWidgetMutation) {
+      return;
+    }
+
+    for (const message of messages) {
+      if (message.role !== "assistant" || !message.streaming) {
+        continue;
+      }
+
+      const toolEvents = message.metadata?.toolEvents ?? [];
+      for (const event of toolEvents) {
+        const mutation = event.widgetMutation;
+        if (!mutation || event.status !== "completed") {
+          continue;
+        }
+
+        const mutationKey = `${event.id}:${mutation.action}:${mutation.deviceId}:${mutation.widgetId}`;
+        if (emittedWidgetMutationIdsRef.current.has(mutationKey)) {
+          continue;
+        }
+
+        emittedWidgetMutationIdsRef.current.add(mutationKey);
+        onWidgetMutation(mutation);
+      }
+    }
+  }, [messages, onWidgetMutation]);
+
   // Auto-scroll to bottom
   useEffect(() => {
     const el = scrollRef.current;
@@ -1681,17 +1713,34 @@ export function ChatWorkspace({
     if (messagesLoading || sending) return;
     if (messages.length > 0) return;
     if (enabledProviders.length === 0 || chatBlockReason) return;
-    if (onboardingKickoffAttemptedRef.current.has(activeSessionId)) return;
+    const attemptedKickoffs = onboardingKickoffAttemptedRef.current;
+    if (attemptedKickoffs.has(activeSessionId)) return;
 
-    onboardingKickoffAttemptedRef.current.add(activeSessionId);
+    const kickoffSessionId = activeSessionId;
+    attemptedKickoffs.add(kickoffSessionId);
+    let kickoffStarted = false;
+    let cancelled = false;
     const kickoffTimer = window.setTimeout(() => {
-      void sendMessage({
-        text: buildOnboardingKickoffPrompt(activeSessionDevice),
-        suppressUserMessage: true,
-        autoTitle: false,
-      });
+      kickoffStarted = true;
+      void (async () => {
+        const started = await sendMessage({
+          text: buildOnboardingKickoffPrompt(activeSessionDevice),
+          suppressUserMessage: true,
+          autoTitle: false,
+        });
+
+        if (!started && !cancelled) {
+          attemptedKickoffs.delete(kickoffSessionId);
+        }
+      })();
     }, 0);
-    return () => window.clearTimeout(kickoffTimer);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(kickoffTimer);
+      if (!kickoffStarted) {
+        attemptedKickoffs.delete(kickoffSessionId);
+      }
+    };
   }, [
     activeSession,
     activeSessionDevice,

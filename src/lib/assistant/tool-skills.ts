@@ -28,7 +28,12 @@ import {
   withHttpApiCredentialAuth,
 } from "@/lib/credentials/http-api";
 import { isWindowsPlatformDevice, normalizeCredentialProtocol, protocolDisplayLabel } from "@/lib/protocols/catalog";
-import { completeDeviceOnboarding } from "@/lib/adoption/orchestrator";
+import {
+  completeDeviceOnboarding,
+  getDeviceAdoptionSnapshot,
+  startDeviceAdoption,
+  updateDeviceOnboardingDraft,
+} from "@/lib/adoption/orchestrator";
 import {
   computeDeviceStateHash,
   executeOperationWithGates,
@@ -688,6 +693,36 @@ function inputBoolean(input: Record<string, unknown>, ...keys: string[]): boolea
     }
   }
   return undefined;
+}
+
+function shellReadCredentialCacheToken(deviceId: string): string {
+  return stateStore.getDeviceCredentials(deviceId)
+    .map((credential) => ({
+      protocol: normalizeCredentialProtocol(credential.protocol),
+      adapterId: credential.adapterId?.trim() ?? "",
+      status: credential.status,
+      accountLabel: credential.accountLabel?.trim().toLowerCase() ?? "",
+      updatedAt: credential.updatedAt,
+      lastValidatedAt: credential.lastValidatedAt ?? "",
+    }))
+    .sort((a, b) =>
+      a.protocol.localeCompare(b.protocol)
+      || a.adapterId.localeCompare(b.adapterId)
+      || a.accountLabel.localeCompare(b.accountLabel)
+      || a.updatedAt.localeCompare(b.updatedAt)
+      || a.lastValidatedAt.localeCompare(b.lastValidatedAt),
+    )
+    .map((credential) =>
+      [
+        credential.protocol,
+        credential.adapterId,
+        credential.status,
+        credential.accountLabel,
+        credential.updatedAt,
+        credential.lastValidatedAt,
+      ].join("|"),
+    )
+    .join(";");
 }
 
 function inputStringArray(input: Record<string, unknown>, ...keys: string[]): string[] | undefined {
@@ -3030,7 +3065,13 @@ export async function buildAdapterSkillTools(
         command: normalizedShellInput.command,
         ...(port ? { port } : {}),
       };
-      const shellCacheKey = [device.id, adapterId, shellInput.command, String(port ?? "")].join("::");
+      const shellCacheKey = [
+        device.id,
+        adapterId,
+        shellInput.command,
+        String(port ?? ""),
+        shellReadCredentialCacheToken(device.id),
+      ].join("::");
       const cachedFailure = shellReadFailureCache.get(shellCacheKey);
       if (cachedFailure && Date.now() - cachedFailure.at < SHELL_READ_FAILURE_CACHE_TTL_MS) {
         return {
@@ -5889,7 +5930,7 @@ export async function buildAdapterSkillTools(
   });
 
   tools.steward_manage_device = dynamicTool({
-    description: "Get or update first-party device settings (name, category, notes, tags, autonomy) with guardrails against placeholder names.",
+    description: "Get or update first-party device settings, onboarding selections, and access/profile bindings with guardrails against placeholder names and invalid adapter matches.",
     inputSchema: jsonSchema({
       type: "object",
       properties: {
@@ -5937,6 +5978,24 @@ export async function buildAdapterSkillTools(
           description: "Optional structured memory JSON object.",
           additionalProperties: true,
         },
+        selected_profile_ids: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional full adapter/profile selection to apply for the device. An empty array clears the current draft selection.",
+        },
+        selected_access_method_keys: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional full access-method selection to apply for the device. An empty array clears the current draft selection.",
+        },
+        refresh_onboarding: {
+          type: "boolean",
+          description: "Refresh onboarding draft state and available profile/access candidates before returning or applying changes.",
+        },
+        force_refresh_onboarding: {
+          type: "boolean",
+          description: "Force a full onboarding draft resync by clearing and rebuilding candidate profile/access bindings first.",
+        },
       },
       required: ["action"],
       additionalProperties: false,
@@ -5957,10 +6016,52 @@ export async function buildAdapterSkillTools(
       }
 
       const readiness = validateDeviceReadyForToolUse(device, {
-        allowPreOnboardingExecution: options?.allowPreOnboardingExecution,
+        allowPreOnboardingExecution: true,
       });
       if (!readiness.ok) {
         return { ok: false, error: readiness.reason, deviceId: device.id };
+      }
+
+      const readSelectedProfileIds = (snapshot: Awaited<ReturnType<typeof getDeviceAdoptionSnapshot>> | null): string[] => {
+        if (snapshot?.draft?.selectedProfileIds) {
+          return snapshot.draft.selectedProfileIds;
+        }
+        return (snapshot?.profiles ?? [])
+          .filter((profile) => ["selected", "verified", "active"].includes(profile.status))
+          .map((profile) => profile.profileId);
+      };
+
+      const readSelectedAccessMethodKeys = (snapshot: Awaited<ReturnType<typeof getDeviceAdoptionSnapshot>> | null): string[] => {
+        if (snapshot?.draft?.selectedAccessMethodKeys) {
+          return snapshot.draft.selectedAccessMethodKeys;
+        }
+        return (snapshot?.accessMethods ?? [])
+          .filter((method) => method.selected)
+          .map((method) => method.key);
+      };
+
+      let adoptionSnapshot: Awaited<ReturnType<typeof getDeviceAdoptionSnapshot>> | null = null;
+      const refreshRequested = inputBoolean(args, "refresh_onboarding") === true
+        || inputBoolean(args, "force_refresh_onboarding") === true;
+      if (action === "get" || refreshRequested || "selected_profile_ids" in args || "selected_access_method_keys" in args) {
+        try {
+          adoptionSnapshot = refreshRequested || "selected_profile_ids" in args || "selected_access_method_keys" in args
+            ? await startDeviceAdoption(device.id, {
+              triggeredBy: "steward",
+              force: inputBoolean(args, "force_refresh_onboarding") === true,
+            })
+            : await getDeviceAdoptionSnapshot(device.id);
+        } catch (error) {
+          if (action === "get") {
+            adoptionSnapshot = null;
+          } else {
+            return {
+              ok: false,
+              error: error instanceof Error ? error.message : "Failed to refresh device onboarding state.",
+              deviceId: device.id,
+            };
+          }
+        }
       }
 
       if (action === "get") {
@@ -5978,6 +6079,22 @@ export async function buildAdapterSkillTools(
           structuredMemoryJson: isRecord(device.metadata.notes) && isRecord(device.metadata.notes.structuredContext)
             ? device.metadata.notes.structuredContext
             : {},
+          selectedProfileIds: readSelectedProfileIds(adoptionSnapshot),
+          selectedAccessMethodKeys: readSelectedAccessMethodKeys(adoptionSnapshot),
+          availableProfiles: adoptionSnapshot?.profiles.map((profile) => ({
+            profileId: profile.profileId,
+            adapterId: profile.adapterId,
+            status: profile.status,
+            selected: ["selected", "verified", "active"].includes(profile.status),
+            summary: profile.summary,
+          })) ?? [],
+          availableAccessMethods: adoptionSnapshot?.accessMethods.map((method) => ({
+            key: method.key,
+            kind: method.kind,
+            selected: method.selected,
+            status: method.status,
+            summary: method.summary,
+          })) ?? [],
         };
       }
 
@@ -6007,6 +6124,10 @@ export async function buildAdapterSkillTools(
       const previousName = device.name;
       const previousCategory = device.type;
       const previousAutonomy = device.autonomyTier;
+
+      if (refreshRequested) {
+        changedFields.push(inputBoolean(args, "force_refresh_onboarding") === true ? "onboardingRebuilt" : "onboardingRefreshed");
+      }
 
       if (normalizedName && normalizedName !== device.name) {
         device.name = normalizedName;
@@ -6093,34 +6214,105 @@ export async function buildAdapterSkillTools(
         }
       }
 
+      const selectedProfileIdsRequested = "selected_profile_ids" in args;
+      const selectedAccessMethodKeysRequested = "selected_access_method_keys" in args;
+      if (selectedProfileIdsRequested || selectedAccessMethodKeysRequested) {
+        if (!adoptionSnapshot) {
+          try {
+            adoptionSnapshot = await startDeviceAdoption(device.id, { triggeredBy: "steward" });
+          } catch (error) {
+            return {
+              ok: false,
+              error: error instanceof Error ? error.message : "Failed to refresh device onboarding state.",
+              deviceId: device.id,
+            };
+          }
+        }
+
+        const nextSelectedProfileIds = selectedProfileIdsRequested
+          ? (inputStringArray(args, "selected_profile_ids") ?? [])
+          : readSelectedProfileIds(adoptionSnapshot);
+        const nextSelectedAccessMethodKeys = selectedAccessMethodKeysRequested
+          ? (inputStringArray(args, "selected_access_method_keys") ?? [])
+          : readSelectedAccessMethodKeys(adoptionSnapshot);
+        const availableProfiles = new Set(adoptionSnapshot.profiles.map((profile) => profile.profileId));
+        const availableAccessMethods = new Set(adoptionSnapshot.accessMethods.map((method) => method.key));
+        const missingProfiles = nextSelectedProfileIds.filter((profileId) => !availableProfiles.has(profileId));
+        if (missingProfiles.length > 0) {
+          return {
+            ok: false,
+            error: `Unknown adapter selection: ${missingProfiles.join(", ")}`,
+            deviceId: device.id,
+          };
+        }
+        const missingAccessMethods = nextSelectedAccessMethodKeys.filter((key) => !availableAccessMethods.has(key));
+        if (missingAccessMethods.length > 0) {
+          return {
+            ok: false,
+            error: `Unknown access method selection: ${missingAccessMethods.join(", ")}`,
+            deviceId: device.id,
+          };
+        }
+
+        const currentSelectedProfileIds = readSelectedProfileIds(adoptionSnapshot);
+        const currentSelectedAccessMethodKeys = readSelectedAccessMethodKeys(adoptionSnapshot);
+        const profileSelectionChanged = JSON.stringify(currentSelectedProfileIds) !== JSON.stringify(nextSelectedProfileIds);
+        const accessSelectionChanged = JSON.stringify(currentSelectedAccessMethodKeys) !== JSON.stringify(nextSelectedAccessMethodKeys);
+
+        if (profileSelectionChanged) {
+          stateStore.selectDeviceProfiles(device.id, nextSelectedProfileIds);
+          changedFields.push("selectedProfileIds");
+        }
+        if (accessSelectionChanged) {
+          stateStore.selectAccessMethods(device.id, nextSelectedAccessMethodKeys);
+          changedFields.push("selectedAccessMethodKeys");
+        }
+
+        if (profileSelectionChanged || accessSelectionChanged) {
+          adoptionSnapshot = await updateDeviceOnboardingDraft({
+            deviceId: device.id,
+            selectedProfileIds: nextSelectedProfileIds,
+            selectedAccessMethodKeys: nextSelectedAccessMethodKeys,
+            actor: "steward",
+          });
+        }
+      }
+
       if (changedFields.length === 0) {
         return {
           ok: true,
           deviceId: device.id,
           deviceName: device.name,
           changedFields,
-          summary: `No device setting changes were needed for ${device.name}.`,
+          selectedProfileIds: readSelectedProfileIds(adoptionSnapshot),
+          selectedAccessMethodKeys: readSelectedAccessMethodKeys(adoptionSnapshot),
+          summary: `No manage-device changes were needed for ${device.name}.`,
         };
       }
 
-      device.lastChangedAt = nowIso();
-      await stateStore.upsertDevice(device);
-      await stateStore.addAction({
-        actor: "steward",
-        kind: "config",
-        message: `Updated device settings for ${device.name}`,
-        context: {
-          deviceId: device.id,
-          changedFields,
-          previousName,
-          nextName: device.name,
-          previousCategory,
-          nextCategory: device.type,
-          previousAutonomy,
-          nextAutonomy: device.autonomyTier,
-          viaTool: "steward_manage_device",
-        },
-      });
+      const deviceFieldsChanged = changedFields.some((field) =>
+        ["name", "category", "autonomyTier", "tags", "operatorNotes", "structuredMemoryJson"].includes(field),
+      );
+      if (deviceFieldsChanged) {
+        device.lastChangedAt = nowIso();
+        await stateStore.upsertDevice(device);
+        await stateStore.addAction({
+          actor: "steward",
+          kind: "config",
+          message: `Updated device settings for ${device.name}`,
+          context: {
+            deviceId: device.id,
+            changedFields,
+            previousName,
+            nextName: device.name,
+            previousCategory,
+            nextCategory: device.type,
+            previousAutonomy,
+            nextAutonomy: device.autonomyTier,
+            viaTool: "steward_manage_device",
+          },
+        });
+      }
 
       return {
         ok: true,
@@ -6132,6 +6324,8 @@ export async function buildAdapterSkillTools(
         category: device.type,
         autonomyTier: device.autonomyTier,
         changedFields,
+        selectedProfileIds: readSelectedProfileIds(adoptionSnapshot),
+        selectedAccessMethodKeys: readSelectedAccessMethodKeys(adoptionSnapshot),
         inferredName: Boolean(inferName && !inputName && normalizedName),
         inferredCategory: Boolean(inferCategory && !inputCategory && nextCategory),
         summary: `Updated ${device.name}: ${changedFields.join(", ")}.`,

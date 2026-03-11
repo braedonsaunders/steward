@@ -9,7 +9,7 @@ import type { Device, OperationSpec, ProtocolBrokerRequest } from "@/lib/state/t
 
 export const runtime = "nodejs";
 
-type TerminalTransport = "ssh" | "winrm" | "powershell-ssh";
+type TerminalTransport = "ssh" | "telnet" | "winrm" | "powershell-ssh";
 
 const COMMAND_TIMEOUT_MS = 45_000;
 const CWD_MARKER = "__STEWARD_CWD__";
@@ -34,6 +34,7 @@ function escapePowerShellSingleQuoted(value: string): string {
 
 function transportLabel(transport: TerminalTransport): string {
   if (transport === "ssh") return "SSH";
+  if (transport === "telnet") return "Telnet";
   if (transport === "winrm") return "WinRM";
   return "PowerShell over SSH";
 }
@@ -93,8 +94,10 @@ function selectTerminalTransport(device: Device): {
 } {
   const windows = deviceLooksWindows(device);
   const hasSshSurface = hasObservedProtocol(device, ["ssh"], [22, 2222]);
+  const hasTelnetSurface = hasObservedProtocol(device, ["telnet"], [23]);
   const hasWinrmSurface = hasObservedProtocol(device, ["winrm"], [5985, 5986]);
   const hasSshCredential = hasStoredCredential(device, ["ssh", "powershell-ssh"]);
+  const hasTelnetCredential = hasStoredCredential(device, ["telnet"]);
   const hasWinrmCredential = hasStoredCredential(device, ["winrm"]);
 
   if (windows) {
@@ -116,6 +119,15 @@ function selectTerminalTransport(device: Device): {
         reason: "Using PowerShell over the observed SSH surface for this Windows host.",
       };
     }
+    if (hasTelnetSurface && hasTelnetCredential) {
+      return {
+        available: true,
+        transport: "telnet",
+        transportLabel: transportLabel("telnet"),
+        port: observedPort(device, ["telnet"], [23]),
+        reason: "Using the stored Telnet credential for this device's legacy terminal surface.",
+      };
+    }
     if (hasWinrmSurface) {
       return {
         available: true,
@@ -134,6 +146,15 @@ function selectTerminalTransport(device: Device): {
         reason: "SSH is available, so Steward will use PowerShell over SSH for this Windows host.",
       };
     }
+    if (hasTelnetSurface) {
+      return {
+        available: true,
+        transport: "telnet",
+        transportLabel: transportLabel("telnet"),
+        port: observedPort(device, ["telnet"], [23]),
+        reason: "Telnet is the only observed legacy terminal surface available for this device.",
+      };
+    }
   } else {
     if (hasSshSurface) {
       return {
@@ -142,6 +163,17 @@ function selectTerminalTransport(device: Device): {
         transportLabel: transportLabel("ssh"),
         port: observedPort(device, ["ssh"], [22, 2222]),
         reason: "SSH is the best observed terminal surface for this device.",
+      };
+    }
+    if (hasTelnetSurface) {
+      return {
+        available: true,
+        transport: "telnet",
+        transportLabel: transportLabel("telnet"),
+        port: observedPort(device, ["telnet"], [23]),
+        reason: hasTelnetCredential
+          ? "Using the observed Telnet surface and stored Telnet credential for this device."
+          : "Telnet is the only observed shell surface available for this device.",
       };
     }
     if (hasWinrmSurface) {
@@ -157,7 +189,7 @@ function selectTerminalTransport(device: Device): {
 
   return {
     available: false,
-    reason: "No SSH or WinRM management surface has been observed for this device yet.",
+    reason: "No SSH, Telnet, or WinRM management surface has been observed for this device yet.",
   };
 }
 
@@ -173,6 +205,10 @@ function wrapCommandForTransport(transport: TerminalTransport, command: string, 
       `printf '\\n${CWD_MARKER}%s\\n' "$PWD"`,
     ].filter((value): value is string => Boolean(value));
     return steps.join(" ; ");
+  }
+
+  if (transport === "telnet") {
+    return command;
   }
 
   return [
@@ -213,6 +249,14 @@ function buildTerminalBrokerRequest(
   if (transport === "ssh") {
     return {
       protocol: "ssh",
+      command,
+      ...(typeof port === "number" ? { port } : {}),
+    };
+  }
+
+  if (transport === "telnet") {
+    return {
+      protocol: "telnet",
       command,
       ...(typeof port === "number" ? { port } : {}),
     };

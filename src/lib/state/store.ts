@@ -3812,6 +3812,12 @@ class StateStore {
     });
   }
 
+  deleteDeviceProfile(deviceId: string, profileId: string): void {
+    this.withDbRecovery("StateStore.deleteDeviceProfile", (db) => {
+      db.prepare("DELETE FROM device_profiles WHERE deviceId = ? AND profileId = ?").run(deviceId, profileId);
+    });
+  }
+
   selectDeviceProfiles(deviceId: string, profileIds: string[]): DeviceProfileBinding[] {
     return this.withDbRecovery("StateStore.selectDeviceProfiles", (db) => {
       const normalized = Array.from(new Set(profileIds.map((value) => String(value).trim()).filter(Boolean)));

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { motion, useReducedMotion, type Variants } from "framer-motion";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -34,7 +34,12 @@ import { DeviceWidgetsPanel } from "@/components/device-widgets-panel";
 import { getDeviceIdentityDescription } from "@/lib/devices/identity";
 import { useSteward } from "@/lib/hooks/use-steward";
 import { getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
-import type { DeviceStatus, IncidentSeverity, RecommendationPriority } from "@/lib/state/types";
+import type {
+  DeviceStatus,
+  ChatToolWidgetMutation,
+  IncidentSeverity,
+  RecommendationPriority,
+} from "@/lib/state/types";
 import { cn } from "@/lib/utils";
 import { withClientApiToken } from "@/lib/auth/client-token";
 
@@ -117,11 +122,22 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function asStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+function cleanSnapshotVendor(value?: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return undefined;
+  }
+
+  const withoutAddress = normalized.split(/,\s*\d/, 1)[0] ?? normalized;
+  const cleaned = withoutAddress.replace(/^["']+|["',\s]+$/g, "").trim();
+  return cleaned || normalized;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function summarizeRecord(record: Record<string, unknown> | undefined): string | undefined {
   if (!record) return undefined;
   const summary = Object.entries(record)
@@ -133,6 +149,47 @@ function summarizeRecord(record: Record<string, unknown> | undefined): string | 
     .map(([key, value]) => `${key}=${String(value)}`)
     .join(" · ");
   return summary.length > 0 ? summary : "available";
+}
+
+function formatProtocolChip(protocol: string): string {
+  return protocol
+    .trim()
+    .split("-")
+    .filter(Boolean)
+    .map((segment) => {
+      if (segment.length <= 4) {
+        return segment.toUpperCase();
+      }
+      return `${segment.charAt(0).toUpperCase()}${segment.slice(1)}`;
+    })
+    .join(" ");
+}
+
+function formatServiceLabel(name: string | undefined, port: number): string {
+  const normalized = name?.trim();
+  if (!normalized || normalized === "unknown") {
+    return `Port ${port}`;
+  }
+  return formatProtocolChip(normalized.replace(/[_/]/g, "-"));
+}
+
+function formatServiceDetail(service: {
+  port: number;
+  transport: "tcp" | "udp";
+  product?: string;
+  version?: string;
+  secure: boolean;
+}): string {
+  const parts = [`${service.port}/${service.transport.toUpperCase()}`];
+  if (service.product?.trim()) {
+    parts.push(service.product.trim());
+  }
+  if (service.version?.trim()) {
+    parts.push(`v${service.version.trim()}`);
+  } else if (service.secure) {
+    parts.push("TLS");
+  }
+  return parts.join(" | ");
 }
 
 const tabPanelVariants: Variants = {
@@ -183,6 +240,32 @@ function AnimatedTabPanel({
   );
 }
 
+function SnapshotField({
+  label,
+  value,
+  mono = false,
+  className,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+  className?: string;
+}) {
+  return (
+    <div className={cn("rounded-xl border border-border/70 bg-background/80 p-3.5", className)}>
+      <p className="text-[10px] uppercase tracking-[0.24em] text-muted-foreground">{label}</p>
+      <p
+        className={cn(
+          "mt-1.5 break-words text-sm font-medium leading-5 text-foreground",
+          mono && "break-all font-mono text-[13px]",
+        )}
+      >
+        {value}
+      </p>
+    </div>
+  );
+}
+
 type DevicePrimaryTab =
   | "overview"
   | "steward"
@@ -212,6 +295,7 @@ export default function DeviceDetailPage() {
   const [preferredChatSessionId, setPreferredChatSessionId] = useState<string | undefined>(undefined);
   const [hasOnboardingSession, setHasOnboardingSession] = useState<boolean | null>(null);
   const [pendingOnboardingReveal, setPendingOnboardingReveal] = useState(false);
+  const [latestWidgetMutation, setLatestWidgetMutation] = useState<ChatToolWidgetMutation | null>(null);
   const chatPanelRef = useRef<HTMLDivElement | null>(null);
   const previousDeviceContextRef = useRef<{
     deviceId: string | null;
@@ -315,6 +399,17 @@ export default function DeviceDetailPage() {
     };
   }, [adoptionStatus, device, deviceId]);
 
+  useEffect(() => {
+    setLatestWidgetMutation(null);
+  }, [deviceId]);
+
+  const handleWidgetMutation = useCallback((mutation: ChatToolWidgetMutation) => {
+    if (mutation.deviceId !== deviceId) {
+      return;
+    }
+    setLatestWidgetMutation({ ...mutation });
+  }, [deviceId]);
+
   if (loading) {
     return (
       <main className="space-y-6">
@@ -396,82 +491,26 @@ export default function DeviceDetailPage() {
       setStartingOnboarding(false);
     }
   };
-  const discoveryMeta = asRecord(device.metadata.discovery) ?? {};
-  const discoveryConfidenceRaw = Number(discoveryMeta.confidence ?? 0);
-  const discoveryConfidence = Number.isFinite(discoveryConfidenceRaw) ? discoveryConfidenceRaw : 0;
-  const discoveryObservationsRaw = Number(discoveryMeta.observationCount ?? 0);
-  const discoveryObservations = Number.isFinite(discoveryObservationsRaw)
-    ? Math.max(0, Math.floor(discoveryObservationsRaw))
-    : 0;
-  const discoveryEvidenceTypes = asStringArray(discoveryMeta.evidenceTypes);
-  const discoverySourceCountsRaw = asRecord(discoveryMeta.sourceCounts) ?? {};
-  const discoverySourceCounts = Object.entries(discoverySourceCountsRaw)
-    .map(([source, value]) => ({
-      source,
-      count: Number(value),
-    }))
-    .filter((entry) => Number.isFinite(entry.count) && entry.count > 0)
-    .sort((a, b) => b.count - a.count);
-
-  const fingerprintMeta = asRecord(device.metadata.fingerprint) ?? {};
-  const fingerprintVersionRaw = Number(fingerprintMeta.fingerprintVersion);
-  const fingerprintVersion = Number.isFinite(fingerprintVersionRaw) ? Math.floor(fingerprintVersionRaw) : undefined;
-  const fingerprintLastAt = typeof fingerprintMeta.lastFingerprintedAt === "string"
-    ? fingerprintMeta.lastFingerprintedAt
-    : undefined;
-  const fingerprintDnsService = asRecord(fingerprintMeta.dnsService);
-  const fingerprintWinrm = asRecord(fingerprintMeta.winrm);
-  const fingerprintMqtt = asRecord(fingerprintMeta.mqtt);
-  const classificationMeta = asRecord(device.metadata.classification) ?? {};
-  const classificationConfidenceRaw = Number(classificationMeta.confidence ?? 0);
-  const classificationConfidence = Number.isFinite(classificationConfidenceRaw)
-    ? classificationConfidenceRaw
-    : 0;
-  const classificationSignalsRaw = Array.isArray(classificationMeta.signals)
-    ? classificationMeta.signals
-    : [];
-  const classificationSignals = classificationSignalsRaw
-    .map((signal) => asRecord(signal))
-    .filter((signal): signal is Record<string, unknown> => Boolean(signal))
-    .map((signal) => ({
-      source: typeof signal.source === "string" ? signal.source : "unknown",
-      type: typeof signal.type === "string" ? signal.type : "unknown",
-      weight: Number(signal.weight),
-      reason: typeof signal.reason === "string" ? signal.reason : "No reason",
-    }))
-    .filter((signal) => Number.isFinite(signal.weight))
-    .sort((a, b) => b.weight - a.weight);
-  const topClassificationSignals = classificationSignals.slice(0, 4);
-  const fingerprintInferredOs = typeof fingerprintMeta.inferredOs === "string" && fingerprintMeta.inferredOs.trim().length > 0
-    ? fingerprintMeta.inferredOs
-    : (device.os ?? "unknown");
-  const fingerprintInferredProduct = typeof fingerprintMeta.inferredProduct === "string" && fingerprintMeta.inferredProduct.trim().length > 0
-    ? fingerprintMeta.inferredProduct
-    : "unknown";
-  const fingerprintSnmpSysName = typeof fingerprintMeta.snmpSysName === "string" && fingerprintMeta.snmpSysName.trim().length > 0
-    ? fingerprintMeta.snmpSysName
-    : undefined;
-  const fingerprintNetbiosName = typeof fingerprintMeta.netbiosName === "string" && fingerprintMeta.netbiosName.trim().length > 0
-    ? fingerprintMeta.netbiosName
-    : undefined;
-  const fingerprintSmbDialect = typeof fingerprintMeta.smbDialect === "string" && fingerprintMeta.smbDialect.trim().length > 0
-    ? fingerprintMeta.smbDialect
-    : undefined;
-  const fingerprintSshBanner = typeof fingerprintMeta.sshBanner === "string" && fingerprintMeta.sshBanner.trim().length > 0
-    ? fingerprintMeta.sshBanner
-    : undefined;
-  const dnsProbeSummary = summarizeRecord(fingerprintDnsService);
-  const winrmProbeSummary = summarizeRecord(fingerprintWinrm);
-  const mqttProbeSummary = summarizeRecord(fingerprintMqtt);
-  const metadataHostname = typeof device.metadata.hostname === "string" && device.metadata.hostname.trim().length > 0
-    ? device.metadata.hostname
-    : undefined;
-  const visibleEvidenceTypes = discoveryEvidenceTypes.slice(0, 6);
-  const visibleSourceCounts = discoverySourceCounts.slice(0, 4);
   const visibleRecommendations = relatedRecommendations.filter((recommendation) => !recommendation.dismissed);
-  const visibleClassificationSignals = topClassificationSignals.slice(0, 3);
   const visibleProtocols = device.protocols.slice(0, 8);
   const deviceDescription = getDeviceIdentityDescription(device);
+  const metadataHostname = typeof device.metadata.hostname === "string" && device.metadata.hostname.trim().length > 0
+    ? device.metadata.hostname.trim()
+    : undefined;
+  const snapshotHostname = device.hostname?.trim() || metadataHostname;
+  const snapshotSecondaryIps = (device.secondaryIps ?? [])
+    .map((ip) => ip.trim())
+    .filter((ip) => ip.length > 0 && ip !== device.ip)
+    .slice(0, 3);
+  const snapshotServices = [...device.services]
+    .sort((left, right) => left.port - right.port)
+    .slice(0, 4);
+  const hiddenServiceCount = Math.max(0, device.services.length - snapshotServices.length);
+  const snapshotVendor = cleanSnapshotVendor(device.vendor) ?? "Not identified";
+  const snapshotOs = device.os?.trim() || "Not identified";
+  const snapshotRole = device.role?.trim() || "Not classified";
+  const snapshotMac = device.mac?.trim() || "Not observed";
+  const snapshotProtocols = visibleProtocols.length > 0 ? visibleProtocols : ["No protocols observed"];
 
   return (
     <main className="flex h-full min-h-0 flex-col gap-3">
@@ -550,268 +589,197 @@ export default function DeviceDetailPage() {
           <TabsContent value="overview" forceMount className="mt-3 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
             <AnimatedTabPanel active={activePrimaryTab === "overview"} persistent className="overflow-hidden">
               <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[1.5fr_1fr]">
-            <Card className="relative overflow-hidden border-primary/25 bg-gradient-to-br from-primary/10 via-card to-secondary/10">
-              <div className="pointer-events-none absolute inset-0">
-                <div className="absolute -top-16 left-2 h-28 w-28 rounded-full bg-primary/20 blur-3xl" />
-                <div className="absolute -bottom-16 right-0 h-32 w-32 rounded-full bg-secondary/30 blur-3xl" />
-              </div>
-              <CardHeader className="relative pb-3">
-                <div className="flex items-center gap-2">
-                  <Server className="size-4 text-primary" />
-                  <CardTitle className="text-base">Device Snapshot</CardTitle>
-                  <Badge variant="outline" className="ml-auto text-[10px] capitalize">
-                    {String(discoveryMeta.status ?? device.status)}
-                  </Badge>
-                </div>
-                <CardDescription>
-                  {deviceDescription || "Identity, confidence, and operational signal health"}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="relative space-y-4">
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  <div className="rounded-md border bg-background/65 p-2.5 text-center">
-                    <p className="text-base font-semibold tabular-nums">{(discoveryConfidence * 100).toFixed(0)}%</p>
-                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Discovery</p>
-                  </div>
-                  <div className="rounded-md border bg-background/65 p-2.5 text-center">
-                    <p className="text-base font-semibold tabular-nums">{discoveryObservations}</p>
-                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Observations</p>
-                  </div>
-                  <div className="rounded-md border bg-background/65 p-2.5 text-center">
-                    <p className="text-base font-semibold tabular-nums">{(classificationConfidence * 100).toFixed(0)}%</p>
-                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Classifier</p>
-                  </div>
-                  <div className="rounded-md border bg-background/65 p-2.5 text-center">
-                    <p className="text-base font-semibold tabular-nums">{device.services.length}</p>
-                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Endpoints</p>
-                  </div>
-                </div>
-
-                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                  <div className="rounded-md border bg-background/60 p-2.5">
-                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">IP Address</p>
-                    <p className="font-mono text-sm">{device.ip}</p>
-                  </div>
-                  {(device.hostname || metadataHostname) && (
-                    <div className="rounded-md border bg-background/60 p-2.5">
-                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Hostname</p>
-                      <p className="text-sm line-clamp-1">{device.hostname ?? metadataHostname}</p>
-                    </div>
-                  )}
-                  {device.mac && (
-                    <div className="rounded-md border bg-background/60 p-2.5">
-                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">MAC Address</p>
-                      <p className="font-mono text-sm line-clamp-1">{device.mac}</p>
-                    </div>
-                  )}
-                  {device.vendor && (
-                    <div className="rounded-md border bg-background/60 p-2.5">
-                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Vendor</p>
-                      <p className="text-sm line-clamp-1">{device.vendor}</p>
-                    </div>
-                  )}
-                  {device.os && (
-                    <div className="rounded-md border bg-background/60 p-2.5">
-                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Operating System</p>
-                      <p className="text-sm line-clamp-1">{device.os}</p>
-                    </div>
-                  )}
-                  {device.role && (
-                    <div className="rounded-md border bg-background/60 p-2.5">
-                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Role</p>
-                      <p className="text-sm line-clamp-1">{device.role}</p>
-                    </div>
-                  )}
-                </div>
-
-                <div className="grid gap-3 lg:grid-cols-2">
-                  <div className="rounded-md border bg-background/60 p-3">
-                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Discovery Evidence</p>
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {visibleEvidenceTypes.length > 0 ? (
-                        visibleEvidenceTypes.map((type) => (
-                          <Badge key={type} variant="outline" className="text-[10px]">
-                            {type.replace(/_/g, " ")}
-                          </Badge>
-                        ))
-                      ) : (
-                        <p className="text-xs text-muted-foreground">No evidence tags yet</p>
-                      )}
-                    </div>
-                    {visibleSourceCounts.length > 0 && (
-                      <div className="mt-2 space-y-1">
-                        {visibleSourceCounts.map((entry) => (
-                          <div key={entry.source} className="flex items-center justify-between text-xs">
-                            <span className="capitalize text-muted-foreground">{entry.source}</span>
-                            <span className="font-mono tabular-nums">{entry.count}</span>
-                          </div>
-                        ))}
+                <Card className="overflow-hidden border-border/70 bg-[linear-gradient(160deg,rgba(14,116,144,0.08),rgba(255,255,255,0.9)_45%,rgba(14,165,233,0.05))]">
+                  <CardHeader className="pb-4">
+                    <div className="flex items-start gap-3">
+                      <div className="rounded-2xl border border-primary/20 bg-background/90 p-3 shadow-sm">
+                        <Server className="size-4 text-primary" />
                       </div>
-                    )}
-                  </div>
-
-                  <div className="rounded-md border bg-background/60 p-3">
-                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Fingerprint Context</p>
-                    <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
-                      <div className="rounded border bg-background/60 p-2">
-                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Version</p>
-                        <p className="font-mono">{fingerprintVersion ? `v${fingerprintVersion}` : "none"}</p>
-                      </div>
-                      <div className="rounded border bg-background/60 p-2">
-                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Last Probe</p>
-                        <p>{fingerprintLastAt ? formatRelative(fingerprintLastAt) : "never"}</p>
+                      <div className="min-w-0 space-y-1">
+                        <p className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
+                          At a glance
+                        </p>
+                        <CardTitle className="text-base">Device Snapshot</CardTitle>
+                        <CardDescription className="max-w-2xl">
+                          {deviceDescription || "The essentials a person needs before deciding what to do with this device."}
+                        </CardDescription>
                       </div>
                     </div>
-                    <p className="mt-2 text-xs text-muted-foreground line-clamp-1">
-                      OS: <span className="text-foreground/90">{fingerprintInferredOs}</span>
-                    </p>
-                    <p className="text-xs text-muted-foreground line-clamp-1">
-                      Product: <span className="text-foreground/90">{fingerprintInferredProduct}</span>
-                    </p>
-                    {fingerprintSshBanner && (
-                      <p className="mt-1 text-xs text-muted-foreground line-clamp-1">
-                        SSH: <span className="text-foreground/90">{fingerprintSshBanner}</span>
-                      </p>
-                    )}
-                  </div>
-                </div>
+                  </CardHeader>
+                  <CardContent className="flex min-h-0 flex-1 flex-col gap-3.5">
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      <SnapshotField label="IP Address" value={device.ip} mono />
+                      <SnapshotField label="MAC Address" value={snapshotMac} mono />
+                      <SnapshotField label="Vendor" value={snapshotVendor} className="md:col-span-2 xl:col-span-1" />
+                      <SnapshotField label="Operating System" value={snapshotOs} />
+                      <SnapshotField label="Role" value={snapshotRole} />
+                    </div>
 
-                <div className="space-y-2 rounded-md border bg-background/55 p-3">
-                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Latest Probe Signals</p>
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    <div className="rounded-md border bg-background/70 p-2.5">
-                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">DNS</p>
-                      <p className="text-xs text-muted-foreground line-clamp-1">{dnsProbeSummary ?? "n/a"}</p>
-                    </div>
-                    <div className="rounded-md border bg-background/70 p-2.5">
-                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">WinRM</p>
-                      <p className="text-xs text-muted-foreground line-clamp-1">{winrmProbeSummary ?? "n/a"}</p>
-                    </div>
-                    <div className="rounded-md border bg-background/70 p-2.5">
-                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">MQTT</p>
-                      <p className="text-xs text-muted-foreground line-clamp-1">{mqttProbeSummary ?? "n/a"}</p>
-                    </div>
-                    {fingerprintSnmpSysName && (
-                      <div className="rounded-md border bg-background/70 p-2.5">
-                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">SNMP sysName</p>
-                        <p className="text-xs text-muted-foreground line-clamp-1">{fingerprintSnmpSysName}</p>
-                      </div>
-                    )}
-                    {fingerprintNetbiosName && (
-                      <div className="rounded-md border bg-background/70 p-2.5">
-                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">NetBIOS</p>
-                        <p className="text-xs text-muted-foreground line-clamp-1">{fingerprintNetbiosName}</p>
-                      </div>
-                    )}
-                    {fingerprintSmbDialect && (
-                      <div className="rounded-md border bg-background/70 p-2.5">
-                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">SMB Dialect</p>
-                        <p className="text-xs text-muted-foreground line-clamp-1">{fingerprintSmbDialect}</p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {visibleProtocols.length > 0 && (
-                  <div className="space-y-1">
-                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Protocols</p>
-                    <div className="flex flex-wrap gap-1">
-                      {visibleProtocols.map((protocol) => (
-                        <Badge key={protocol} variant="outline" className="text-[10px]">
-                          {protocol}
-                        </Badge>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {visibleClassificationSignals.length > 0 && (
-                  <div className="space-y-1">
-                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Top Classification Signals</p>
-                    <div className="grid gap-2 sm:grid-cols-3">
-                      {visibleClassificationSignals.map((signal, idx) => (
-                        <div key={`${signal.source}-${signal.type}-${idx}`} className="rounded-md border bg-background/60 p-2 text-xs">
-                          <div className="flex items-center justify-between gap-1">
-                            <span className="capitalize line-clamp-1">{signal.source}</span>
-                            <span className="font-mono tabular-nums text-muted-foreground">{signal.weight}</span>
-                          </div>
-                          <p className="text-muted-foreground line-clamp-2">{signal.reason}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <div className="min-h-0">
-              <Card className="flex h-full min-h-0 flex-col overflow-hidden bg-card/85">
-                <CardHeader className="pb-3">
-                  <div className="flex items-center gap-2">
-                    <Lightbulb className="size-4 text-muted-foreground" />
-                    <CardTitle className="text-base">Recommendations</CardTitle>
-                    {visibleRecommendations.length > 0 && (
-                      <Badge variant="secondary" className="ml-auto tabular-nums">
-                        {visibleRecommendations.length}
-                      </Badge>
-                    )}
-                  </div>
-                  <CardDescription>Highest-impact next actions for this device</CardDescription>
-                </CardHeader>
-                <CardContent className="min-h-0 flex-1 overflow-auto">
-                  {visibleRecommendations.length === 0 ? (
-                    <div className="flex flex-col items-center gap-2 py-6 text-center">
-                      <Lightbulb className="size-8 text-muted-foreground/40" />
-                      <p className="text-sm text-muted-foreground">No recommendations for this device</p>
-                    </div>
-                  ) : (
-                    <ul className="space-y-2">
-                      {visibleRecommendations.map((rec) => (
-                        <li
-                          key={rec.id}
-                          className={cn(
-                            "rounded-md border bg-background/75 p-3 space-y-1.5",
-                            rec.dismissed && "opacity-60",
+                    <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[minmax(0,1.08fr)_minmax(0,0.92fr)]">
+                      <div className="rounded-2xl border border-border/70 bg-background/88 p-4 shadow-sm">
+                        <p className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
+                          Observed Services
+                        </p>
+                        <div className="mt-3 space-y-2.5">
+                          {snapshotServices.length > 0 ? (
+                            snapshotServices.map((service) => (
+                              <div
+                                key={service.id}
+                                className="flex items-start justify-between gap-3 rounded-xl border border-border/60 bg-background/80 px-3 py-2.5"
+                              >
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-medium text-foreground">
+                                    {formatServiceLabel(service.name, service.port)}
+                                  </p>
+                                  <p className="mt-1 truncate text-xs text-muted-foreground">
+                                    {formatServiceDetail(service)}
+                                  </p>
+                                </div>
+                                <span className="shrink-0 rounded-full border border-border/60 bg-muted/50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                                  {service.transport}
+                                </span>
+                              </div>
+                            ))
+                          ) : (
+                            <p className="text-sm text-muted-foreground">No endpoints observed yet.</p>
                           )}
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <p className="text-sm font-medium line-clamp-1">{rec.title}</p>
-                            <Badge
-                              variant={recommendationBadgeVariant(rec.priority)}
-                              className="shrink-0 text-[10px] uppercase"
-                            >
-                              {rec.priority}
-                            </Badge>
+                          {hiddenServiceCount > 0 && (
+                            <p className="text-xs text-muted-foreground">
+                              +{hiddenServiceCount} more endpoint{hiddenServiceCount === 1 ? "" : "s"}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl border border-border/70 bg-background/88 p-4 shadow-sm">
+                        <p className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
+                          Access And Addresses
+                        </p>
+
+                        <div className="mt-3 space-y-3">
+                          <div>
+                            <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                              Protocols
+                            </p>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {snapshotProtocols.map((protocol) => (
+                                <span
+                                  key={protocol}
+                                  className="inline-flex min-h-7 items-center rounded-full border border-border/70 bg-muted/55 px-3 py-1 text-xs font-medium text-foreground"
+                                >
+                                  {formatProtocolChip(protocol)}
+                                </span>
+                              ))}
+                            </div>
                           </div>
-                          <p className="text-xs text-muted-foreground line-clamp-2">{rec.rationale}</p>
-                          <p className="text-[10px] text-muted-foreground/70 line-clamp-1">Impact: {rec.impact}</p>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </CardContent>
-              </Card>
-            </div>
+
+                          {snapshotHostname && snapshotHostname !== device.name && (
+                            <div className="rounded-xl border border-border/60 bg-background/80 px-3 py-2.5">
+                              <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                                Hostname
+                              </p>
+                              <p className="mt-1.5 break-words text-sm font-medium text-foreground">
+                                {snapshotHostname}
+                              </p>
+                            </div>
+                          )}
+
+                          <div className="rounded-xl border border-border/60 bg-background/80 px-3 py-2.5">
+                            <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                              Additional IPs
+                            </p>
+                            {snapshotSecondaryIps.length > 0 ? (
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                {snapshotSecondaryIps.map((ip) => (
+                                  <span
+                                    key={ip}
+                                    className="inline-flex items-center rounded-full border border-border/70 bg-background px-2.5 py-1 font-mono text-[12px] text-foreground"
+                                  >
+                                    {ip}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="mt-1.5 text-sm text-muted-foreground">
+                                No secondary addresses observed.
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <div className="min-h-0">
+                  <Card className="flex h-full min-h-0 flex-col overflow-hidden bg-card/85">
+                    <CardHeader className="pb-3">
+                      <div className="flex items-center gap-2">
+                        <Lightbulb className="size-4 text-muted-foreground" />
+                        <CardTitle className="text-base">Recommendations</CardTitle>
+                        {visibleRecommendations.length > 0 && (
+                          <Badge variant="secondary" className="ml-auto tabular-nums">
+                            {visibleRecommendations.length}
+                          </Badge>
+                        )}
+                      </div>
+                      <CardDescription>Highest-impact next actions for this device</CardDescription>
+                    </CardHeader>
+                    <CardContent className="min-h-0 flex-1 overflow-auto">
+                      {visibleRecommendations.length === 0 ? (
+                        <div className="flex flex-col items-center gap-2 py-6 text-center">
+                          <Lightbulb className="size-8 text-muted-foreground/40" />
+                          <p className="text-sm text-muted-foreground">No recommendations for this device</p>
+                        </div>
+                      ) : (
+                        <ul className="space-y-2">
+                          {visibleRecommendations.map((rec) => (
+                            <li
+                              key={rec.id}
+                              className={cn(
+                                "rounded-md border bg-background/75 p-3 space-y-1.5",
+                                rec.dismissed && "opacity-60",
+                              )}
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <p className="text-sm font-medium line-clamp-1">{rec.title}</p>
+                                <Badge
+                                  variant={recommendationBadgeVariant(rec.priority)}
+                                  className="shrink-0 text-[10px] uppercase"
+                                >
+                                  {rec.priority}
+                                </Badge>
+                              </div>
+                              <p className="text-xs text-muted-foreground line-clamp-2">{rec.rationale}</p>
+                              <p className="text-[10px] text-muted-foreground/70 line-clamp-1">Impact: {rec.impact}</p>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </CardContent>
+                  </Card>
+                </div>
               </div>
             </AnimatedTabPanel>
           </TabsContent>
 
-        <TabsContent value="steward" forceMount className="mt-3 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
-          <AnimatedTabPanel active={activePrimaryTab === "steward"} persistent className="overflow-hidden">
-            <div ref={chatPanelRef} className="h-full min-h-0">
-              <Card className="flex h-full min-h-0 min-w-0 overflow-hidden bg-card/85">
-                <ChatWorkspace
-                  initialDeviceId={device.id}
-                  sessionScope="device"
-                  respectUrlParams={false}
-                  compact
-                  sessionRefreshToken={chatSessionRefreshToken}
-                  preferredSessionId={preferredChatSessionId}
-                />
-              </Card>
-            </div>
-          </AnimatedTabPanel>
-        </TabsContent>
+          <TabsContent value="steward" forceMount className="mt-3 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
+            <AnimatedTabPanel active={activePrimaryTab === "steward"} persistent className="overflow-hidden">
+              <div ref={chatPanelRef} className="h-full min-h-0">
+                <Card className="flex h-full min-h-0 min-w-0 overflow-hidden bg-card/85">
+                  <ChatWorkspace
+                    initialDeviceId={device.id}
+                    sessionScope="device"
+                    respectUrlParams={false}
+                    compact
+                    sessionRefreshToken={chatSessionRefreshToken}
+                    preferredSessionId={preferredChatSessionId}
+                    onWidgetMutation={handleWidgetMutation}
+                  />
+                </Card>
+              </div>
+            </AnimatedTabPanel>
+          </TabsContent>
 
         <TabsContent value="remote" forceMount className="mt-3 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
           <AnimatedTabPanel active={activePrimaryTab === "remote"} persistent className="overflow-hidden">
@@ -831,7 +799,12 @@ export default function DeviceDetailPage() {
         <TabsContent value="widgets" forceMount className="mt-3 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
           <AnimatedTabPanel active={activePrimaryTab === "widgets"} persistent className="overflow-hidden">
             <div className="h-full min-h-0 overflow-hidden">
-              <DeviceWidgetsPanel deviceId={device.id} active={activePrimaryTab === "widgets"} className="h-full" />
+              <DeviceWidgetsPanel
+                deviceId={device.id}
+                active={activePrimaryTab === "widgets"}
+                widgetMutation={latestWidgetMutation}
+                className="h-full"
+              />
             </div>
           </AnimatedTabPanel>
         </TabsContent>

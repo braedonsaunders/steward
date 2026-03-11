@@ -96,6 +96,14 @@ const SshBrokerSchema = z.object({
   port: z.number().int().min(1).max(65535).optional(),
 });
 
+const TelnetBrokerSchema = z.object({
+  protocol: z.literal("telnet"),
+  command: z.string().min(1),
+  host: z.string().min(1).optional(),
+  port: z.number().int().min(1).max(65535).optional(),
+  expectRegex: z.string().optional(),
+});
+
 const WinrmBrokerSchema = z.object({
   protocol: z.literal("winrm"),
   command: z.string().min(1),
@@ -215,6 +223,7 @@ export const WidgetOperationSchema = z.preprocess(normalizeWidgetOperationInput,
   brokerRequest: z.discriminatedUnion("protocol", [
     HttpBrokerSchema,
     SshBrokerSchema,
+    TelnetBrokerSchema,
     WebSocketBrokerSchema,
     MqttBrokerSchema,
     WinrmBrokerSchema,
@@ -340,6 +349,9 @@ function inferAdapterId(input: WidgetOperationInput): string {
   }
   if (input.brokerRequest?.protocol === "ssh") {
     return "ssh";
+  }
+  if (input.brokerRequest?.protocol === "telnet") {
+    return "telnet";
   }
   if (input.brokerRequest?.protocol === "winrm") {
     return "winrm";

@@ -13,6 +13,7 @@ function inferCredentialProtocol(kind: string): string | undefined {
     case "web-session":
       return "http-api";
     case "ssh":
+    case "telnet":
     case "winrm":
     case "powershell-ssh":
     case "wmi":
@@ -175,6 +176,17 @@ export function buildObservedAccessMethods(args: {
       continue;
     }
 
+    if (port === 23 || name.includes("telnet")) {
+      addMethod({
+        kind: "telnet",
+        port,
+        secure: false,
+        summary: service.product ?? "Legacy terminal access over Telnet",
+        metadata,
+      });
+      continue;
+    }
+
     if (port === 5985 || port === 5986 || name.includes("winrm")) {
       addMethod({
         kind: "winrm",
@@ -308,6 +320,7 @@ export function buildObservedAccessMethods(args: {
 
   const protocolFallbacks: Array<{ kind: AccessMethod["kind"] }> = [
     { kind: "ssh" },
+    { kind: "telnet" },
     { kind: "winrm" },
     { kind: "powershell-ssh" },
     { kind: "wmi" },

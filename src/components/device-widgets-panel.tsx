@@ -15,13 +15,14 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { withClientApiToken } from "@/lib/auth/client-token";
-import type { DeviceWidget } from "@/lib/state/types";
+import type { ChatToolWidgetMutation, DeviceWidget } from "@/lib/state/types";
 import { cn } from "@/lib/utils";
 import { DeviceWidgetRuntimeFrame } from "@/components/device-widget-runtime-frame";
 
 interface DeviceWidgetsPanelProps {
   deviceId: string;
   active?: boolean;
+  widgetMutation?: ChatToolWidgetMutation | null;
   className?: string;
 }
 
@@ -78,7 +79,12 @@ function WidgetSurface({
   );
 }
 
-export function DeviceWidgetsPanel({ deviceId, active = false, className }: DeviceWidgetsPanelProps) {
+export function DeviceWidgetsPanel({
+  deviceId,
+  active = false,
+  widgetMutation = null,
+  className,
+}: DeviceWidgetsPanelProps) {
   const [widgets, setWidgets] = useState<DeviceWidget[]>([]);
   const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -93,6 +99,7 @@ export function DeviceWidgetsPanel({ deviceId, active = false, className }: Devi
     setError(null);
     setHasLoaded(false);
     setLoading(true);
+    setRefreshing(false);
     setFullscreen(false);
   }, [deviceId]);
 
@@ -120,8 +127,14 @@ export function DeviceWidgetsPanel({ deviceId, active = false, className }: Devi
     };
   }, [fullscreen]);
 
-  const loadWidgets = useCallback(async () => {
-    setLoading(true);
+  const loadWidgets = useCallback(async (options?: {
+    background?: boolean;
+    preferredWidgetId?: string | null;
+  }) => {
+    const background = options?.background ?? false;
+    if (!background) {
+      setLoading(true);
+    }
     setError(null);
     try {
       const widgetsResponse = await fetch(`/api/devices/${deviceId}/widgets`, withClientApiToken());
@@ -130,8 +143,12 @@ export function DeviceWidgetsPanel({ deviceId, active = false, className }: Devi
         throw new Error(widgetsPayload.error ?? "Failed to load widgets.");
       }
       const nextWidgets = widgetsPayload.widgets ?? [];
+      const preferredWidgetId = options?.preferredWidgetId ?? null;
       setWidgets(nextWidgets);
       setSelectedWidgetId((current) => {
+        if (preferredWidgetId && nextWidgets.some((widget) => widget.id === preferredWidgetId)) {
+          return preferredWidgetId;
+        }
         if (current && nextWidgets.some((widget) => widget.id === current)) {
           return current;
         }
@@ -141,7 +158,9 @@ export function DeviceWidgetsPanel({ deviceId, active = false, className }: Devi
       setError(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
       setHasLoaded(true);
-      setLoading(false);
+      if (!background) {
+        setLoading(false);
+      }
     }
   }, [deviceId]);
 
@@ -155,11 +174,11 @@ export function DeviceWidgetsPanel({ deviceId, active = false, className }: Devi
   const refreshAll = useCallback(async () => {
     setRefreshing(true);
     try {
-      await loadWidgets();
+      await loadWidgets({ background: hasLoaded });
     } finally {
       setRefreshing(false);
     }
-  }, [loadWidgets]);
+  }, [hasLoaded, loadWidgets]);
 
   const deleteSelectedWidget = useCallback(async () => {
     try {
@@ -184,6 +203,30 @@ export function DeviceWidgetsPanel({ deviceId, active = false, className }: Devi
       setError(nextError instanceof Error ? nextError.message : String(nextError));
     }
   }, [deviceId, loadWidgets, selectedWidgetId, widgets]);
+
+  useEffect(() => {
+    if (!widgetMutation || widgetMutation.deviceId !== deviceId) {
+      return;
+    }
+    if (!active && !hasLoaded) {
+      return;
+    }
+
+    let cancelled = false;
+    setRefreshing(true);
+    void loadWidgets({
+      background: hasLoaded,
+      preferredWidgetId: widgetMutation.action === "deleted" ? null : widgetMutation.widgetId,
+    }).finally(() => {
+      if (!cancelled) {
+        setRefreshing(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [active, deviceId, hasLoaded, loadWidgets, widgetMutation]);
 
   const selectedWidget = useMemo(
     () => widgets.find((widget) => widget.id === selectedWidgetId) ?? null,

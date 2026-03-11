@@ -39,6 +39,8 @@ function defaultScope(protocol: string): Record<string, unknown> {
   switch (protocol) {
     case "ssh":
       return { level: "admin", operations: ["shell", "service-control"] };
+    case "telnet":
+      return { level: "admin", operations: ["shell", "legacy-console"] };
     case "winrm":
       return { level: "admin", operations: ["service-control", "eventlog"] };
     case "powershell-ssh":

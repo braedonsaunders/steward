@@ -1,3 +1,4 @@
+import net from "node:net";
 import { interpolateOperationValue } from "@/lib/adapters/execution-template";
 import {
   analyzeWinrmFailure,
@@ -22,7 +23,7 @@ import {
 } from "@/lib/credentials/http-api";
 import { localToolRuntime } from "@/lib/local-tools/runtime";
 import { protocolSessionManager } from "@/lib/protocol-sessions/manager";
-import { protocolDisplayLabel } from "@/lib/protocols/catalog";
+import { normalizeCredentialProtocol, protocolDisplayLabel } from "@/lib/protocols/catalog";
 import { vault } from "@/lib/security/vault";
 import { stateStore } from "@/lib/state/store";
 import { runCommand } from "@/lib/utils/shell";
@@ -55,6 +56,15 @@ export interface BrokerExecutionResult {
   output: string;
   details: Record<string, unknown>;
 }
+
+const TELNET_IAC = 255;
+const TELNET_DONT = 254;
+const TELNET_DO = 253;
+const TELNET_WONT = 252;
+const TELNET_WILL = 251;
+const TELNET_SB = 250;
+const TELNET_SE = 240;
+const TELNET_IDLE_SETTLE_MS = 900;
 
 function brokerResult(input: {
   handled?: boolean;
@@ -100,14 +110,26 @@ function formatCommandOutput(result: { ok: boolean; stdout: string; stderr: stri
   });
 }
 
+interface TrustedSshHostKeyRecord {
+  host: string;
+  port: number;
+  keyId: string;
+  trustedAt: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function getCredentialForBroker(
   deviceId: string,
   protocols: string[],
   allowProvidedCredentials?: boolean,
   adapterId?: string,
 ): { credential?: DeviceCredential; availableStatuses: string[] } {
+  const normalizedProtocols = new Set(protocols.map((protocol) => normalizeCredentialProtocol(protocol)));
   const candidates = stateStore.getDeviceCredentials(deviceId)
-    .filter((credential) => protocols.includes(credential.protocol.toLowerCase()));
+    .filter((credential) => normalizedProtocols.has(normalizeCredentialProtocol(credential.protocol)));
 
   const priority = ["validated", "provided", "invalid", "pending"] as const;
   const adapterPreference = (credential: DeviceCredential): number => {
@@ -140,6 +162,103 @@ function getCredentialForBroker(
       ?? (allowProvidedCredentials ? candidates.find((credential) => credential.status === "provided") : undefined),
     availableStatuses: Array.from(new Set(candidates.map((credential) => credential.status))),
   };
+}
+
+function readTrustedSshHostKeys(device: Device): TrustedSshHostKeyRecord[] {
+  const raw = device.metadata.trustedSshHostKeys;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  return raw.flatMap((entry) => {
+    if (!isRecord(entry)) {
+      return [];
+    }
+    const host = typeof entry.host === "string" ? entry.host.trim().toLowerCase() : "";
+    const port = Number(entry.port);
+    const keyId = typeof entry.keyId === "string" ? entry.keyId.trim() : "";
+    const trustedAt = typeof entry.trustedAt === "string" && entry.trustedAt.trim().length > 0
+      ? entry.trustedAt
+      : new Date(0).toISOString();
+    if (!host || !Number.isInteger(port) || port <= 0 || !keyId) {
+      return [];
+    }
+    return [{ host, port, keyId, trustedAt }];
+  });
+}
+
+function findTrustedSshHostKey(device: Device, host: string, port: number): string | undefined {
+  const hostCandidates = new Set(
+    [
+      host,
+      device.ip,
+      device.hostname,
+      ...(device.secondaryIps ?? []),
+    ]
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .map((value) => value.trim().toLowerCase()),
+  );
+  return readTrustedSshHostKeys(device)
+    .find((entry) => entry.port === port && hostCandidates.has(entry.host))
+    ?.keyId;
+}
+
+function parsePlinkUnknownHostKey(output: string): string | undefined {
+  if (!/cannot confirm a host key in batch mode/i.test(output)) {
+    return undefined;
+  }
+
+  const normalized = output.replace(/\r\n/g, "\n");
+  const fingerprintMatch = normalized.match(/^\s*(ssh-[^\s]+\s+(?:\d+\s+)?(?:SHA256:[A-Za-z0-9+/=]+|MD5:[0-9a-f:]+))\s*$/im);
+  return fingerprintMatch?.[1]?.trim();
+}
+
+async function persistTrustedSshHostKey(
+  device: Device,
+  host: string,
+  port: number,
+  keyId: string,
+  actor: BrokerExecutionContext["actor"],
+): Promise<void> {
+  const normalizedHost = host.trim().toLowerCase();
+  const existing = readTrustedSshHostKeys(device);
+  if (existing.some((entry) => entry.host === normalizedHost && entry.port === port && entry.keyId === keyId)) {
+    return;
+  }
+
+  const trustedAt = new Date().toISOString();
+  const updatedDevice: Device = {
+    ...device,
+    lastChangedAt: trustedAt,
+    metadata: {
+      ...device.metadata,
+      trustedSshHostKeys: [
+        ...existing.filter((entry) => !(entry.host === normalizedHost && entry.port === port)),
+        {
+          host: normalizedHost,
+          port,
+          keyId,
+          trustedAt,
+        },
+      ],
+    },
+  };
+
+  await stateStore.upsertDevice(updatedDevice);
+  device.metadata = updatedDevice.metadata;
+  device.lastChangedAt = trustedAt;
+  await stateStore.addAction({
+    actor,
+    kind: "config",
+    message: `Trusted SSH host key for ${device.name}`,
+    context: {
+      deviceId: device.id,
+      host: normalizedHost,
+      port,
+      keyId,
+      trustModel: "first-use",
+    },
+  });
 }
 
 function winrmFailureCacheKey(input: {
@@ -607,38 +726,58 @@ async function runSshCommandWithCredential(input: {
   const remoteArgs = typeof input.remoteCommand === "string" && input.remoteCommand.trim().length > 0
     ? [input.remoteCommand]
     : input.argv;
-  const result = process.platform === "win32"
-    ? formatCommandOutput(await runCommand(
-      "plink",
-      [
-        "-batch",
-        "-ssh",
-        "-l",
-        input.accountLabel,
-        ...(input.port && input.port !== 22 ? ["-P", String(input.port)] : []),
-        input.host,
-        "-pw",
-        input.secret,
-        ...remoteArgs,
-      ],
-      input.operation.timeoutMs,
-    ))
-    : formatCommandOutput(await runCommand(
-      "sshpass",
-      [
-        "-p",
-        input.secret,
-        "ssh",
-        "-l",
-        input.accountLabel,
-        ...(input.port && input.port !== 22 ? ["-p", String(input.port)] : []),
-        "-o",
-        "StrictHostKeyChecking=no",
-        input.host,
-        ...remoteArgs,
-      ],
-      input.operation.timeoutMs,
-    ));
+  const port = input.port ?? 22;
+  const executeSsh = (trustedHostKey?: string) => (
+    process.platform === "win32"
+      ? runCommand(
+        "plink",
+        [
+          "-batch",
+          "-ssh",
+          ...(trustedHostKey ? ["-hostkey", trustedHostKey] : []),
+          "-l",
+          input.accountLabel,
+          ...(port !== 22 ? ["-P", String(port)] : []),
+          input.host,
+          "-pw",
+          input.secret,
+          ...remoteArgs,
+        ],
+        input.operation.timeoutMs,
+      )
+      : runCommand(
+        "sshpass",
+        [
+          "-p",
+          input.secret,
+          "ssh",
+          "-l",
+          input.accountLabel,
+          ...(port !== 22 ? ["-p", String(port)] : []),
+          "-o",
+          "StrictHostKeyChecking=no",
+          input.host,
+          ...remoteArgs,
+        ],
+        input.operation.timeoutMs,
+      )
+  );
+
+  let trustedHostKey = findTrustedSshHostKey(input.device, input.host, port);
+  let trustedHostKeySource: "stored" | "observed" | undefined = trustedHostKey ? "stored" : undefined;
+  let rawResult = await executeSsh(trustedHostKey);
+
+  if (process.platform === "win32" && !trustedHostKey) {
+    const discoveredHostKey = parsePlinkUnknownHostKey(`${rawResult.stdout}\n${rawResult.stderr}`.trim());
+    if (discoveredHostKey) {
+      await persistTrustedSshHostKey(input.device, input.host, port, discoveredHostKey, input.context.actor);
+      trustedHostKey = discoveredHostKey;
+      trustedHostKeySource = "observed";
+      rawResult = await executeSsh(discoveredHostKey);
+    }
+  }
+
+  const result = formatCommandOutput(rawResult);
 
   if (result.ok) {
     await markCredentialValidatedFromUse({
@@ -646,11 +785,292 @@ async function runSshCommandWithCredential(input: {
       credentialId: input.credential.id,
       actor: input.context.actor,
       method: input.validationMethod,
-      details: input.validationDetails,
+      details: {
+        ...input.validationDetails,
+        host: input.host,
+        port,
+        ...(trustedHostKey
+          ? {
+            sshHostKey: trustedHostKey,
+            sshHostKeySource: trustedHostKeySource,
+          }
+          : {}),
+      },
     });
   }
 
-  return result;
+  return {
+    ...result,
+    details: {
+      ...result.details,
+      host: input.host,
+      port,
+      ...(trustedHostKey
+        ? {
+          sshHostKey: trustedHostKey,
+          sshHostKeySource: trustedHostKeySource,
+        }
+        : {}),
+    },
+  };
+}
+
+function parseTelnetChunk(input: Buffer): { text: string; responses: Buffer[]; remainder: Buffer } {
+  const textBytes: number[] = [];
+  const responses: Buffer[] = [];
+  let index = 0;
+
+  while (index < input.length) {
+    const byte = input[index];
+    if (byte !== TELNET_IAC) {
+      textBytes.push(byte);
+      index += 1;
+      continue;
+    }
+
+    if (index + 1 >= input.length) {
+      return {
+        text: Buffer.from(textBytes).toString("utf-8"),
+        responses,
+        remainder: input.subarray(index),
+      };
+    }
+
+    const command = input[index + 1];
+    if (command === TELNET_IAC) {
+      textBytes.push(TELNET_IAC);
+      index += 2;
+      continue;
+    }
+
+    if (command === TELNET_SB) {
+      let cursor = index + 2;
+      let foundEnd = false;
+      while (cursor + 1 < input.length) {
+        if (input[cursor] === TELNET_IAC && input[cursor + 1] === TELNET_SE) {
+          cursor += 2;
+          foundEnd = true;
+          break;
+        }
+        cursor += 1;
+      }
+      if (!foundEnd) {
+        return {
+          text: Buffer.from(textBytes).toString("utf-8"),
+          responses,
+          remainder: input.subarray(index),
+        };
+      }
+      index = cursor;
+      continue;
+    }
+
+    if ([TELNET_DO, TELNET_DONT, TELNET_WILL, TELNET_WONT].includes(command)) {
+      if (index + 2 >= input.length) {
+        return {
+          text: Buffer.from(textBytes).toString("utf-8"),
+          responses,
+          remainder: input.subarray(index),
+        };
+      }
+      const option = input[index + 2];
+      if (command === TELNET_DO) {
+        responses.push(Buffer.from([TELNET_IAC, TELNET_WONT, option]));
+      } else if (command === TELNET_WILL) {
+        responses.push(Buffer.from([TELNET_IAC, TELNET_DONT, option]));
+      }
+      index += 3;
+      continue;
+    }
+
+    index += 2;
+  }
+
+  return {
+    text: Buffer.from(textBytes).toString("utf-8"),
+    responses,
+    remainder: Buffer.alloc(0),
+  };
+}
+
+function telnetLooksLikePrompt(output: string): boolean {
+  const tail = output.replace(/\r/g, "").split("\n").slice(-1)[0]?.trim() ?? "";
+  if (tail.length === 0 || tail.length > 64) {
+    return false;
+  }
+  return /(?:[$#>%])\s*$/.test(tail);
+}
+
+function stripTelnetPrompt(output: string): string {
+  const normalized = output.replace(/\r\n/g, "\n").trimEnd();
+  const lines = normalized.split("\n");
+  const tail = lines[lines.length - 1]?.trim() ?? "";
+  if (tail.length > 0 && tail.length <= 64 && /(?:[$#>%])\s*$/.test(tail)) {
+    lines.pop();
+  }
+  return lines.join("\n").trim();
+}
+
+async function runTelnetCommandWithCredential(input: {
+  operation: OperationSpec;
+  device: Device;
+  context: BrokerExecutionContext;
+  credential: DeviceCredential;
+  accountLabel?: string;
+  secret: string;
+  host: string;
+  command: string;
+  port?: number;
+  validationMethod: string;
+  validationDetails: Record<string, unknown>;
+}): Promise<BrokerExecutionResult> {
+  const port = input.port ?? 23;
+  const targetHost = input.host;
+  const command = input.command.trim();
+  const username = input.accountLabel?.trim() ?? "";
+
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let settled = false;
+    let rawOutput = "";
+    let negotiationRemainder: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+    let usernameSent = false;
+    let passwordSent = false;
+    let commandSent = false;
+    let idleTimer: NodeJS.Timeout | null = null;
+
+    const finish = async (result: BrokerExecutionResult) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+      }
+      socket.destroy();
+      if (result.ok) {
+        await markCredentialValidatedFromUse({
+          deviceId: input.device.id,
+          credentialId: input.credential.id,
+          actor: input.context.actor,
+          method: input.validationMethod,
+          details: input.validationDetails,
+        });
+      }
+      resolve(result);
+    };
+
+    const fail = (summary: string, output: string, details?: Record<string, unknown>) => {
+      void finish(
+        brokerResult({
+          status: "failed",
+          phase: commandSent ? "executed" : "not-started",
+          proof: commandSent ? "process" : "none",
+          summary,
+          output: output.trim(),
+          details,
+        }),
+      );
+    };
+
+    const scheduleIdleCompletion = () => {
+      if (!commandSent) {
+        return;
+      }
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+      }
+      idleTimer = setTimeout(() => {
+        void finish(
+          brokerResult({
+            status: "succeeded",
+            phase: "executed",
+            proof: "process",
+            summary: "Telnet command completed successfully",
+            output: stripTelnetPrompt(rawOutput),
+            details: {
+              host: targetHost,
+              port,
+              credentialId: input.credential.id,
+            },
+          }),
+        );
+      }, Math.min(TELNET_IDLE_SETTLE_MS, Math.max(350, Math.floor(input.operation.timeoutMs / 8))));
+    };
+
+    const sendLine = (value: string) => {
+      socket.write(`${value}\r\n`);
+    };
+
+    socket.setTimeout(input.operation.timeoutMs, () => {
+      fail(
+        commandSent ? "Telnet command timed out" : "Telnet session timed out",
+        stripTelnetPrompt(rawOutput) || "Timed out while waiting for the Telnet session to complete.",
+        { host: targetHost, port, credentialId: input.credential.id },
+      );
+    });
+
+    socket.on("error", (error) => {
+      fail(
+        "Telnet connection failed",
+        `${stripTelnetPrompt(rawOutput)}\n${error.message}`.trim(),
+        { host: targetHost, port, credentialId: input.credential.id },
+      );
+    });
+
+    socket.on("data", (chunk) => {
+      const combined = negotiationRemainder.length > 0 ? Buffer.concat([negotiationRemainder, chunk]) : chunk;
+      const parsed = parseTelnetChunk(combined);
+      negotiationRemainder = parsed.remainder;
+      for (const response of parsed.responses) {
+        socket.write(response);
+      }
+      if (parsed.text.length > 0) {
+        rawOutput += parsed.text;
+      }
+
+      const normalizedTail = rawOutput.replace(/\r/g, "").slice(-400).toLowerCase();
+      if (/login incorrect|authentication failed|access denied|incorrect password/.test(normalizedTail)) {
+        fail(
+          "Telnet authentication failed",
+          stripTelnetPrompt(rawOutput),
+          { host: targetHost, port, credentialId: input.credential.id },
+        );
+        return;
+      }
+
+      if (!usernameSent && /(login(?: as)?|username)\s*[:>]?\s*$/i.test(normalizedTail)) {
+        if (username.length === 0) {
+          fail(
+            "Telnet username is required",
+            stripTelnetPrompt(rawOutput) || "The Telnet service requested a username, but the stored Telnet credential has no accountLabel.",
+            { credentialId: input.credential.id },
+          );
+          return;
+        }
+        sendLine(username);
+        usernameSent = true;
+        return;
+      }
+
+      if (!passwordSent && /password\s*[:>]?\s*$/i.test(normalizedTail)) {
+        sendLine(input.secret);
+        passwordSent = true;
+        return;
+      }
+
+      if (!commandSent && telnetLooksLikePrompt(rawOutput)) {
+        sendLine(command);
+        commandSent = true;
+        scheduleIdleCompletion();
+        return;
+      }
+
+      scheduleIdleCompletion();
+    });
+
+    socket.connect(port, targetHost);
+  });
 }
 
 function shellEscapeSingleQuoted(value: string): string {
@@ -798,6 +1218,112 @@ async function executeSshBroker(
     port: broker.port,
     validationMethod: "ssh.command",
     validationDetails: { adapterId: operation.adapterId, operationId: operation.id },
+  });
+}
+
+async function executeTelnetBroker(
+  operation: OperationSpec,
+  device: Device,
+  params: Record<string, string>,
+  context: BrokerExecutionContext,
+): Promise<BrokerExecutionResult> {
+  const broker = operation.brokerRequest;
+  if (!broker || broker.protocol !== "telnet") {
+    return brokerResult({
+      handled: false,
+      status: "failed",
+      phase: "not-started",
+      proof: "none",
+      summary: "Telnet broker not applicable",
+      output: "",
+    });
+  }
+
+  const { credential, availableStatuses } = getCredentialForBroker(
+    device.id,
+    ["telnet"],
+    context.allowProvidedCredentials,
+    operation.adapterId,
+  );
+  if (!credential) {
+    logCredentialAccess(
+      context,
+      operation,
+      device,
+      "telnet",
+      availableStatuses.length > 0 ? "credential_unusable" : "no_stored_credential",
+      {
+        allowedStatuses: ["pending", "provided", "validated", "invalid"],
+        availableStatuses,
+      },
+    );
+    return brokerResult({
+      status: "failed",
+      phase: "not-started",
+      proof: "none",
+      summary: "Telnet credential required",
+      output: "Telnet broker requires a stored Telnet credential.",
+      details: { availableStatuses },
+    });
+  }
+
+  const secret = await vault.getSecret(credential.vaultSecretRef);
+  if (!secret || secret.trim().length === 0) {
+    logCredentialAccess(context, operation, device, "telnet", "missing_secret", {
+      accountLabel: credential.accountLabel ?? null,
+      credentialStatus: credential.status,
+    }, credential.id);
+    return brokerResult({
+      status: "failed",
+      phase: "not-started",
+      proof: "none",
+      summary: "Telnet secret missing",
+      output: "Stored Telnet credential is missing a usable secret.",
+      details: { credentialId: credential.id },
+    });
+  }
+
+  const targetHost = typeof broker.host === "string" && broker.host.trim().length > 0
+    ? broker.host.trim()
+    : device.ip;
+  const command = interpolateOperationValue(broker.command, targetHost, params);
+
+  logCredentialAccess(context, operation, device, "telnet", "granted", {
+    accountLabel: credential.accountLabel ?? null,
+    credentialStatus: credential.status,
+    host: targetHost,
+    port: broker.port ?? 23,
+  }, credential.id);
+
+  const telnetResult = await runTelnetCommandWithCredential({
+    operation,
+    device,
+    context,
+    credential,
+    accountLabel: credential.accountLabel,
+    secret,
+    host: targetHost,
+    command,
+    port: broker.port,
+    validationMethod: "telnet.command",
+    validationDetails: {
+      adapterId: operation.adapterId,
+      operationId: operation.id,
+      host: targetHost,
+      port: broker.port ?? 23,
+    },
+  });
+  if (!telnetResult.ok) {
+    return {
+      ...telnetResult,
+      summary: "Telnet command failed",
+    };
+  }
+  return applyExpectationToOutput({
+    protocol: "telnet",
+    output: telnetResult.output,
+    expectRegex: broker.expectRegex,
+    details: telnetResult.details,
   });
 }
 
@@ -2373,6 +2899,10 @@ export async function executeBrokerOperation(
 
   if (operation.brokerRequest.protocol === "ssh") {
     return executeSshBroker(operation, device, params, context);
+  }
+
+  if (operation.brokerRequest.protocol === "telnet") {
+    return executeTelnetBroker(operation, device, params, context);
   }
 
   if (operation.brokerRequest.protocol === "http") {

@@ -418,7 +418,12 @@ function selectedProfileIdsForDraft(
   existing: DeviceProfileBinding[],
   draft: OnboardingDraft | null,
 ): string[] {
-  const available = new Set(matches.map((match) => match.profileId));
+  const available = new Set([
+    ...matches.map((match) => match.profileId),
+    ...existing
+      .filter((binding) => isRecord(binding.draftJson) && binding.draftJson.manualBinding === true)
+      .map((binding) => binding.profileId),
+  ]);
   const fromDraft = draft
     ? draft.selectedProfileIds.filter((profileId) => available.has(profileId))
     : [];
@@ -466,8 +471,37 @@ function buildProfileBindings(args: {
 
   for (const match of args.matches) {
     const existing = existingByProfileId.get(match.profileId);
+    const draftJson = isRecord(existing?.draftJson) ? existing.draftJson : {};
     const stickyStatus = existing?.status === "active" || existing?.status === "verified"
       ? existing.status
+      : undefined;
+    const manuallyRejected = draftJson.manuallyRejected === true;
+    const overrideName = typeof draftJson.manualName === "string" && draftJson.manualName.trim().length > 0
+      ? draftJson.manualName.trim()
+      : undefined;
+    const overrideSummary = typeof draftJson.manualSummary === "string" && draftJson.manualSummary.trim().length > 0
+      ? draftJson.manualSummary.trim()
+      : undefined;
+    const overrideKind = draftJson.manualKind === "primary" || draftJson.manualKind === "fallback" || draftJson.manualKind === "supporting"
+      ? draftJson.manualKind as DeviceProfileBinding["kind"]
+      : undefined;
+    const overrideRequiredAccessMethods = Array.isArray(draftJson.manualRequiredAccessMethods)
+      ? dedupeByKey(
+        draftJson.manualRequiredAccessMethods
+          .filter((item): item is string => typeof item === "string")
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0),
+        (item) => item,
+      )
+      : undefined;
+    const overrideRequiredCredentialProtocols = Array.isArray(draftJson.manualRequiredCredentialProtocols)
+      ? dedupeByKey(
+        draftJson.manualRequiredCredentialProtocols
+          .filter((item): item is string => typeof item === "string")
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0),
+        (item) => item,
+      )
       : undefined;
 
     bindings.push({
@@ -475,18 +509,25 @@ function buildProfileBindings(args: {
       deviceId: args.deviceId,
       profileId: match.profileId,
       adapterId: match.adapterId,
-      name: match.name ?? match.profileId,
-      kind: (match.kind ?? "primary") as DeviceProfileBinding["kind"],
+      name: overrideName ?? match.name ?? match.profileId,
+      kind: overrideKind ?? (match.kind ?? "primary") as DeviceProfileBinding["kind"],
       confidence: Math.max(0, Math.min(1, match.confidence ?? 0)),
-      status: stickyStatus ?? (selected.has(match.profileId) ? (args.completed ? "active" : "selected") : "candidate"),
-      summary: match.summary,
-      requiredAccessMethods: dedupeByKey(match.requiredAccessMethods ?? [], (item) => item),
-      requiredCredentialProtocols: dedupeByKey(match.requiredCredentialProtocols ?? [], (item) => item),
+      status: stickyStatus ?? (
+        selected.has(match.profileId)
+          ? (args.completed ? "active" : "selected")
+          : manuallyRejected
+            ? "rejected"
+            : "candidate"
+      ),
+      summary: overrideSummary ?? match.summary,
+      requiredAccessMethods: overrideRequiredAccessMethods ?? dedupeByKey(match.requiredAccessMethods ?? [], (item) => item),
+      requiredCredentialProtocols: overrideRequiredCredentialProtocols ?? dedupeByKey(match.requiredCredentialProtocols ?? [], (item) => item),
       evidenceJson: {
         ...(existing?.evidenceJson ?? {}),
         ...(match.evidence ?? {}),
       },
       draftJson: {
+        ...draftJson,
         defaultWorkloads: match.defaultWorkloads ?? existing?.draftJson.defaultWorkloads ?? [],
         defaultAssurances: match.defaultAssurances ?? existing?.draftJson.defaultAssurances ?? [],
       },
@@ -499,12 +540,23 @@ function buildProfileBindings(args: {
     if (bindings.some((binding) => binding.profileId === existing.profileId)) {
       continue;
     }
-    if (!["active", "verified", "selected"].includes(existing.status)) {
+    const draftJson = isRecord(existing.draftJson) ? existing.draftJson : {};
+    if (!(draftJson.manualBinding === true || ["active", "verified", "selected"].includes(existing.status))) {
       continue;
     }
     bindings.push({
       ...existing,
-      status: args.completed ? existing.status : "selected",
+      status: draftJson.manualBinding === true
+        ? (
+          existing.status === "active" || existing.status === "verified"
+            ? existing.status
+            : existing.status === "rejected"
+              ? "rejected"
+              : args.completed
+                ? existing.status
+                : "selected"
+        )
+        : (args.completed ? existing.status : "selected"),
       updatedAt: now,
     });
   }

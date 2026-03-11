@@ -57,6 +57,13 @@ const OperationSchema = z.object({
       }
     }),
     z.object({
+      protocol: z.literal("telnet"),
+      command: z.string().min(1),
+      host: z.string().min(1).optional(),
+      port: z.number().int().min(1).max(65535).optional(),
+      expectRegex: z.string().optional(),
+    }),
+    z.object({
       protocol: z.literal("http"),
       method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
       scheme: z.enum(["http", "https"]).optional(),

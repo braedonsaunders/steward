@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { withClientApiToken } from "@/lib/auth/client-token";
 import { cn } from "@/lib/utils";
 
-type TerminalTransport = "ssh" | "winrm" | "powershell-ssh";
+type TerminalTransport = "ssh" | "telnet" | "winrm" | "powershell-ssh";
 
 interface TerminalBootstrapResponse {
   available: boolean;
@@ -45,6 +45,9 @@ interface DeviceRemoteTerminalProps {
 }
 
 function promptForTransport(transport?: TerminalTransport, cwd?: string): string {
+  if (transport === "telnet") {
+    return "telnet>";
+  }
   const location = cwd?.trim().length ? cwd.trim() : transport === "ssh" ? "~" : "PS";
   return transport === "ssh" ? `${location} $` : `${location}>`;
 }

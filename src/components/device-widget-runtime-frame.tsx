@@ -102,7 +102,7 @@ function buildWidgetDocument(args: {
         let requestCounter = 0;
         let context = bootstrap.context;
         let persistedState = bootstrap.state;
-        let layoutMode = "content";
+        let layoutMode = "scroll";
         const capabilities = Array.isArray(bootstrap.capabilities) ? bootstrap.capabilities : [];
         const controls = Array.isArray(bootstrap.controls) ? bootstrap.controls : [];
 
@@ -510,6 +510,7 @@ function buildWidgetDocument(args: {
         });
 
         applyLayoutMode(layoutMode);
+        postToHost({ type: "layout", mode: layoutMode });
         scheduleResize();
       })();
     `),
@@ -582,7 +583,7 @@ export function DeviceWidgetRuntimeFrame({
   const [runtimeState, setRuntimeState] = useState<Record<string, unknown>>({});
   const [runtimeLoading, setRuntimeLoading] = useState(true);
   const [frameHeight, setFrameHeight] = useState(640);
-  const [frameLayoutMode, setFrameLayoutMode] = useState<WidgetFrameLayoutMode>("content");
+  const [frameLayoutMode, setFrameLayoutMode] = useState<WidgetFrameLayoutMode>("scroll");
   const [frameStatus, setFrameStatus] = useState("Ready");
   const [frameError, setFrameError] = useState<string | null>(null);
   const [bootSnapshot, setBootSnapshot] = useState<{ context: DeviceWidgetContext; state: Record<string, unknown> } | null>(null);
@@ -701,7 +702,7 @@ export function DeviceWidgetRuntimeFrame({
     setFrameStatus("Ready");
     setFrameError(null);
     setFrameHeight(640);
-    setFrameLayoutMode("content");
+    setFrameLayoutMode("scroll");
     setBootSnapshot(null);
     void Promise.all([
       loadContext(),

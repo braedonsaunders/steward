@@ -2,6 +2,7 @@ import type { Device } from "@/lib/state/types";
 
 export const SUPPORTED_CREDENTIAL_PROTOCOLS = [
   "ssh",
+  "telnet",
   "winrm",
   "powershell-ssh",
   "wmi",
@@ -34,6 +35,8 @@ export function protocolDisplayLabel(protocol: string): string {
       return "Managed Web UI Session";
     case "ssh":
       return "SSH";
+    case "telnet":
+      return "Telnet";
     case "winrm":
       return "WinRM";
     case "powershell-ssh":

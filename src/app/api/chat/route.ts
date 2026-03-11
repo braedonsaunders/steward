@@ -25,7 +25,13 @@ import { buildLanguageModel } from "@/lib/llm/providers";
 import { getDataDir } from "@/lib/state/db";
 import { getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
 import { stateStore } from "@/lib/state/store";
-import type { ChatMessageMetadata, ChatToolEvent, ChatToolEventKind, LLMProvider } from "@/lib/state/types";
+import type {
+  ChatMessageMetadata,
+  ChatToolEvent,
+  ChatToolEventKind,
+  ChatToolWidgetMutation,
+  LLMProvider,
+} from "@/lib/state/types";
 import { generateAndStoreDeviceWidget } from "@/lib/widgets/generator";
 
 const CHAT_MAX_OUTPUT_TOKENS = 8_000;
@@ -340,6 +346,53 @@ function previewValue(value: unknown, maxChars = 900): string | undefined {
     } catch {
       return undefined;
     }
+  }
+
+  return undefined;
+}
+
+function extractWidgetMutation(
+  output: Record<string, unknown>,
+  toolName?: string,
+): ChatToolWidgetMutation | undefined {
+  if (output.ok === false) {
+    return undefined;
+  }
+
+  const tool = toolName ?? "";
+  if (tool !== "steward_manage_widget" && tool !== "steward_control_widget") {
+    return undefined;
+  }
+
+  const deviceId = typeof output.deviceId === "string" ? output.deviceId : undefined;
+  if (!deviceId) {
+    return undefined;
+  }
+
+  const widgetRecord = isRecord(output.widget) ? output.widget : null;
+  const widgetId = widgetRecord && typeof widgetRecord.id === "string" ? widgetRecord.id : undefined;
+  const widgetSlug = widgetRecord && typeof widgetRecord.slug === "string"
+    ? widgetRecord.slug
+    : typeof output.deletedWidgetSlug === "string"
+      ? output.deletedWidgetSlug
+      : undefined;
+
+  if (typeof output.updatedExisting === "boolean" && widgetId) {
+    return {
+      action: output.updatedExisting ? "updated" : "created",
+      deviceId,
+      widgetId,
+      widgetSlug,
+    };
+  }
+
+  if (typeof output.deletedWidgetId === "string") {
+    return {
+      action: "deleted",
+      deviceId,
+      widgetId: output.deletedWidgetId,
+      widgetSlug,
+    };
   }
 
   return undefined;
@@ -1264,6 +1317,9 @@ export async function POST(request: NextRequest) {
           });
 
         const execution = summarizeToolExecution(output, "steward_manage_widget");
+        const widgetMutation = isRecord(output)
+          ? extractWidgetMutation(output, "steward_manage_widget")
+          : undefined;
         const toolEvent: ChatToolEvent = {
           id: toolEventId,
           toolName: "steward_manage_widget",
@@ -1276,6 +1332,7 @@ export async function POST(request: NextRequest) {
           summary: execution.summary,
           outputPreview: execution.outputPreview,
           error: execution.status === "failed" ? execution.summary : undefined,
+          widgetMutation,
         };
 
         const assistantText = buildDirectWidgetResponse(output, execution.summary);
@@ -1673,6 +1730,9 @@ export async function POST(request: NextRequest) {
 
           if (chunk.type === "tool-result") {
             const execution = summarizeToolExecution(chunk.output, chunk.toolName);
+            const widgetMutation = isRecord(chunk.output)
+              ? extractWidgetMutation(chunk.output, chunk.toolName)
+              : undefined;
             const inputPreview = previewValue(chunk.input, 700);
             const current = currentToolEvent(chunk.toolCallId);
             const label = current?.label
@@ -1692,6 +1752,7 @@ export async function POST(request: NextRequest) {
               summary: execution.summary,
               outputPreview: execution.outputPreview,
               error: execution.status === "failed" ? execution.summary : undefined,
+              widgetMutation,
             });
             emitToolEvent(event);
             const line = `[tool] ${chunk.toolName}: ${execution.summary}\n`;
