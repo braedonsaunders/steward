@@ -1,4 +1,5 @@
 import { getProviderConfig } from "@/lib/llm/config";
+import { listOpenAIOAuthModels } from "@/lib/llm/openai-oauth-models";
 import { getProviderMeta } from "@/lib/llm/registry";
 import { vault } from "@/lib/security/vault";
 import type { LLMProvider } from "@/lib/state/types";
@@ -92,6 +93,10 @@ function modelCacheKey(provider: LLMProvider, baseUrl?: string): string {
   return `${provider}:${baseUrl ?? ""}`;
 }
 
+function looksLikeJwtToken(token: string): boolean {
+  return token.split(".").length === 3;
+}
+
 async function fetchOpenAICompatibleModels(
   provider: LLMProvider,
   baseUrl: string,
@@ -103,6 +108,55 @@ async function fetchOpenAICompatibleModels(
 
   const payload = await fetchJson(url, { headers });
   return parseModelIds(payload);
+}
+
+async function fetchOpenAIModels(options?: {
+  tokenOverride?: string;
+  baseUrl?: string;
+}): Promise<string[]> {
+  const explicitToken = options?.tokenOverride?.trim();
+  const apiKey = explicitToken
+    ? (looksLikeJwtToken(explicitToken) ? undefined : explicitToken)
+    : await vault.getSecret("llm.api.openai.key");
+
+  if (apiKey) {
+    return fetchOpenAICompatibleModels(
+      "openai",
+      options?.baseUrl ?? "https://api.openai.com/v1",
+      apiKey,
+    );
+  }
+
+  const oauthToken = explicitToken
+    ? (looksLikeJwtToken(explicitToken) ? explicitToken : undefined)
+    : await vault.getSecret("llm.oauth.openai.access_token");
+
+  if (oauthToken) {
+    return listOpenAIOAuthModels();
+  }
+
+  throw new Error("OpenAI credentials are required to retrieve models.");
+}
+
+async function resolveOpenAIModelCacheMode(
+  tokenOverride?: string,
+): Promise<"api-key" | "oauth" | "missing"> {
+  const explicitToken = tokenOverride?.trim();
+  if (explicitToken) {
+    return looksLikeJwtToken(explicitToken) ? "oauth" : "api-key";
+  }
+
+  const apiKey = await vault.getSecret("llm.api.openai.key");
+  if (apiKey) {
+    return "api-key";
+  }
+
+  const oauthToken = await vault.getSecret("llm.oauth.openai.access_token");
+  if (oauthToken) {
+    return "oauth";
+  }
+
+  return "missing";
 }
 
 async function fetchGoogleModels(options?: {
@@ -202,6 +256,25 @@ export function normalizeProviderModel(provider: LLMProvider, model?: string): s
   return `claude-${family.toLowerCase()}-${major}-${minor}`;
 }
 
+const OPENAI_REASONING_MODEL_PATTERN = /^(gpt-5(?:[.-]|$)|o1(?:[.-]|$)|o3(?:[.-]|$)|o4(?:[.-]|$))/i;
+const DEEPSEEK_REASONING_MODEL_PATTERN = /^deepseek-reasoner$/i;
+
+export function modelSupportsTemperature(provider: LLMProvider, model?: string): boolean {
+  const normalizedModel = normalizeProviderModel(provider, model)?.toLowerCase() ?? "";
+  if (!normalizedModel) {
+    return true;
+  }
+
+  switch (provider) {
+    case "openai":
+      return !OPENAI_REASONING_MODEL_PATTERN.test(normalizedModel);
+    case "deepseek":
+      return !DEEPSEEK_REASONING_MODEL_PATTERN.test(normalizedModel);
+    default:
+      return true;
+  }
+}
+
 export async function listProviderModelsFromApi(
   provider: LLMProvider,
   options?: { forceRefresh?: boolean; tokenOverride?: string; baseUrlOverride?: string },
@@ -210,7 +283,13 @@ export async function listProviderModelsFromApi(
   const meta = getProviderMeta(provider);
   const token = await resolveProviderToken(provider, options?.tokenOverride);
   const baseUrl = options?.baseUrlOverride ?? config?.baseUrl ?? meta?.defaultBaseUrl;
-  const cacheKey = modelCacheKey(provider, baseUrl);
+  const cacheMode = provider === "openai"
+    ? await resolveOpenAIModelCacheMode(options?.tokenOverride)
+    : undefined;
+  const cacheKey = modelCacheKey(
+    provider,
+    cacheMode ? `${baseUrl ?? ""}:${cacheMode}` : baseUrl,
+  );
   const forceRefresh = options?.forceRefresh === true;
 
   if (!forceRefresh) {
@@ -247,10 +326,10 @@ export async function listProviderModelsFromApi(
       break;
     }
     case "openai": {
-      if (!token) {
-        throw new Error("OpenAI credentials are required to retrieve models.");
-      }
-      models = await fetchOpenAICompatibleModels(provider, baseUrl ?? "https://api.openai.com/v1", token);
+      models = await fetchOpenAIModels({
+        tokenOverride: options?.tokenOverride ?? token,
+        baseUrl: baseUrl ?? "https://api.openai.com/v1",
+      });
       break;
     }
     case "mistral": {

@@ -4,15 +4,24 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createGroq } from "@ai-sdk/groq";
 import { createMistral } from "@ai-sdk/mistral";
 import { createOpenAI } from "@ai-sdk/openai";
+import type { LanguageModelV3, LanguageModelV3Middleware } from "@ai-sdk/provider";
 import { createXai } from "@ai-sdk/xai";
-import type { LanguageModel } from "ai";
+import {
+  defaultSettingsMiddleware,
+  type LanguageModel,
+  wrapLanguageModel,
+} from "ai";
 import {
   extractChatGPTAccountId,
   refreshAnthropicToken,
   refreshOpenAIToken,
 } from "@/lib/auth/oauth";
 import { getProviderConfig } from "@/lib/llm/config";
-import { normalizeProviderModel } from "@/lib/llm/models";
+import { modelSupportsTemperature, normalizeProviderModel } from "@/lib/llm/models";
+import {
+  DEFAULT_OPENAI_OAUTH_MODEL,
+  OPENAI_OAUTH_CODEX_MODEL_SET,
+} from "@/lib/llm/openai-oauth-models";
 import { getProviderMeta } from "@/lib/llm/registry";
 import { vault } from "@/lib/security/vault";
 import type { LLMProvider } from "@/lib/state/types";
@@ -21,15 +30,163 @@ import type { LLMProvider } from "@/lib/state/types";
 // OpenAI Codex OAuth endpoint — same as oneshot/opencode codex.ts
 // ---------------------------------------------------------------------------
 const CODEX_API_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
-const OPENAI_OAUTH_CODEX_MODELS = new Set([
-  "gpt-5.3-codex",
-  "gpt-5.2-codex",
-  "gpt-5.1-codex",
-  "gpt-5.1-codex-max",
-  "gpt-5.1-codex-mini",
-  "gpt-5.2",
-]);
-const DEFAULT_OPENAI_OAUTH_MODEL = "gpt-5.3-codex";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function extractCodexInstructionText(content: unknown): string {
+  if (typeof content === "string") {
+    return content.trim();
+  }
+
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  return content
+    .flatMap((item) => {
+      if (!isRecord(item)) {
+        return [];
+      }
+
+      const text = item.text;
+      return typeof text === "string" && text.trim().length > 0
+        ? [text.trim()]
+        : [];
+    })
+    .join("\n\n");
+}
+
+function translateOpenAICodexRequestBody(rawBody: string): {
+  body: string;
+  upgradedToStream: boolean;
+} {
+  let upgradedToStream = false;
+
+  try {
+    const payload = JSON.parse(rawBody) as unknown;
+    if (!isRecord(payload)) {
+      return { body: rawBody, upgradedToStream };
+    }
+
+    const instructionSegments: string[] = [];
+    const existingInstructions = payload.instructions;
+    if (typeof existingInstructions === "string" && existingInstructions.trim().length > 0) {
+      instructionSegments.push(existingInstructions.trim());
+    }
+
+    if (Array.isArray(payload.input)) {
+      payload.input = payload.input.filter((item) => {
+        if (!isRecord(item)) {
+          return true;
+        }
+
+        const role = item.role;
+        if (role !== "developer" && role !== "system") {
+          return true;
+        }
+
+        const text = extractCodexInstructionText(item.content);
+        if (text.length > 0) {
+          instructionSegments.push(text);
+        }
+        return false;
+      });
+    }
+
+    if (instructionSegments.length > 0) {
+      payload.instructions = instructionSegments.join("\n\n");
+    }
+
+    payload.store = false;
+
+    if ("max_output_tokens" in payload) {
+      delete payload.max_output_tokens;
+    }
+
+    if (payload.stream !== true) {
+      payload.stream = true;
+      upgradedToStream = true;
+    }
+
+    return { body: JSON.stringify(payload), upgradedToStream };
+  } catch {
+    return { body: rawBody, upgradedToStream };
+  }
+}
+
+function buildCodexJsonResponseFromSse(
+  rawSse: string,
+  response: Response,
+): Response {
+  let finalResponse: Record<string, unknown> | null = null;
+  let streamErrorMessage: string | null = null;
+
+  for (const line of rawSse.split(/\r?\n/)) {
+    if (!line.startsWith("data:")) {
+      continue;
+    }
+
+    const data = line.slice(5).trim();
+    if (data.length === 0 || data === "[DONE]") {
+      continue;
+    }
+
+    try {
+      const parsed = JSON.parse(data) as unknown;
+      if (!isRecord(parsed)) {
+        continue;
+      }
+
+      if (
+        (parsed.type === "response.completed" || parsed.type === "response.incomplete") &&
+        isRecord(parsed.response)
+      ) {
+        finalResponse = parsed.response;
+      } else if (parsed.type === "error") {
+        if (typeof parsed.message === "string" && parsed.message.trim().length > 0) {
+          streamErrorMessage = parsed.message.trim();
+        } else if (
+          isRecord(parsed.error) &&
+          typeof parsed.error.message === "string" &&
+          parsed.error.message.trim().length > 0
+        ) {
+          streamErrorMessage = parsed.error.message.trim();
+        }
+      }
+    } catch {
+      // Ignore malformed SSE chunks and keep scanning for the final response.
+    }
+  }
+
+  const headers = new Headers(response.headers);
+  headers.set("content-type", "application/json");
+
+  if (finalResponse) {
+    return new Response(JSON.stringify(finalResponse), {
+      status: response.status,
+      headers,
+    });
+  }
+
+  const errorMessage =
+    streamErrorMessage ?? "Failed to convert Codex stream response into JSON.";
+
+  return new Response(
+    JSON.stringify({
+      error: {
+        message: errorMessage,
+        type: "api_error",
+        code: "codex_stream_conversion_failed",
+      },
+    }),
+    {
+      status: 502,
+      headers,
+    },
+  );
+}
 
 const resolveCredential = async (provider: LLMProvider): Promise<string | undefined> => {
   const config = await getProviderConfig(provider);
@@ -48,11 +205,41 @@ const resolveCredential = async (provider: LLMProvider): Promise<string | undefi
   return undefined;
 };
 
+function withModelCapabilityGuards(
+  provider: LLMProvider,
+  modelId: string,
+  model: LanguageModelV3,
+): LanguageModelV3 {
+  if (modelSupportsTemperature(provider, modelId)) {
+    return model;
+  }
+
+  const middleware: LanguageModelV3Middleware = {
+    specificationVersion: "v3",
+    transformParams: async ({ params }) => {
+      if (params.temperature === undefined) {
+        return params;
+      }
+
+      const nextParams = { ...params };
+      delete nextParams.temperature;
+      return nextParams;
+    },
+  };
+
+  return wrapLanguageModel({
+    model,
+    middleware,
+    modelId,
+    providerId: provider,
+  });
+}
+
 /** Build model using createOpenAI with custom baseURL (for OpenAI-compatible providers) */
 const buildOpenAICompatible = async (
   provider: LLMProvider,
   model: string,
-): Promise<LanguageModel> => {
+): Promise<LanguageModelV3> => {
   const config = await getProviderConfig(provider);
   const meta = getProviderMeta(provider);
   const token = await resolveCredential(provider);
@@ -65,7 +252,7 @@ const buildOpenAICompatible = async (
   });
 
   // Use .chat() to explicitly use Chat Completions API (not Responses API)
-  return client.chat(model);
+  return withModelCapabilityGuards(provider, model, client.chat(model));
 };
 
 // ---------------------------------------------------------------------------
@@ -86,7 +273,7 @@ const buildOpenAICompatible = async (
  *     - Refreshes the token when expired
  *  3. Use the Responses API (sdk.responses or sdk(model))
  */
-const buildOpenAICodexOAuth = async (model: string): Promise<LanguageModel> => {
+const buildOpenAICodexOAuth = async (model: string): Promise<LanguageModelV3> => {
   const oauthTokenSecret = "llm.oauth.openai.access_token";
 
   // Load all tokens from vault upfront
@@ -183,10 +370,25 @@ const buildOpenAICodexOAuth = async (model: string): Promise<LanguageModel> => {
         ? new URL(CODEX_API_ENDPOINT)
         : parsed;
 
-    return globalThis.fetch(targetUrl, { ...init, headers });
+    let body = init?.body;
+    let upgradedToStream = false;
+    if (targetUrl.toString() === CODEX_API_ENDPOINT && typeof body === "string") {
+      const translated = translateOpenAICodexRequestBody(body);
+      body = translated.body;
+      upgradedToStream = translated.upgradedToStream;
+    }
+
+    const response = await globalThis.fetch(targetUrl, { ...init, headers, body });
+
+    if (!upgradedToStream || !response.ok || targetUrl.toString() !== CODEX_API_ENDPOINT) {
+      return response;
+    }
+
+    const rawSse = await response.text();
+    return buildCodexJsonResponseFromSse(rawSse, response);
   };
 
-  const resolvedModel = OPENAI_OAUTH_CODEX_MODELS.has(model)
+  const resolvedModel = OPENAI_OAUTH_CODEX_MODEL_SET.has(model)
     ? model
     : DEFAULT_OPENAI_OAUTH_MODEL;
 
@@ -195,8 +397,22 @@ const buildOpenAICodexOAuth = async (model: string): Promise<LanguageModel> => {
     fetch: codexFetch,
   });
 
-  // Use Responses API (same as oneshot: sdk.responses(modelID))
-  return client(resolvedModel);
+  // Tell the SDK the conversation is non-persistent so it serializes tool loops
+  // inline instead of emitting item_reference entries that Codex rejects.
+  const wrappedModel = wrapLanguageModel({
+    model: client(resolvedModel),
+    middleware: defaultSettingsMiddleware({
+      settings: {
+        providerOptions: {
+          openai: {
+            store: false,
+          },
+        },
+      },
+    }),
+  });
+
+  return withModelCapabilityGuards("openai", resolvedModel, wrappedModel);
 };
 
 // ---------------------------------------------------------------------------
@@ -215,7 +431,7 @@ const buildOpenAICodexOAuth = async (model: string): Promise<LanguageModel> => {
  *     - Adds ?beta=true to /v1/messages URLs
  *     - Refreshes the token when expired
  */
-const buildAnthropicOAuth = async (model: string): Promise<LanguageModel> => {
+const buildAnthropicOAuth = async (model: string): Promise<LanguageModelV3> => {
   let accessToken = await vault.getSecret("llm.oauth.anthropic.access_token");
   if (!accessToken) {
     throw new Error(
@@ -359,17 +575,17 @@ export const buildLanguageModel = async (
       if (apiKey) {
         const client = createOpenAI({ apiKey });
         // Use Responses API for API keys (same as oneshot: sdk.responses(modelID))
-        return client(model);
+        return withModelCapabilityGuards("openai", model, client(model));
       }
 
       // Priority 2: OAuth access token → ChatGPT backend via custom fetch
       // (exact same pattern as oneshot's codex.ts plugin)
       const openaiConfig = await getProviderConfig("openai");
-      if (openaiConfig?.oauthTokenSecret) {
-        const hasToken = await vault.getSecret(openaiConfig.oauthTokenSecret);
-        if (hasToken) {
-          return buildOpenAICodexOAuth(model);
-        }
+      const oauthTokenSecret =
+        openaiConfig?.oauthTokenSecret ?? "llm.oauth.openai.access_token";
+      const hasToken = await vault.getSecret(oauthTokenSecret);
+      if (hasToken) {
+        return buildOpenAICodexOAuth(model);
       }
 
       throw new Error(
@@ -383,14 +599,14 @@ export const buildLanguageModel = async (
       const apiKey = await vault.getSecret("llm.api.anthropic.key");
       if (apiKey) {
         const client = createAnthropic({ apiKey });
-        return client(anthropicModel);
+        return withModelCapabilityGuards("anthropic", anthropicModel, client(anthropicModel));
       }
 
       // Priority 2: OAuth access token → custom fetch with Bearer + anthropic-beta
       // (exact same pattern as oneshot's opencode-anthropic-auth plugin)
       const anthropicOAuthToken = await vault.getSecret("llm.oauth.anthropic.access_token");
       if (anthropicOAuthToken) {
-        return buildAnthropicOAuth(anthropicModel);
+        return withModelCapabilityGuards("anthropic", anthropicModel, await buildAnthropicOAuth(anthropicModel));
       }
 
       throw new Error(
@@ -400,27 +616,27 @@ export const buildLanguageModel = async (
     case "google": {
       const token = await resolveCredential("google");
       const client = createGoogleGenerativeAI({ apiKey: token });
-      return client(model);
+      return withModelCapabilityGuards("google", model, client(model));
     }
     case "mistral": {
       const token = await resolveCredential("mistral");
       const client = createMistral({ apiKey: token });
-      return client(model);
+      return withModelCapabilityGuards("mistral", model, client(model));
     }
     case "groq": {
       const token = await resolveCredential("groq");
       const client = createGroq({ apiKey: token });
-      return client(model);
+      return withModelCapabilityGuards("groq", model, client(model));
     }
     case "xai": {
       const token = await resolveCredential("xai");
       const client = createXai({ apiKey: token });
-      return client(model);
+      return withModelCapabilityGuards("xai", model, client(model));
     }
     case "cohere": {
       const token = await resolveCredential("cohere");
       const client = createCohere({ apiKey: token });
-      return client(model);
+      return withModelCapabilityGuards("cohere", model, client(model));
     }
     // OpenAI-compatible providers
     case "deepseek":
@@ -448,10 +664,10 @@ export const hasProviderCredential = async (provider: LLMProvider): Promise<bool
     const apiKey = await vault.getSecret("llm.api.openai.key");
     if (apiKey) return true;
     const config = await getProviderConfig(provider);
-    if (config?.oauthTokenSecret) {
-      const oauthToken = await vault.getSecret(config.oauthTokenSecret);
-      if (oauthToken) return true;
-    }
+    const oauthTokenSecret =
+      config?.oauthTokenSecret ?? "llm.oauth.openai.access_token";
+    const oauthToken = await vault.getSecret(oauthTokenSecret);
+    if (oauthToken) return true;
     return false;
   }
 

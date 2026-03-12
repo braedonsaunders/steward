@@ -1,5 +1,6 @@
 import type { Device } from "@/lib/state/types";
 import { adapterRegistry } from "@/lib/adapters/registry";
+import { isWindowsPlatformDevice } from "@/lib/protocols/catalog";
 
 export interface ManagementCapability {
   id: string;
@@ -47,7 +48,7 @@ export const buildManagementSurface = (device: Device): DeviceManagementSurface 
     });
   }
 
-  if (hasPort(device, 22) && /(windows|microsoft|active directory|domain controller)/i.test([device.name, device.hostname, device.os, device.role, device.vendor].filter(Boolean).join(" "))) {
+  if (hasPort(device, 22) && isWindowsPlatformDevice(device)) {
     capabilities.push({
       id: "powershell-ssh-core",
       title: "PowerShell over SSH",

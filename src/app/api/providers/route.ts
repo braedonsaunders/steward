@@ -6,11 +6,15 @@ import { getProviderMeta } from "@/lib/llm/registry";
 import { listProviderModelsFromApi, normalizeProviderModel } from "@/lib/llm/models";
 import { ensureVaultReadyForProviders } from "@/lib/security/vault-gate";
 import { vault } from "@/lib/security/vault";
-import { providerPriority } from "@/lib/state/defaults";
+import { defaultProviderConfigs, providerPriority } from "@/lib/state/defaults";
 import { stateStore } from "@/lib/state/store";
 import type { LLMProvider } from "@/lib/state/types";
 
 export const runtime = "nodejs";
+
+const defaultProviderConfigMap = new Map(
+  defaultProviderConfigs().map((config) => [config.provider, config]),
+);
 
 const providerSchema = z.object({
   provider: z
@@ -36,8 +40,12 @@ export async function GET(request: NextRequest) {
     providers: configs.map((config) => ({
       ...config,
       hasApiKeyInVault: secretKeys.includes(`llm.api.${config.provider}.key`),
-      hasOAuthTokenInVault: config.oauthTokenSecret
-        ? secretKeys.includes(config.oauthTokenSecret)
+      hasOAuthTokenInVault: (config.oauthTokenSecret
+        ?? defaultProviderConfigMap.get(config.provider)?.oauthTokenSecret)
+        ? secretKeys.includes(
+          (config.oauthTokenSecret
+            ?? defaultProviderConfigMap.get(config.provider)?.oauthTokenSecret)!,
+        )
         : false,
     })),
   });

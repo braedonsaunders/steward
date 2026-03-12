@@ -128,7 +128,7 @@ function buildCollapsedToolOutputPreview(
   }
 
   if (truncated) {
-    preview = `${preview}…`;
+    preview = `${preview}...`;
   }
 
   return { text: preview, truncated };
@@ -339,7 +339,7 @@ type AssistantMessageBlock =
     };
 
 function truncateInlineValue(value: string, maxChars = 72): string {
-  return value.length <= maxChars ? value : `${value.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
+  return value.length <= maxChars ? value : `${value.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
 }
 
 function summarizeToolInputValue(value: unknown): string | undefined {
@@ -656,6 +656,30 @@ function clampAnchorOffset(anchorOffset: number | undefined, contentLength: numb
   return Math.max(0, Math.min(contentLength, Math.floor(anchorOffset ?? contentLength)));
 }
 
+function normalizeToolAnchor(content: string, anchorOffset: number | undefined): number {
+  const clamped = clampAnchorOffset(anchorOffset, content.length);
+  if (clamped <= 0 || clamped >= content.length) {
+    return clamped;
+  }
+
+  const leading = content.slice(0, clamped);
+  if (/\n\n\s*$/.test(leading) || /[.!?)]\s*$/.test(leading)) {
+    return clamped;
+  }
+
+  if (/:\s*$/.test(leading)) {
+    return content.length;
+  }
+
+  const lastParagraphBreak = Math.max(leading.lastIndexOf("\n\n"), leading.lastIndexOf("\n"));
+  const trailingSegment = lastParagraphBreak >= 0 ? leading.slice(lastParagraphBreak + 1) : leading;
+  if (trailingSegment.trim().length <= 48) {
+    return content.length;
+  }
+
+  return clamped;
+}
+
 function preferredLeadingToolOffset(content: string): number {
   const paragraphBreak = content.indexOf("\n\n");
   if (paragraphBreak >= 0) {
@@ -684,7 +708,7 @@ function buildAssistantBlocks(content: string, toolEvents: ChatToolEvent[]): Ass
     .map((event, index) => ({
       event,
       index,
-      anchorOffset: clampAnchorOffset(event.anchorOffset, content.length),
+      anchorOffset: normalizeToolAnchor(content, event.anchorOffset),
     }))
     .sort((left, right) => left.anchorOffset - right.anchorOffset || left.index - right.index);
 
@@ -852,7 +876,7 @@ const ChatToolEventCard = memo(function ChatToolEventCard({
       parts.push("live");
     }
 
-    return parts.join(" · ");
+    return parts.join(" | ");
   }, [event.kind, inputPills.length, normalizedOutput, running]);
   const showDetails = !standardCard || expanded;
   const accentClasses = event.status === "failed"

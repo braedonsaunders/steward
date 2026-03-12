@@ -1597,6 +1597,22 @@ function normalizeToolInput(args: ExecuteArgs & Record<string, unknown>): Record
   return nested;
 }
 
+function buildExecutionTemplateParams(input: Record<string, unknown>): Record<string, string> {
+  const params: Record<string, string> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (value === undefined || value === null) {
+      continue;
+    }
+    if (/(?:password|secret|token|authorization|cookie|body)/i.test(key)) {
+      continue;
+    }
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      params[key] = String(value);
+    }
+  }
+  return params;
+}
+
 function cloneJsonValue<T>(value: T): T {
   if (value === undefined || value === null) {
     return value;
@@ -2251,7 +2267,11 @@ function buildCommonToolArgumentProperties(): Record<string, unknown> {
     method: { type: "string", description: "Optional HTTP method override: GET, POST, PUT, PATCH, DELETE." },
     headers: { type: "object", description: "Optional HTTP headers for this tool call.", additionalProperties: true },
     query: { type: "object", description: "Optional HTTP query parameters.", additionalProperties: true },
-    body: { type: ["string", "object", "array"], description: "Optional request body for HTTP tools." },
+    body: {
+      type: ["string", "object", "array"],
+      description: "Optional request body for HTTP tools.",
+      items: {},
+    },
     expect_regex: { type: "string", description: "Optional HTTP response regex expectation." },
     topic: { type: "string", description: "Optional MQTT topic. If payload is also provided, Steward publishes to this topic; otherwise it subscribes." },
     subscribe_topics: { type: "array", description: "Optional MQTT topics to subscribe to before waiting for messages.", items: { type: "string" } },
@@ -2262,7 +2282,7 @@ function buildCommonToolArgumentProperties(): Record<string, unknown> {
         type: "object",
         properties: {
           topic: { type: "string" },
-          payload: { type: ["string", "object", "array"] },
+          payload: { type: ["string", "object", "array"], items: {} },
           qos: { type: "integer" },
           retain: { type: "boolean" },
         },
@@ -2270,7 +2290,11 @@ function buildCommonToolArgumentProperties(): Record<string, unknown> {
         additionalProperties: false,
       },
     },
-    payload: { type: ["string", "object", "array"], description: "Optional MQTT payload for single-message publish flows." },
+    payload: {
+      type: ["string", "object", "array"],
+      description: "Optional MQTT payload for single-message publish flows.",
+      items: {},
+    },
     qos: { type: "integer", description: "Optional MQTT QoS level (0, 1, or 2)." },
     retain: { type: "boolean", description: "Optional MQTT retain flag." },
     collect_messages: { type: "integer", description: "Optional MQTT message collection limit before Steward returns." },
@@ -2749,7 +2773,7 @@ export async function buildAdapterSkillTools(
           allowUnauthenticated: options?.allowPreOnboardingExecution === true && operation.mode === "read",
           allowProvidedCredentials: true,
           idempotencySeed: `${liveDescriptor.skillId}:${device.id}:${nowIso()}`,
-          params: {},
+          params: buildExecutionTemplateParams(input),
         });
 
         await stateStore.addAction({
@@ -2777,6 +2801,7 @@ export async function buildAdapterSkillTools(
           skillId: liveDescriptor.skillId,
           operationKind: operation.kind,
           operationMode: operation.mode,
+          summary: execution.summary,
           output: execution.output,
           gates: execution.gateResults,
           idempotencyKey: execution.idempotencyKey,
@@ -3165,7 +3190,11 @@ export async function buildAdapterSkillTools(
         username: { type: "string", description: "Optional MQTT username override. Stored credential accountLabel is used when present." },
         client_id: { type: "string", description: "Optional MQTT client id override." },
         topic: { type: "string", description: "Single MQTT topic. If payload is provided Steward publishes to it, otherwise Steward subscribes to it." },
-        payload: { type: ["string", "object", "array"], description: "Optional MQTT payload for the single-topic shorthand." },
+        payload: {
+          type: ["string", "object", "array"],
+          description: "Optional MQTT payload for the single-topic shorthand.",
+          items: {},
+        },
         subscribe_topics: { type: "array", items: { type: "string" }, description: "Optional MQTT topics to subscribe to before waiting for messages." },
         publish_messages: {
           type: "array",
@@ -3174,7 +3203,7 @@ export async function buildAdapterSkillTools(
             type: "object",
             properties: {
               topic: { type: "string" },
-              payload: { type: ["string", "object", "array"] },
+              payload: { type: ["string", "object", "array"], items: {} },
               qos: { type: "integer" },
               retain: { type: "boolean" },
             },

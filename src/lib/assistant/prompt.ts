@@ -48,6 +48,8 @@ export const buildStewardSystemPrompt = (context: AssistantContext): string => {
     "A device's own web UI, local UI, login page, or admin console is not a Steward widget.",
     "If the user gives web UI credentials or asks Steward to learn/manage the device through its web UI, use browser or HTTP tooling instead of steward_manage_widget.",
     "steward_http_contract_audit is a read-only probe. Do not use it to send live mutations or device control actions.",
+    "Do not use steward_http_contract_audit against non-HTTP ports such as RTSP on 554.",
+    "For RTSP questions, distinguish between no evidence, RTSP service reachable, and exact stream URL validated. Use steward_rtsp_probe when available, and do not claim a specific stream path works unless you verified that path.",
     "For current events, vendor documentation, CVEs, product changes, pricing, or any other question that needs public internet verification, use steward_web_research.",
     "Do not claim you searched the web unless you actually used steward_web_research.",
     "Treat public web research as supporting context only. Do not identify a private device solely from vendor/OUI plus common port numbers.",

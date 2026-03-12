@@ -144,7 +144,7 @@ function clampText(value: string, maxChars = 1200): string {
   if (value.length <= maxChars) {
     return value;
   }
-  return `${value.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
+  return `${value.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
 }
 
 function collapseWhitespaceForStreamMerge(value: string): string {
@@ -1005,6 +1005,7 @@ function summarizeToolExecution(output: unknown, toolName?: string): {
     }
 
     const explicitOk = typeof output.ok === "boolean" ? output.ok : undefined;
+    const explicitSummary = typeof output.summary === "string" ? output.summary.trim() : "";
     const preview = previewValue(
       typeof output.output === "string" || isRecord(output.output) || Array.isArray(output.output)
         ? output.output
@@ -1026,6 +1027,14 @@ function summarizeToolExecution(output: unknown, toolName?: string): {
       };
     }
 
+    if (explicitSummary.length > 0) {
+      return {
+        status: "completed",
+        summary: explicitSummary,
+        outputPreview: preview,
+      };
+    }
+
     const summaryParts: string[] = [];
     if (typeof output.deviceName === "string" && output.deviceName.trim().length > 0) {
       summaryParts.push(output.deviceName.trim());
@@ -1039,7 +1048,7 @@ function summarizeToolExecution(output: unknown, toolName?: string): {
 
     return {
       status: "completed",
-      summary: summaryParts.join(" • ") || "Tool completed.",
+      summary: summaryParts.join(" | ") || "Tool completed.",
       outputPreview: preview,
     };
   }

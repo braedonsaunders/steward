@@ -541,22 +541,19 @@ function buildProfileBindings(args: {
       continue;
     }
     const draftJson = isRecord(existing.draftJson) ? existing.draftJson : {};
-    if (!(draftJson.manualBinding === true || ["active", "verified", "selected"].includes(existing.status))) {
+    if (draftJson.manualBinding !== true) {
       continue;
     }
     bindings.push({
       ...existing,
-      status: draftJson.manualBinding === true
-        ? (
-          existing.status === "active" || existing.status === "verified"
-            ? existing.status
-            : existing.status === "rejected"
-              ? "rejected"
-              : args.completed
-                ? existing.status
-                : "selected"
-        )
-        : (args.completed ? existing.status : "selected"),
+      status:
+        existing.status === "active" || existing.status === "verified"
+          ? existing.status
+          : existing.status === "rejected"
+            ? "rejected"
+            : args.completed
+              ? existing.status
+              : "selected",
       updatedAt: now,
     });
   }

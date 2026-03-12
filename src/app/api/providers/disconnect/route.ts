@@ -59,8 +59,6 @@ export async function POST(request: NextRequest) {
     const idx = state.providerConfigs.findIndex((c) => c.provider === provider);
     if (idx >= 0) {
       state.providerConfigs[idx].enabled = false;
-      // Clear OAuth-specific config fields
-      delete state.providerConfigs[idx].oauthTokenSecret;
     }
     return state;
   });

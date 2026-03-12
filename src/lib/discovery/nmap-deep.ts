@@ -26,7 +26,7 @@ export interface NmapDeepOptions {
   maxConcurrency?: number;
 }
 
-const FALLBACK_PORTS = [80, 443, 8080, 8443, 5000, 5001, 22, 161, 1883, 2375, 3389];
+const FALLBACK_PORTS = [80, 443, 554, 8080, 8443, 5000, 5001, 22, 161, 1883, 2375, 3389];
 const NMAP_SCRIPT_SET = "banner,http-title,http-headers,ssl-cert,upnp-info";
 
 const decodeXmlEntities = (raw: string): string => raw

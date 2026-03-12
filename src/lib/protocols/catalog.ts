@@ -20,6 +20,9 @@ export const SUPPORTED_CREDENTIAL_PROTOCOLS = [
 
 export type SupportedCredentialProtocol = (typeof SUPPORTED_CREDENTIAL_PROTOCOLS)[number];
 
+const LINUX_PLATFORM_HINT =
+  /(ubuntu|debian|linux|unix|centos|rhel|rocky|almalinux|fedora|openssh_.*ubuntu)/i;
+
 export function normalizeCredentialProtocol(value: string): string {
   const normalized = value.trim().toLowerCase();
   if (normalized === "http" || normalized === "https") return "http-api";
@@ -73,21 +76,41 @@ export function isSupportedCredentialProtocol(value: string): value is Supported
 }
 
 export function isWindowsPlatformDevice(device: Pick<Device, "name" | "hostname" | "os" | "role" | "vendor" | "protocols" | "services">): boolean {
-  const text = [device.name, device.hostname, device.os, device.role, device.vendor]
+  const text = [device.name, device.hostname, device.os, device.role]
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
-  if (/(windows|active directory|domain controller|hyper-v|microsoft)/.test(text)) {
-    return true;
-  }
+  const serviceText = (device.services ?? [])
+    .map((service) => [service.name, service.product, service.banner].filter(Boolean).join(" "))
+    .join(" ")
+    .toLowerCase();
+  const combinedText = `${text} ${serviceText}`.trim();
+  const protocols = new Set(
+    (device.protocols ?? []).map((protocol) => normalizeCredentialProtocol(protocol)),
+  );
+  const vendor = String(device.vendor ?? "").toLowerCase();
   const ports = new Set((device.services ?? []).map((service) => Number(service.port)));
-  return device.protocols.includes("winrm")
+  const explicitWindowsText =
+    /(windows|active directory|domain controller|hyper-v|exchange|sql server)/.test(combinedText);
+  const strongWindowsTransport =
+    protocols.has("winrm")
+    || protocols.has("powershell-ssh")
+    || protocols.has("wmi")
     || ports.has(5985)
     || ports.has(5986)
-    || ports.has(3389)
-    || ports.has(445)
-    || ports.has(135)
-    || ports.has(389)
-    || ports.has(88);
+    || ports.has(3389);
+  const windowsServiceCluster =
+    (ports.has(135) && ports.has(445))
+    || (ports.has(88) && ports.has(389));
+
+  if (explicitWindowsText || strongWindowsTransport || windowsServiceCluster) {
+    return true;
+  }
+
+  if (LINUX_PLATFORM_HINT.test(combinedText)) {
+    return false;
+  }
+
+  return vendor.includes("microsoft") && (strongWindowsTransport || windowsServiceCluster);
 }
 

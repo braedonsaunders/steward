@@ -1186,7 +1186,9 @@ export const candidateToDevice = (
     status: nextStatus,
     autonomyTier: previous?.autonomyTier ?? 1,
     tags: previous?.tags ?? [],
-    protocols: Array.from(new Set([...(previous?.protocols ?? []), ...protocols])),
+    // Recompute protocol hints from the merged service surface so stale inferred
+    // transports do not linger after later scans correct the device identity.
+    protocols: Array.from(new Set(protocols)),
     services: mergedServices.length > 0
       ? mergedServices
       : (previous?.services ?? []).map((service) => ({ ...service, lastSeenAt: now })),

@@ -341,11 +341,46 @@ function hasSshPort(services) {
   return services.some((svc) => Number(svc.port) === 22 || Number(svc.port) === 2222);
 }
 
+function serviceText(candidate) {
+  return (candidate.services || [])
+    .map((svc) => [svc.name, svc.product, svc.version, svc.banner].filter(Boolean).join(" "))
+    .join(" ")
+    .toLowerCase();
+}
+
+function looksLinux(candidate) {
+  const text = [
+    candidate.name,
+    candidate.hostname,
+    candidate.os,
+    candidate.role,
+    serviceText(candidate),
+  ].filter(Boolean).join(" ").toLowerCase();
+  return /(ubuntu|debian|rocky|almalinux|centos|fedora|linux|unix)/.test(text);
+}
+
 function looksWindows(candidate) {
-  const os = String(candidate.os || "").toLowerCase();
-  const vendor = String(candidate.vendor || "").toLowerCase();
-  const hostname = String(candidate.hostname || "").toLowerCase();
-  return os.includes("windows") || vendor.includes("microsoft") || hostname.includes("win");
+  const text = [
+    candidate.name,
+    candidate.hostname,
+    candidate.os,
+    candidate.role,
+    serviceText(candidate),
+  ].filter(Boolean).join(" ").toLowerCase();
+  const protocols = new Set((candidate.protocols || []).map((value) => String(value || "").toLowerCase()));
+  const ports = new Set((candidate.services || []).map((svc) => Number(svc.port)));
+  if (looksLinux(candidate)) {
+    return false;
+  }
+  return /(windows|active directory|domain controller|hyper-v|exchange|sql server)/.test(text)
+    || protocols.has("winrm")
+    || protocols.has("powershell-ssh")
+    || protocols.has("wmi")
+    || ports.has(5985)
+    || ports.has(5986)
+    || ports.has(3389)
+    || (ports.has(135) && ports.has(445))
+    || (ports.has(88) && ports.has(389));
 }
 
 module.exports = {
@@ -535,15 +570,6 @@ function hasRdpPort(services) {
   return hasPort(services, 3389, /rdp/i);
 }
 
-function primaryWindowsProtocol(services) {
-  if (hasWinrmPort(services)) return "winrm";
-  if (hasSshPort(services)) return "powershell-ssh";
-  if (hasWmiPort(services)) return "wmi";
-  if (hasSmbPort(services)) return "smb";
-  if (hasRdpPort(services)) return "rdp";
-  return null;
-}
-
 function deviceText(device) {
   return [
     device.name,
@@ -554,15 +580,52 @@ function deviceText(device) {
   ].filter(Boolean).join(" ").toLowerCase();
 }
 
+function serviceText(device) {
+  return (device.services || [])
+    .map((svc) => [svc.name, svc.product, svc.version, svc.banner].filter(Boolean).join(" "))
+    .join(" ")
+    .toLowerCase();
+}
+
+function looksLinux(device) {
+  return /(ubuntu|debian|rocky|almalinux|centos|fedora|linux|unix)/.test(deviceText(device) + " " + serviceText(device));
+}
+
+function windowsSignals(device, services) {
+  const text = deviceText(device) + " " + serviceText(device);
+  const protocols = new Set((device.protocols || []).map((value) => String(value || "").toLowerCase()));
+  const ports = new Set((services || []).map((svc) => Number(svc.port)));
+  if (looksLinux(device)) {
+    return false;
+  }
+  return /windows|active directory|domain controller|hyper-v|exchange|sql server/.test(text)
+    || protocols.has("winrm")
+    || protocols.has("powershell-ssh")
+    || protocols.has("wmi")
+    || hasWinrmPort(services)
+    || hasWmiPort(services)
+    || hasRdpPort(services)
+    || (ports.has(135) && ports.has(445))
+    || (ports.has(88) && ports.has(389));
+}
+
+function primaryWindowsProtocol(device, services) {
+  if (hasWinrmPort(services)) return "winrm";
+  if (hasSshPort(services) && (/windows|powershell/.test(deviceText(device)) || windowsSignals(device, services))) {
+    return "powershell-ssh";
+  }
+  if (hasWmiPort(services)) return "wmi";
+  if (hasSmbPort(services)) return "smb";
+  if (hasRdpPort(services)) return "rdp";
+  return null;
+}
+
 function isWindowsServer(device, services) {
   const type = String(device.type || device.typeHint || "").toLowerCase();
   const text = deviceText(device);
-  const windowsLike = text.includes("windows") || text.includes("microsoft")
-    || hasWinrmPort(services) || hasWmiPort(services) || hasSmbPort(services)
-    || hasRdpPort(services) || hasSshPort(services);
   const serverLike = type === "server"
     || /windows server|domain controller|active directory|hyper-v|exchange|sql server/.test(text);
-  return windowsLike && serverLike;
+  return serverLike && windowsSignals(device, services);
 }
 
 function serverServiceInventoryOperation(protocol) {
@@ -690,7 +753,7 @@ module.exports = {
         windowsServer: {
           managedBy: "steward.windows-server",
           patchRing: config.patchRing || "stable",
-          preferredProtocol: primaryWindowsProtocol(services),
+          preferredProtocol: primaryWindowsProtocol(candidate, services),
         },
       },
     };
@@ -698,7 +761,7 @@ module.exports = {
 
   match(device) {
     const services = device.services || [];
-    const preferredProtocol = primaryWindowsProtocol(services);
+    const preferredProtocol = primaryWindowsProtocol(device, services);
     if (!preferredProtocol || !isWindowsServer(device, services)) {
       return [];
     }
@@ -757,7 +820,7 @@ module.exports = {
   capabilities(device, context) {
     const config = context.getConfig();
     const services = device.services || [];
-    const preferredProtocol = primaryWindowsProtocol(services);
+    const preferredProtocol = primaryWindowsProtocol(device, services);
     if (config.enabled === false || !preferredProtocol || !isWindowsServer(device, services)) {
       return [];
     }
@@ -952,16 +1015,48 @@ function hasServerPorts(services) {
     [53, 88, 389, 5985, 5986, 1433, 1521, 3306, 5432, 6379, 27017].includes(Number(svc.port)));
 }
 
-function looksWindows(candidate) {
-  const os = String(candidate.os || "").toLowerCase();
-  const vendor = String(candidate.vendor || "").toLowerCase();
-  const hostname = String(candidate.hostname || "").toLowerCase();
-  return os.includes("windows") || vendor.includes("microsoft") || hostname.includes("win");
+function deviceText(candidate) {
+  return [
+    candidate.typeHint,
+    candidate.type,
+    candidate.role,
+    candidate.hostname,
+    candidate.name,
+    candidate.os,
+  ].filter(Boolean).join(" ").toLowerCase();
 }
 
-function primaryWindowsProtocol(services) {
+function serviceText(candidate) {
+  return (candidate.services || [])
+    .map((svc) => [svc.name, svc.product, svc.version, svc.banner].filter(Boolean).join(" "))
+    .join(" ")
+    .toLowerCase();
+}
+
+function looksLinux(candidate) {
+  return /(ubuntu|debian|rocky|almalinux|centos|fedora|linux|unix)/.test(deviceText(candidate) + " " + serviceText(candidate));
+}
+
+function looksWindows(candidate) {
+  const protocols = new Set((candidate.protocols || []).map((value) => String(value || "").toLowerCase()));
+  const ports = new Set((candidate.services || []).map((svc) => Number(svc.port)));
+  if (looksLinux(candidate)) {
+    return false;
+  }
+  return /windows|active directory|domain controller|hyper-v|exchange|sql server/.test(deviceText(candidate) + " " + serviceText(candidate))
+    || protocols.has("winrm")
+    || protocols.has("powershell-ssh")
+    || protocols.has("wmi")
+    || hasWinrmPort(candidate.services || [])
+    || hasWmiPort(candidate.services || [])
+    || hasRdpPort(candidate.services || [])
+    || (ports.has(135) && ports.has(445))
+    || (ports.has(88) && ports.has(389));
+}
+
+function primaryWindowsProtocol(candidate, services) {
   if (hasWinrmPort(services)) return "winrm";
-  if (hasSshPort(services)) return "powershell-ssh";
+  if (hasSshPort(services) && (/windows|powershell/.test(deviceText(candidate)) || looksWindows(candidate))) return "powershell-ssh";
   if (hasWmiPort(services)) return "wmi";
   if (hasSmbPort(services)) return "smb";
   if (hasRdpPort(services)) return "rdp";
@@ -969,24 +1064,17 @@ function primaryWindowsProtocol(services) {
 }
 
 function looksWorkstation(candidate) {
-  const typeHint = String(candidate.typeHint || "").toLowerCase();
-  const role = String(candidate.role || "").toLowerCase();
-  const hostname = String(candidate.hostname || "").toLowerCase();
-  const name = String(candidate.name || "").toLowerCase();
-  const text = typeHint + " " + role + " " + hostname + " " + name;
-  if (/(domain controller|active directory|windows server|hyper-v|exchange|sql server|dc\d|\bpdc\b)/.test(text)) {
-    return false;
-  }
-  return typeHint === "workstation"
+    const text = deviceText(candidate);
+    if (/(domain controller|active directory|windows server|hyper-v|exchange|sql server|dc\d|\bpdc\b)/.test(text)) {
+      return false;
+    }
+  return String(candidate.typeHint || "").toLowerCase() === "workstation"
     || /(workstation|desktop|laptop|gaming|pc|rog|tuf|legion|alienware|omen|zephyrus)/.test(text);
 }
 
 function isWorkstationTarget(candidate, services) {
   const typeHint = String(candidate.typeHint || candidate.type || "").toLowerCase();
-  const role = String(candidate.role || "").toLowerCase();
-  const hostname = String(candidate.hostname || "").toLowerCase();
-  const name = String(candidate.name || "").toLowerCase();
-  const text = typeHint + " " + role + " " + hostname + " " + name;
+  const text = deviceText(candidate);
   if (/(server|domain controller|active directory|hyper-v|dc\d|\bpdc\b)/.test(text)) {
     return false;
   }
@@ -1112,7 +1200,7 @@ module.exports = {
     }
 
     const services = candidate.services || [];
-    const windowsLike = looksWindows(candidate) || hasRdpPort(services) || hasWinrmPort(services) || hasSshPort(services) || hasWmiPort(services) || hasSmbPort(services);
+    const windowsLike = looksWindows(candidate) || hasRdpPort(services) || hasWinrmPort(services) || hasWmiPort(services);
     if (!windowsLike) {
       return candidate;
     }
@@ -1141,7 +1229,7 @@ module.exports = {
 
   match(device, context) {
     const services = device.services || [];
-    const windowsLike = looksWindows(device) || hasRdpPort(services) || hasWinrmPort(services) || hasSshPort(services) || hasWmiPort(services) || hasSmbPort(services);
+    const windowsLike = looksWindows(device) || hasRdpPort(services) || hasWinrmPort(services) || hasWmiPort(services);
     if (!windowsLike) {
       return [];
     }
@@ -1156,7 +1244,7 @@ module.exports = {
     if (hasWinrmPort(services)) confidence += 0.12;
     if (hasRdpPort(services)) confidence += 0.08;
 
-     const preferredProtocol = primaryWindowsProtocol(services) || "rdp";
+     const preferredProtocol = primaryWindowsProtocol(device, services) || "rdp";
      const requiredAccessMethods = [preferredProtocol];
      const requiredCredentialProtocols = preferredProtocol === "rdp" ? ["rdp"] : [preferredProtocol];
 
@@ -1211,7 +1299,7 @@ module.exports = {
     }
     const capabilities = [];
 
-     const preferredProtocol = primaryWindowsProtocol(services);
+    const preferredProtocol = primaryWindowsProtocol(device, services);
 
      if (preferredProtocol && preferredProtocol !== "rdp") {
        capabilities.push({
@@ -1417,8 +1505,11 @@ module.exports = {
 
 const UBIQUITI_UNIFI_ADAPTER_SOURCE = `
 function hasUniFiPort(services) {
-  return services.some((svc) =>
-    [8080, 8443, 10001, 3478].includes(Number(svc.port)));
+  const ports = new Set((services || []).map((svc) => Number(svc.port)));
+  return ports.has(8443)
+    || ports.has(10001)
+    || ports.has(3478)
+    || (ports.has(8080) && (ports.has(8443) || ports.has(10001) || ports.has(3478)));
 }
 
 function hasUniFiHint(candidate) {
@@ -2162,11 +2253,42 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
             expectedSemanticTarget: "network:intel:http-contract",
           },
         },
+        {
+          id: "skill.advanced.rtsp-probe",
+          name: "RTSP Probe",
+          description: "Verify whether a device speaks RTSP on a target port without assuming an HTTP surface.",
+          category: "diagnostics",
+          operationKinds: ["shell.command"],
+          enabledByDefault: true,
+          toolCall: {
+            name: "steward_rtsp_probe",
+            description: "Probe an attached device for an RTSP control surface.",
+            parameters: {
+              type: "object",
+              properties: {
+                device_id: { type: "string" },
+                port: { type: "number", description: "Optional RTSP port override. Defaults to 554." },
+                timeout_ms: { type: "number", description: "Optional probe timeout in milliseconds." },
+              },
+              required: ["device_id"],
+              additionalProperties: false,
+            },
+          },
+          execution: {
+            kind: "shell.command",
+            mode: "read",
+            adapterId: "shell",
+            timeoutMs: 15000,
+            commandTemplate: `node -e "const net=require('node:net');const host='{{host}}';const port=Number('{{port}}')||554;const socket=net.createConnection({host,port});let settled=false;let data='';const finish=(code,message)=>{if(settled)return;settled=true;try{socket.destroy();}catch{}const text=(message||'').trim();if(text){(code===0?process.stdout:process.stderr).write(text+'\\n');}process.exit(code);};socket.setTimeout(5000,()=>finish(1,'RTSP probe timed out'));socket.on('error',(error)=>finish(1,error instanceof Error?error.message:String(error)));socket.on('connect',()=>{socket.write('OPTIONS * RTSP/1.0\\r\\nCSeq: 1\\r\\nUser-Agent: Steward\\r\\n\\r\\n');});socket.on('data',(chunk)=>{data+=chunk.toString('utf8');if(!data.includes('\\r\\n\\r\\n')){return;}const lines=data.split(/\\r?\\n/).map((line)=>line.trim()).filter(Boolean);const status=lines[0]??'';const publicHeader=lines.find((line)=>/^Public:/i.test(line))??'';if(/^RTSP\\/1\\.0\\s+\\d+/.test(status)){finish(0,[status,publicHeader].filter(Boolean).join(' | ')||'RTSP response received');return;}finish(1,status||'Non-RTSP response received');});"`,
+            expectedSemanticTarget: "network:intel:rtsp",
+          },
+        },
       ],
       defaultToolConfig: {
         "skill.advanced.nmap-nse": { enabled: true },
         "skill.advanced.favicon-hash": { enabled: true },
         "skill.advanced.http-contract": { enabled: true },
+        "skill.advanced.rtsp-probe": { enabled: true },
       },
     },
     entrySource: ADVANCED_NETWORK_INTEL_ADAPTER_SOURCE,

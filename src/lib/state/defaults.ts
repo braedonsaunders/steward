@@ -305,6 +305,16 @@ export function ensureDefaults(db: Database.Database): void {
       INSERT OR IGNORE INTO provider_configs (provider, enabled, model, apiKeyEnvVar, oauthTokenSecret, oauthClientIdEnvVar, oauthClientSecretEnvVar, oauthAuthUrl, oauthTokenUrl, oauthScopes, baseUrl, extraHeaders)
       VALUES (@provider, @enabled, @model, @apiKeyEnvVar, @oauthTokenSecret, @oauthClientIdEnvVar, @oauthClientSecretEnvVar, @oauthAuthUrl, @oauthTokenUrl, @oauthScopes, @baseUrl, @extraHeaders)
     `);
+    const backfillProviderDefaults = db.prepare(`
+      UPDATE provider_configs
+      SET oauthTokenSecret = COALESCE(oauthTokenSecret, @oauthTokenSecret),
+          oauthAuthUrl = COALESCE(oauthAuthUrl, @oauthAuthUrl),
+          oauthTokenUrl = COALESCE(oauthTokenUrl, @oauthTokenUrl),
+          oauthScopes = COALESCE(oauthScopes, @oauthScopes),
+          baseUrl = COALESCE(baseUrl, @baseUrl),
+          extraHeaders = COALESCE(extraHeaders, @extraHeaders)
+      WHERE provider = @provider
+    `);
 
     for (const p of defaultProviderConfigs()) {
       insertProvider.run({
@@ -315,6 +325,15 @@ export function ensureDefaults(db: Database.Database): void {
         oauthTokenSecret: p.oauthTokenSecret ?? null,
         oauthClientIdEnvVar: null,
         oauthClientSecretEnvVar: null,
+        oauthAuthUrl: p.oauthAuthUrl ?? null,
+        oauthTokenUrl: p.oauthTokenUrl ?? null,
+        oauthScopes: p.oauthScopes ? JSON.stringify(p.oauthScopes) : null,
+        baseUrl: p.baseUrl ?? null,
+        extraHeaders: p.extraHeaders ? JSON.stringify(p.extraHeaders) : null,
+      });
+      backfillProviderDefaults.run({
+        provider: p.provider,
+        oauthTokenSecret: p.oauthTokenSecret ?? null,
         oauthAuthUrl: p.oauthAuthUrl ?? null,
         oauthTokenUrl: p.oauthTokenUrl ?? null,
         oauthScopes: p.oauthScopes ? JSON.stringify(p.oauthScopes) : null,
