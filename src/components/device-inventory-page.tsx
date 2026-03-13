@@ -1,9 +1,8 @@
 "use client";
 
-import { type FormEvent, type MouseEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, type MouseEvent, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Activity,
   ArrowUpDown,
   Loader2,
   Monitor,
@@ -203,8 +202,6 @@ export function DeviceInventoryPage({ scope }: { scope: DeviceInventoryScope }) 
   const [sortField, setSortField] = useState<SortField>("name");
   const [sortAsc, setSortAsc] = useState(true);
   const [managementFilter, setManagementFilter] = useState<"all" | DeviceAdoptionStatus>("all");
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(8);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [newName, setNewName] = useState("");
@@ -214,17 +211,6 @@ export function DeviceInventoryPage({ scope }: { scope: DeviceInventoryScope }) 
   const [runningDiscoveryCycle, setRunningDiscoveryCycle] = useState(false);
   const [runFeedback, setRunFeedback] = useState<string | null>(null);
   const showDiscoveryManagementFilter = scope === "discovery";
-
-  useEffect(() => {
-    const recomputePageSize = () => {
-      const estimatedRows = Math.floor((window.innerHeight - 410) / 46);
-      const bounded = Math.max(6, Math.min(14, estimatedRows));
-      setPageSize(bounded);
-    };
-    recomputePageSize();
-    window.addEventListener("resize", recomputePageSize);
-    return () => window.removeEventListener("resize", recomputePageSize);
-  }, []);
 
   const scopedDevices = useMemo(() => {
     return devices.filter((device) => {
@@ -350,6 +336,23 @@ export function DeviceInventoryPage({ scope }: { scope: DeviceInventoryScope }) 
         pct: Math.round((count / total) * 100),
       }));
   }, [scopedDevices]);
+  const inventoryTitle = scope === "adopted" ? "Devices" : "Discovery";
+  const inventoryDescription =
+    scope === "adopted"
+      ? "Managed assets, health state, and endpoint coverage in one compact view."
+      : "Discovered and ignored assets with evidence strength and quick adoption controls.";
+  const summaryItems = [
+    { label: "Online", value: onlineCount, toneClass: "bg-emerald-500" },
+    { label: "Offline", value: offlineCount, toneClass: "bg-red-500" },
+    { label: "Degraded", value: degradedCount, toneClass: "bg-amber-500" },
+    {
+      label: scope === "adopted" ? "Managed" : "Discovered",
+      value: scope === "adopted" ? adoptedCount : discoveredCount,
+      toneClass: "bg-sky-500",
+    },
+    { label: "Fingerprinted", value: fingerprintedCount, toneClass: "bg-slate-400" },
+    { label: "Rich Endpoints", value: richServiceCount, toneClass: "bg-cyan-500" },
+  ];
   const handleSort = (field: SortField) => {
     if (sortField === field) {
       setSortAsc(!sortAsc);
@@ -357,15 +360,7 @@ export function DeviceInventoryPage({ scope }: { scope: DeviceInventoryScope }) 
       setSortField(field);
       setSortAsc(true);
     }
-    setPage(1);
   };
-
-  const totalPages = Math.max(1, Math.ceil(filteredDevices.length / pageSize));
-  const currentPage = Math.min(page, totalPages);
-  const pagedDevices = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
-    return filteredDevices.slice(start, start + pageSize);
-  }, [filteredDevices, currentPage, pageSize]);
 
   const handleAddDevice = async (e: FormEvent) => {
     e.preventDefault();
@@ -468,7 +463,7 @@ export function DeviceInventoryPage({ scope }: { scope: DeviceInventoryScope }) 
           <Skeleton className="h-9 w-36" />
         </div>
         <Card>
-          <CardContent className="p-0">
+          <CardContent className="p-0 md:p-0">
             <div className="space-y-4 p-6">
               {Array.from({ length: 6 }).map((_, i) => (
                 <Skeleton key={i} className="h-10 w-full" />
@@ -497,156 +492,148 @@ export function DeviceInventoryPage({ scope }: { scope: DeviceInventoryScope }) 
 
   return (
     <main className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
-      <Card className="relative overflow-hidden border-primary/20 bg-gradient-to-br from-primary/10 via-card to-secondary/20">
-        <div className="pointer-events-none absolute inset-0">
-          <div className="absolute -top-20 left-0 h-40 w-40 rounded-full bg-primary/20 blur-3xl" />
-          <div className="absolute -bottom-16 right-0 h-36 w-36 rounded-full bg-secondary/40 blur-3xl" />
-        </div>
-        <CardContent className="relative space-y-3 p-4">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                {scope === "adopted" ? (
-                  <Server className="size-5 text-primary" />
-                ) : (
-                  <Search className="size-5 text-primary" />
-                )}
-                <h1 className="text-xl font-semibold tracking-tight steward-heading-font md:text-2xl">
-                  {scope === "adopted" ? "Devices Overview" : "Discovery Overview"}
-                </h1>
-                <Badge variant="secondary" className="tabular-nums">
-                  {scopedDevices.length}
-                </Badge>
-              </div>
-              <p className="text-xs text-muted-foreground md:text-sm">
-                {scope === "adopted"
-                  ? "Managed assets, current health, and signal quality in one viewport."
-                  : "Discovered and ignored assets with evidence strength and quick adoption controls."}
-              </p>
-            </div>
-
-            <div className="flex items-center gap-2">
-              {scope === "discovery" && (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => void handleRunDiscoveryCycle()}
-                  disabled={runningDiscoveryCycle}
-                >
-                  {runningDiscoveryCycle ? (
-                    <>
-                      <Loader2 className="mr-2 size-4 animate-spin" />
-                      Running...
-                    </>
-                  ) : (
-                    <>
-                      <Play className="mr-2 size-4" />
-                      Run Cycle
-                    </>
-                  )}
-                </Button>
+      <section className="space-y-3">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-1">
+            <div className="flex flex-wrap items-center gap-2.5">
+              {scope === "adopted" ? (
+                <Server className="size-5 text-muted-foreground" />
+              ) : (
+                <Search className="size-5 text-muted-foreground" />
               )}
+              <h1 className="text-xl font-semibold tracking-tight steward-heading-font md:text-2xl">
+                {inventoryTitle}
+              </h1>
+              <Badge variant="outline" className="tabular-nums">
+                {scopedDevices.length}
+              </Badge>
+            </div>
+            <p className="max-w-3xl text-sm text-muted-foreground">
+              {inventoryDescription}
+            </p>
+          </div>
 
-              <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-                <DialogTrigger asChild>
-                  <Button>
-                    <Plus className="mr-2 size-4" />
-                    Add Device
-                  </Button>
-                </DialogTrigger>
-                <DialogContent>
-                  <form onSubmit={handleAddDevice}>
-                    <DialogHeader>
-                      <DialogTitle>Add Device</DialogTitle>
-                      <DialogDescription>
-                        Manually register a new device on the network.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <div className="grid gap-4 py-4">
-                      <div className="grid gap-2">
-                        <Label htmlFor="device-name">Device Name</Label>
-                        <Input
-                          id="device-name"
-                          placeholder="e.g. core-switch-01"
-                          value={newName}
-                          onChange={(e) => setNewName(e.target.value)}
-                          required
-                        />
-                      </div>
-                      <div className="grid gap-2">
-                        <Label htmlFor="device-ip">IP Address</Label>
-                        <Input
-                          id="device-ip"
-                          placeholder="e.g. 192.168.1.1"
-                          value={newIp}
-                          onChange={(e) => setNewIp(e.target.value)}
-                          required
-                        />
-                      </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {scope === "discovery" && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => void handleRunDiscoveryCycle()}
+                disabled={runningDiscoveryCycle}
+              >
+                {runningDiscoveryCycle ? (
+                  <>
+                    <Loader2 className="size-3.5 animate-spin" />
+                    Running
+                  </>
+                ) : (
+                  <>
+                    <Play className="size-3.5" />
+                    Run Cycle
+                  </>
+                )}
+              </Button>
+            )}
+
+            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+              <DialogTrigger asChild>
+                <Button size="sm">
+                  <Plus className="size-3.5" />
+                  Add Device
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <form onSubmit={handleAddDevice}>
+                  <DialogHeader>
+                    <DialogTitle>Add Device</DialogTitle>
+                    <DialogDescription>
+                      Manually register a new device on the network.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="grid gap-4 py-4">
+                    <div className="grid gap-2">
+                      <Label htmlFor="device-name">Device Name</Label>
+                      <Input
+                        id="device-name"
+                        placeholder="e.g. core-switch-01"
+                        value={newName}
+                        onChange={(e) => setNewName(e.target.value)}
+                        required
+                      />
                     </div>
-                    <DialogFooter>
-                      <Button type="submit" disabled={adding}>
-                        {adding ? "Adding..." : "Add Device"}
-                      </Button>
-                    </DialogFooter>
-                  </form>
-                </DialogContent>
-              </Dialog>
-            </div>
-          </div>
-
-          {scope === "discovery" && runFeedback && (
-            <p className="text-xs text-muted-foreground">{runFeedback}</p>
-          )}
-
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-6">
-            <div className="rounded-lg border bg-background/70 px-3 py-2">
-              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Online</p>
-              <p className="text-lg font-semibold tabular-nums">{onlineCount}</p>
-            </div>
-            <div className="rounded-lg border bg-background/70 px-3 py-2">
-              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Offline</p>
-              <p className="text-lg font-semibold tabular-nums">{offlineCount}</p>
-            </div>
-            <div className="rounded-lg border bg-background/70 px-3 py-2">
-              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Degraded</p>
-              <p className="text-lg font-semibold tabular-nums">{degradedCount}</p>
-            </div>
-            <div className="rounded-lg border bg-background/70 px-3 py-2">
-              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                {scope === "adopted" ? "Adopted" : "Discovered"}
-              </p>
-              <p className="text-lg font-semibold tabular-nums">
-                {scope === "adopted" ? adoptedCount : discoveredCount}
-              </p>
-            </div>
-            <div className="rounded-lg border bg-background/70 px-3 py-2">
-              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Fingerprinted</p>
-              <p className="text-lg font-semibold tabular-nums">{fingerprintedCount}</p>
-            </div>
-            <div className="rounded-lg border bg-background/70 px-3 py-2">
-              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Rich Endpoints</p>
-              <p className="text-lg font-semibold tabular-nums">{richServiceCount}</p>
-            </div>
-          </div>
-
-          {topTypes.length > 0 && (
-            <div className="grid gap-2 lg:grid-cols-3">
-              {topTypes.map((entry) => (
-                <div key={entry.type} className="rounded-lg border bg-background/60 px-3 py-2">
-                  <div className="mb-1 flex items-center justify-between text-xs">
-                    <span className="capitalize text-muted-foreground">{entry.type.replace(/-/g, " ")}</span>
-                    <span className="font-mono tabular-nums">{entry.count}</span>
+                    <div className="grid gap-2">
+                      <Label htmlFor="device-ip">IP Address</Label>
+                      <Input
+                        id="device-ip"
+                        placeholder="e.g. 192.168.1.1"
+                        value={newIp}
+                        onChange={(e) => setNewIp(e.target.value)}
+                        required
+                      />
+                    </div>
                   </div>
-                  <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                    <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${entry.pct}%` }} />
+                  <DialogFooter>
+                    <Button type="submit" disabled={adding}>
+                      {adding ? "Adding..." : "Add Device"}
+                    </Button>
+                  </DialogFooter>
+                </form>
+              </DialogContent>
+            </Dialog>
+          </div>
+        </div>
+
+        <Card interactive={false} className="border-border/80 bg-card/85 shadow-sm">
+          <CardContent className="flex flex-col gap-3 p-3 md:p-4">
+            <div className="flex flex-wrap gap-2">
+              {summaryItems.map((item) => (
+                <div
+                  key={item.label}
+                  className="flex min-w-[112px] items-center gap-2 rounded-md border border-border/80 bg-background/55 px-3 py-2"
+                >
+                  <span className={cn("size-2 rounded-full", item.toneClass)} />
+                  <div className="space-y-0.5">
+                    <p className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+                      {item.label}
+                    </p>
+                    <p className="text-sm font-semibold tabular-nums">{item.value}</p>
                   </div>
                 </div>
               ))}
             </div>
-          )}
-        </CardContent>
-      </Card>
+
+            {scope === "discovery" && runFeedback && (
+              <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                {runFeedback}
+              </div>
+            )}
+
+            {topTypes.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 border-t border-border/70 pt-3">
+                <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                  Top Types
+                </span>
+                {topTypes.map((entry) => (
+                  <Badge
+                    key={entry.type}
+                    variant="outline"
+                    className="gap-2 rounded-md px-2.5 py-1 text-[11px] capitalize"
+                  >
+                    <span>{entry.type.replace(/-/g, " ")}</span>
+                    <span className="font-mono text-[10px] text-muted-foreground">
+                      {entry.count}
+                    </span>
+                    <span className="font-mono text-[10px] text-muted-foreground">
+                      {entry.pct}%
+                    </span>
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </section>
 
       {/* Filters */}
       <div className="flex flex-col gap-3 sm:flex-row">
@@ -655,17 +642,11 @@ export function DeviceInventoryPage({ scope }: { scope: DeviceInventoryScope }) 
           <Input
             placeholder="Search by name, IP, hostname, or vendor..."
             value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setPage(1);
-            }}
+            onChange={(e) => setSearch(e.target.value)}
             className="pl-9"
           />
         </div>
-        <Select value={statusFilter} onValueChange={(value) => {
-          setStatusFilter(value);
-          setPage(1);
-        }}>
+        <Select value={statusFilter} onValueChange={setStatusFilter}>
           <SelectTrigger className="w-full sm:w-[160px]">
             <SelectValue placeholder="Status" />
           </SelectTrigger>
@@ -677,10 +658,7 @@ export function DeviceInventoryPage({ scope }: { scope: DeviceInventoryScope }) 
             ))}
           </SelectContent>
         </Select>
-        <Select value={typeFilter} onValueChange={(value) => {
-          setTypeFilter(value);
-          setPage(1);
-        }}>
+        <Select value={typeFilter} onValueChange={setTypeFilter}>
           <SelectTrigger className="w-full sm:w-[180px]">
             <SelectValue placeholder="Type" />
           </SelectTrigger>
@@ -693,10 +671,7 @@ export function DeviceInventoryPage({ scope }: { scope: DeviceInventoryScope }) 
           </SelectContent>
         </Select>
         {showDiscoveryManagementFilter && (
-          <Select value={managementFilter} onValueChange={(value: "all" | DeviceAdoptionStatus) => {
-            setManagementFilter(value);
-            setPage(1);
-          }}>
+          <Select value={managementFilter} onValueChange={(value: "all" | DeviceAdoptionStatus) => setManagementFilter(value)}>
             <SelectTrigger className="w-full sm:w-[180px]">
               <SelectValue placeholder="Management" />
             </SelectTrigger>
@@ -712,8 +687,8 @@ export function DeviceInventoryPage({ scope }: { scope: DeviceInventoryScope }) 
       </div>
 
       {/* Device Table */}
-      <Card className="min-h-0 flex-1 bg-card/85">
-        <CardContent className="flex h-full min-h-0 flex-col p-0">
+      <Card className="min-h-0 flex-1 overflow-hidden bg-card/85">
+        <CardContent className="flex h-full min-h-0 flex-col p-0 md:p-0">
           {filteredDevices.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
               <Monitor className="size-10 text-muted-foreground/50" />
@@ -745,7 +720,7 @@ export function DeviceInventoryPage({ scope }: { scope: DeviceInventoryScope }) 
               <Table className="table-fixed">
                 <TableHeader>
                   <TableRow>
-                    <SortableHeader field="status">Status</SortableHeader>
+                    <SortableHeader field="status" className="pl-3 first:pl-3">Status</SortableHeader>
                     <SortableHeader field="name">Name</SortableHeader>
                     <SortableHeader field="ip">IP</SortableHeader>
                     <SortableHeader field="type">Type</SortableHeader>
@@ -762,7 +737,7 @@ export function DeviceInventoryPage({ scope }: { scope: DeviceInventoryScope }) 
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {pagedDevices.map((device) => {
+                  {filteredDevices.map((device) => {
                     const evidence = scannerEvidenceSummary(device);
                     const fingerprint = fingerprintSummary(device);
                     return (
@@ -771,7 +746,7 @@ export function DeviceInventoryPage({ scope }: { scope: DeviceInventoryScope }) 
                       className="h-11 cursor-pointer"
                       onClick={() => router.push(`/devices/${device.id}`)}
                     >
-                      <TableCell>
+                      <TableCell className="pl-3 first:pl-3">
                         <div className="flex items-center gap-2">
                           <span
                             className={cn(
@@ -885,31 +860,9 @@ export function DeviceInventoryPage({ scope }: { scope: DeviceInventoryScope }) 
             <div className="flex items-center justify-between border-t px-3 py-2 text-xs text-muted-foreground">
               <p className="inline-flex items-center gap-1.5">
                 <Network className="size-3.5" />
-                Showing {(currentPage - 1) * pageSize + 1}-{Math.min(currentPage * pageSize, filteredDevices.length)} of {filteredDevices.length}
+                Showing {filteredDevices.length} device{filteredDevices.length === 1 ? "" : "s"}
                 {filteredDevices.length !== scopedDevices.length ? ` filtered from ${scopedDevices.length}` : ""}
               </p>
-              <div className="flex items-center gap-2">
-                <span className="hidden items-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground/80 md:inline-flex">
-                  <Activity className="size-3" />
-                  page {currentPage}/{totalPages}
-                </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  disabled={currentPage === 1}
-                >
-                  Prev
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={currentPage >= totalPages}
-                >
-                  Next
-                </Button>
-              </div>
             </div>
           )}
         </CardContent>

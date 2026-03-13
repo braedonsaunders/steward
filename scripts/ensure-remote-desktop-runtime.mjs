@@ -169,19 +169,58 @@ async function ensureDockerGuacd() {
 }
 
 function dockerDesktopCandidates() {
-  const candidates = [
-    "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe",
-  ];
-  if (process.env.LOCALAPPDATA) {
-    candidates.push(path.join(process.env.LOCALAPPDATA, "Programs", "Docker", "Docker", "Docker Desktop.exe"));
+  const candidates = [];
+
+  if (process.platform === "win32") {
+    candidates.push("C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe");
+    if (process.env.LOCALAPPDATA) {
+      candidates.push(path.join(process.env.LOCALAPPDATA, "Programs", "Docker", "Docker", "Docker Desktop.exe"));
+    }
   }
+
+  if (process.platform === "darwin") {
+    candidates.push("/Applications/Docker.app");
+    if (process.env.HOME) {
+      candidates.push(path.join(process.env.HOME, "Applications", "Docker.app"));
+    }
+  }
+
   return candidates.filter((candidate, index, all) => all.indexOf(candidate) === index);
 }
 
 async function maybeStartDockerDesktop() {
-  if (process.platform !== "win32") {
+  if (process.platform !== "win32" && process.platform !== "darwin") {
     return false;
   }
+
+  const candidates = dockerDesktopCandidates();
+  if (candidates.length === 0) {
+    return false;
+  }
+
+  if (process.platform === "darwin") {
+    const application = candidates.find((candidate) => existsSync(candidate));
+    if (!application) {
+      return false;
+    }
+
+    log("Starting Docker Desktop so the guacd container can run.");
+    const child = spawn("open", ["-a", "Docker"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+
+    const deadline = Date.now() + 45_000;
+    while (Date.now() < deadline) {
+      if (dockerDaemonReady()) {
+        return true;
+      }
+      await sleep(1_000);
+    }
+    return false;
+  }
+
   const executable = dockerDesktopCandidates().find((candidate) => existsSync(candidate));
   if (!executable) {
     return false;

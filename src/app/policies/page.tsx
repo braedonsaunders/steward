@@ -435,89 +435,87 @@ export default function PoliciesPage() {
             </Card>
           ) : (
             <>
-              <Card>
-                <CardContent className="p-0">
-                  <div className="overflow-auto">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Priority</TableHead>
-                          <TableHead>Name</TableHead>
-                          <TableHead>Action Classes</TableHead>
-                          <TableHead>Tiers</TableHead>
-                          <TableHead>Decision</TableHead>
-                          <TableHead>Enabled</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {sortedRules.map((rule) => (
-                          <TableRow
-                            key={rule.id}
-                            className="cursor-pointer"
-                            onClick={() =>
-                              setExpandedRule(
-                                expandedRule === rule.id ? null : rule.id,
-                              )
-                            }
-                          >
-                            <TableCell className="tabular-nums font-mono text-xs">
-                              {rule.priority}
-                            </TableCell>
-                            <TableCell className="font-medium">
-                              {rule.name}
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex flex-wrap gap-1">
-                                {rule.actionClasses?.length ? (
-                                  rule.actionClasses.map((c) => (
-                                    <Badge
-                                      key={c}
-                                      className={cn(
-                                        "text-[10px] font-mono",
-                                        ACTION_CLASS_COLORS[c],
-                                      )}
-                                    >
-                                      {c}
-                                    </Badge>
-                                  ))
-                                ) : (
-                                  <span className="text-xs text-muted-foreground">
-                                    All
-                                  </span>
-                                )}
-                              </div>
-                            </TableCell>
-                            <TableCell>
-                              {rule.autonomyTiers?.length ? (
-                                <span className="text-sm tabular-nums">
-                                  {rule.autonomyTiers.join(", ")}
-                                </span>
+              <Card className="overflow-hidden">
+                <CardContent className="p-0 md:p-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Priority</TableHead>
+                        <TableHead>Name</TableHead>
+                        <TableHead>Action Classes</TableHead>
+                        <TableHead>Tiers</TableHead>
+                        <TableHead>Decision</TableHead>
+                        <TableHead>Enabled</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {sortedRules.map((rule) => (
+                        <TableRow
+                          key={rule.id}
+                          className="cursor-pointer"
+                          onClick={() =>
+                            setExpandedRule(
+                              expandedRule === rule.id ? null : rule.id,
+                            )
+                          }
+                        >
+                          <TableCell className="tabular-nums font-mono text-xs">
+                            {rule.priority}
+                          </TableCell>
+                          <TableCell className="font-medium">
+                            {rule.name}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex flex-wrap gap-1">
+                              {rule.actionClasses?.length ? (
+                                rule.actionClasses.map((c) => (
+                                  <Badge
+                                    key={c}
+                                    className={cn(
+                                      "text-[10px] font-mono",
+                                      ACTION_CLASS_COLORS[c],
+                                    )}
+                                  >
+                                    {c}
+                                  </Badge>
+                                ))
                               ) : (
                                 <span className="text-xs text-muted-foreground">
                                   All
                                 </span>
                               )}
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant={decisionVariant(rule.decision)}>
-                                {decisionLabel(rule.decision)}
-                              </Badge>
-                            </TableCell>
-                            <TableCell>
-                              <Switch
-                                checked={rule.enabled}
-                                size="sm"
-                                onClick={(e) => e.stopPropagation()}
-                                onCheckedChange={() => {
-                                  // Placeholder: in production this would call an API
-                                }}
-                              />
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            {rule.autonomyTiers?.length ? (
+                              <span className="text-sm tabular-nums">
+                                {rule.autonomyTiers.join(", ")}
+                              </span>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">
+                                All
+                              </span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={decisionVariant(rule.decision)}>
+                              {decisionLabel(rule.decision)}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Switch
+                              checked={rule.enabled}
+                              size="sm"
+                              onClick={(e) => e.stopPropagation()}
+                              onCheckedChange={() => {
+                                // Placeholder: in production this would call an API
+                              }}
+                            />
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
                 </CardContent>
               </Card>
 

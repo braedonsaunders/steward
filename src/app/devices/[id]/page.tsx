@@ -576,7 +576,7 @@ export default function DeviceDetailPage() {
           onValueChange={(value) => setActivePrimaryTab(value as DevicePrimaryTab)}
           className="flex min-h-0 flex-1 flex-col"
         >
-          <TabsList className="h-auto w-fit flex-wrap justify-start gap-0.5 self-start p-1">
+          <TabsList className="h-auto w-fit flex-wrap justify-start self-start">
             <TabsTrigger className="h-8 flex-none px-3 text-xs sm:h-9 sm:text-sm" value="overview">Overview</TabsTrigger>
             <TabsTrigger className="h-8 flex-none px-3 text-xs sm:h-9 sm:text-sm" value="steward">Chat</TabsTrigger>
             <TabsTrigger className="h-8 flex-none px-3 text-xs sm:h-9 sm:text-sm" value="remote">Remote</TabsTrigger>
@@ -816,24 +816,17 @@ export default function DeviceDetailPage() {
               onValueChange={(value) => setActiveManageTab(value as DeviceManageTab)}
               className="flex h-full min-h-0 flex-col gap-3 overflow-hidden"
             >
-              <div className="rounded-2xl border border-border/70 bg-card/70 p-3">
-                <div className="flex flex-col items-start gap-3">
-                  <div className="space-y-1">
-                    <p className="text-sm font-medium text-foreground">Manage</p>
-                    <p className="text-xs text-muted-foreground">
-                      Access, responsibilities, and automations for this device.
-                    </p>
-                  </div>
-                  <TabsList
-                    variant="line"
-                    className="h-auto w-fit flex-wrap justify-start gap-1 self-start bg-transparent p-0"
-                  >
-                    <TabsTrigger className="h-8 flex-none px-3 text-xs sm:h-9 sm:text-sm" value="access">Access</TabsTrigger>
-                    <TabsTrigger className="h-8 flex-none px-3 text-xs sm:h-9 sm:text-sm" value="workloads">Workloads</TabsTrigger>
-                    <TabsTrigger className="h-8 flex-none px-3 text-xs sm:h-9 sm:text-sm" value="automations">Automations</TabsTrigger>
-                  </TabsList>
-                </div>
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-foreground">Manage</p>
+                <p className="text-xs text-muted-foreground">
+                  Access, responsibilities, and automations for this device.
+                </p>
               </div>
+              <TabsList className="h-auto w-fit flex-wrap justify-start self-start">
+                <TabsTrigger className="h-8 flex-none px-3 text-xs sm:h-9 sm:text-sm" value="access">Access</TabsTrigger>
+                <TabsTrigger className="h-8 flex-none px-3 text-xs sm:h-9 sm:text-sm" value="workloads">Workloads</TabsTrigger>
+                <TabsTrigger className="h-8 flex-none px-3 text-xs sm:h-9 sm:text-sm" value="automations">Automations</TabsTrigger>
+              </TabsList>
 
               <TabsContent value="access" forceMount className="mt-0 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
                 <AnimatedTabPanel
@@ -1008,4 +1001,3 @@ export default function DeviceDetailPage() {
     </main>
   );
 }
-

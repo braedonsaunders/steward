@@ -103,4 +103,4 @@ if (-not (Test-DependenciesInstalled)) {
 
 Invoke-Step "Ensuring Playwright runtime..." { node scripts/ensure-playwright.mjs }
 Invoke-Step "Ensuring required network tools (nmap, tshark, snmpget, snmpwalk)..." { node scripts/ensure-network-tools.mjs }
-Invoke-Step "Ensuring remote desktop runtime (guacd)..." { node scripts/ensure-remote-desktop-runtime.mjs }
+Invoke-Step "Ensuring remote desktop runtime (guacd)..." { node scripts/ensure-remote-desktop-runtime.mjs --best-effort }

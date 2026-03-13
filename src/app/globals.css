@@ -3,58 +3,58 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --font-ui: "Aptos", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
-  --font-heading: "Aptos Display", "Segoe UI Variable Display", "Segoe UI", "Trebuchet MS", sans-serif;
-  --font-mono: "Cascadia Mono", "IBM Plex Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  --background: oklch(0.98 0.01 140);
-  --foreground: oklch(0.25 0.03 180);
-  --card: oklch(0.995 0.004 120 / 86%);
-  --card-foreground: oklch(0.25 0.03 180);
-  --popover: oklch(0.995 0.002 120);
-  --popover-foreground: oklch(0.25 0.03 180);
-  --primary: oklch(0.47 0.11 214);
-  --primary-foreground: oklch(0.985 0.003 120);
-  --secondary: oklch(0.93 0.03 168);
-  --secondary-foreground: oklch(0.28 0.03 180);
-  --muted: oklch(0.94 0.014 180);
-  --muted-foreground: oklch(0.47 0.02 185);
-  --accent: oklch(0.95 0.03 92);
-  --accent-foreground: oklch(0.3 0.03 180);
-  --destructive: oklch(0.61 0.21 25);
-  --destructive-foreground: oklch(0.99 0.003 120);
-  --border: oklch(0.85 0.022 172);
-  --input: oklch(0.85 0.022 172);
-  --ring: oklch(0.66 0.13 214);
-  --radius: 0.75rem;
-  --steward-sidebar-width: 220px;
-  --sidebar: oklch(0.97 0.01 140);
-  --sidebar-foreground: oklch(0.25 0.03 180);
-  --sidebar-border: oklch(0.88 0.018 172);
+  --font-ui: var(--font-ui-app), "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  --font-heading: var(--font-ui-app), "Segoe UI Variable Display", "Segoe UI", sans-serif;
+  --font-mono: var(--font-mono-app), "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --background: oklch(0.978 0.003 255);
+  --foreground: oklch(0.274 0.016 255);
+  --card: oklch(0.995 0.002 255 / 94%);
+  --card-foreground: oklch(0.274 0.016 255);
+  --popover: oklch(0.998 0.002 255 / 98%);
+  --popover-foreground: oklch(0.274 0.016 255);
+  --primary: oklch(0.565 0.1 230);
+  --primary-foreground: oklch(0.985 0.003 255);
+  --secondary: oklch(0.95 0.005 255);
+  --secondary-foreground: oklch(0.32 0.016 255);
+  --muted: oklch(0.958 0.006 255);
+  --muted-foreground: oklch(0.51 0.014 255);
+  --accent: oklch(0.948 0.006 255);
+  --accent-foreground: oklch(0.32 0.016 255);
+  --destructive: oklch(0.62 0.205 28);
+  --destructive-foreground: oklch(0.985 0.003 255);
+  --border: oklch(0.885 0.008 255 / 72%);
+  --input: oklch(0.885 0.008 255 / 72%);
+  --ring: oklch(0.63 0.095 230 / 42%);
+  --radius: 0.9rem;
+  --steward-sidebar-width: 236px;
+  --sidebar: oklch(0.988 0.002 255);
+  --sidebar-foreground: oklch(0.25 0.016 255);
+  --sidebar-border: oklch(0.9 0.008 255 / 72%);
 }
 
 .dark {
-  --background: oklch(0.13 0.015 240);
-  --foreground: oklch(0.93 0.01 220);
-  --card: oklch(0.17 0.015 240 / 86%);
-  --card-foreground: oklch(0.93 0.01 220);
-  --popover: oklch(0.17 0.015 240);
-  --popover-foreground: oklch(0.93 0.01 220);
-  --primary: oklch(0.62 0.14 214);
-  --primary-foreground: oklch(0.13 0.015 240);
-  --secondary: oklch(0.22 0.02 220);
-  --secondary-foreground: oklch(0.88 0.01 220);
-  --muted: oklch(0.2 0.015 230);
-  --muted-foreground: oklch(0.58 0.02 220);
-  --accent: oklch(0.22 0.02 92);
-  --accent-foreground: oklch(0.88 0.01 92);
-  --destructive: oklch(0.55 0.2 25);
-  --destructive-foreground: oklch(0.95 0.01 25);
-  --border: oklch(0.25 0.015 230);
-  --input: oklch(0.25 0.015 230);
-  --ring: oklch(0.55 0.13 214);
-  --sidebar: oklch(0.11 0.015 240);
-  --sidebar-foreground: oklch(0.88 0.01 220);
-  --sidebar-border: oklch(0.22 0.015 230);
+  --background: oklch(0.174 0.01 255);
+  --foreground: oklch(0.934 0.008 255);
+  --card: oklch(0.214 0.009 255 / 96%);
+  --card-foreground: oklch(0.934 0.008 255);
+  --popover: oklch(0.214 0.009 255 / 98%);
+  --popover-foreground: oklch(0.934 0.008 255);
+  --primary: oklch(0.74 0.085 232);
+  --primary-foreground: oklch(0.16 0.01 255);
+  --secondary: oklch(0.245 0.008 255);
+  --secondary-foreground: oklch(0.88 0.008 255);
+  --muted: oklch(0.235 0.008 255);
+  --muted-foreground: oklch(0.66 0.012 255);
+  --accent: oklch(0.25 0.008 255);
+  --accent-foreground: oklch(0.92 0.008 255);
+  --destructive: oklch(0.64 0.2 28);
+  --destructive-foreground: oklch(0.97 0.006 255);
+  --border: oklch(0.315 0.01 255 / 68%);
+  --input: oklch(0.315 0.01 255 / 68%);
+  --ring: oklch(0.7 0.09 228 / 45%);
+  --sidebar: oklch(0.188 0.01 255);
+  --sidebar-foreground: oklch(0.92 0.008 255);
+  --sidebar-border: oklch(0.305 0.01 255 / 68%);
 }
 
 @theme inline {
@@ -101,22 +101,43 @@ body {
   overflow: hidden;
 }
 
-body {
+html {
   background: var(--background);
+}
+
+body {
+  position: relative;
+  background: linear-gradient(180deg, color-mix(in oklab, var(--background) 96%, white 2%), var(--background));
   color: var(--foreground);
   font-family: var(--font-ui), "Segoe UI", sans-serif;
+  letter-spacing: -0.01em;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
 a {
   color: inherit;
+  text-decoration: none;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--primary) 24%, transparent);
 }
 
 .steward-sidebar-font {
   font-family: var(--font-heading), "Segoe UI", sans-serif;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.018em;
 }
 
 .steward-heading-font {
   font-family: var(--font-heading), "Segoe UI", sans-serif;
-  letter-spacing: -0.015em;
+  letter-spacing: -0.028em;
+}
+
+.steward-kicker {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: color-mix(in oklab, var(--muted-foreground) 82%, transparent);
 }

@@ -372,8 +372,7 @@ main() {
   node scripts/ensure-playwright.mjs
 
   log "Ensuring remote desktop runtime (guacd)..."
-  node scripts/ensure-remote-desktop-runtime.mjs
+  node scripts/ensure-remote-desktop-runtime.mjs --best-effort
 }
 
 main "$@"
-

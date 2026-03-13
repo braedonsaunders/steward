@@ -366,98 +366,96 @@ function DashboardWidgetTile({
   ]);
 
   return (
-    <div className="h-full">
-      <Card
-        className={cn(
-          "group/widget-card relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden",
-          fullscreen && "rounded-[28px] border-border/70 bg-background/95 shadow-2xl",
-          dragState === "dragging" && "opacity-50",
-          (resizePreview || positionPreview) && "border-primary ring-1 ring-primary/40",
-        )}
-      >
-        {!fullscreen && (
-          <>
+    <Card
+      className={cn(
+        "group/widget-card relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden",
+        fullscreen && "rounded-[28px] border-border/70 bg-background/95 shadow-2xl",
+        dragState === "dragging" && "opacity-50",
+        (resizePreview || positionPreview) && "border-primary ring-1 ring-primary/40",
+      )}
+    >
+      {!fullscreen && (
+        <>
+          <button
+            type="button"
+            onPointerDown={handleMovePointerDown}
+            onMouseDown={handleMovePointerDown}
+            className="absolute left-2 top-2 z-20 flex h-7 w-7 cursor-grab items-center justify-center rounded-full text-muted-foreground/65 opacity-60 transition-opacity hover:opacity-100 hover:text-foreground active:cursor-grabbing"
+            aria-label="Move widget tile"
+          >
+            <GripVertical className="size-3.5" />
+          </button>
+          <div className="pointer-events-none absolute right-2 top-2 z-20">
+            <div
+              className={cn(
+                "pointer-events-auto flex items-center gap-1 text-muted-foreground shadow-sm transition-opacity duration-150",
+                "opacity-90 md:opacity-0 md:group-hover/widget-card:opacity-100 md:group-focus-within/widget-card:opacity-100",
+              )}
+            >
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                onClick={onToggleFullscreen}
+                className="h-7 w-7 rounded-full text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+              >
+                <Maximize2 className="size-3.5" />
+                <span className="sr-only">Expand widget</span>
+              </Button>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                onClick={onRemove}
+                className="h-7 w-7 rounded-full text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+              >
+                <Trash2 className="size-3.5" />
+                <span className="sr-only">Remove widget</span>
+              </Button>
+            </div>
+          </div>
+          {isDesktop && (
             <button
               type="button"
-              onPointerDown={handleMovePointerDown}
-              onMouseDown={handleMovePointerDown}
-              className="absolute left-2 top-2 z-20 flex h-7 w-7 cursor-grab items-center justify-center rounded-full text-muted-foreground/65 opacity-60 transition-opacity hover:opacity-100 hover:text-foreground active:cursor-grabbing"
-              aria-label="Move widget tile"
+              onPointerDown={handleResizePointerDown}
+              onMouseDown={handleResizePointerDown}
+              className="absolute bottom-2 right-2 z-20 flex h-7 w-7 cursor-se-resize touch-none items-center justify-center rounded-full text-muted-foreground/65 opacity-60 transition-opacity hover:opacity-100 hover:text-foreground"
+              aria-label="Resize widget tile"
             >
-              <GripVertical className="size-3.5" />
+              <GripVertical className="size-3.5 rotate-45" />
             </button>
-            <div className="pointer-events-none absolute right-2 top-2 z-20">
-              <div
-                className={cn(
-                  "pointer-events-auto flex items-center gap-1 text-muted-foreground shadow-sm transition-opacity duration-150",
-                  "opacity-90 md:opacity-0 md:group-hover/widget-card:opacity-100 md:group-focus-within/widget-card:opacity-100",
-                )}
-              >
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  onClick={onToggleFullscreen}
-                  className="h-7 w-7 rounded-full text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-                >
-                  <Maximize2 className="size-3.5" />
-                  <span className="sr-only">Expand widget</span>
-                </Button>
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  onClick={onRemove}
-                  className="h-7 w-7 rounded-full text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-                >
-                  <Trash2 className="size-3.5" />
-                  <span className="sr-only">Remove widget</span>
-                </Button>
-              </div>
-            </div>
-            {isDesktop && (
-              <button
-                type="button"
-                onPointerDown={handleResizePointerDown}
-                onMouseDown={handleResizePointerDown}
-                className="absolute bottom-2 right-2 z-20 flex h-7 w-7 cursor-se-resize touch-none items-center justify-center rounded-full text-muted-foreground/65 opacity-60 transition-opacity hover:opacity-100 hover:text-foreground"
-                aria-label="Resize widget tile"
-              >
-                <GripVertical className="size-3.5 rotate-45" />
-              </button>
-            )}
-          </>
-        )}
-        {fullscreen && (
-          <div className="pointer-events-none absolute right-3 top-3 z-20">
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              onClick={onToggleFullscreen}
-              className="pointer-events-auto h-8 w-8 rounded-full border border-border/60 bg-background/72 text-muted-foreground shadow-sm backdrop-blur-sm hover:bg-background hover:text-foreground"
-            >
-              <Minimize2 className="size-4" />
-              <span className="sr-only">Exit widget fullscreen</span>
-            </Button>
-          </div>
-        )}
-        <CardContent className={cn("flex min-h-0 flex-1 overflow-hidden p-0", fullscreen && "p-0")}>
-          <DeviceWidgetRuntimeFrame
-            deviceId={item.widget.deviceId}
-            widget={runtimeWidget}
-            active={active}
-            fullscreen={fullscreen}
-            onToggleFullscreen={onToggleFullscreen}
-            showFullscreenButton={false}
-            maxFrameHeight={fullscreen ? 4_000 : 1_600}
-            fillAvailableHeight
-            showRuntimeBadges={false}
-            className="h-full w-full flex-1"
-          />
-        </CardContent>
-      </Card>
-    </div>
+          )}
+        </>
+      )}
+      {fullscreen && (
+        <div className="pointer-events-none absolute right-3 top-3 z-20">
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            onClick={onToggleFullscreen}
+            className="pointer-events-auto h-8 w-8 rounded-full border border-border/60 bg-background/72 text-muted-foreground shadow-sm backdrop-blur-sm hover:bg-background hover:text-foreground"
+          >
+            <Minimize2 className="size-4" />
+            <span className="sr-only">Exit widget fullscreen</span>
+          </Button>
+        </div>
+      )}
+      <CardContent className="flex min-h-0 min-w-0 flex-1 overflow-hidden p-0 md:p-0">
+        <DeviceWidgetRuntimeFrame
+          deviceId={item.widget.deviceId}
+          widget={runtimeWidget}
+          active={active}
+          fullscreen={fullscreen}
+          onToggleFullscreen={onToggleFullscreen}
+          showFullscreenButton={false}
+          maxFrameHeight={fullscreen ? 4_000 : 1_600}
+          fillAvailableHeight
+          showRuntimeBadges={false}
+          className="h-full w-full flex-1"
+        />
+      </CardContent>
+    </Card>
   );
 }
 

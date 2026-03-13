@@ -72,6 +72,8 @@ export default function DashboardPage() {
   const activeRecs = recommendations
     .filter((r) => !r.dismissed)
     .slice(0, 3);
+  const healthyShare = overview.devices > 0 ? Math.round((overview.online / overview.devices) * 100) : 0;
+  const topIncident = openIncidents[0];
 
   if (loading) {
     return (
@@ -93,13 +95,31 @@ export default function DashboardPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
-      {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight steward-heading-font">Dashboard</h1>
-          <p className="text-sm text-muted-foreground">
-            Network operations overview
+          <p className="steward-kicker">Operations</p>
+          <h1 className="steward-heading-font mt-1 text-[2rem] font-semibold text-foreground md:text-[2.25rem]">
+            Dashboard
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Network operations overview across discovery, health, and approvals.
           </p>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-3 xl:w-[34rem]">
+          <div className="rounded-lg border border-border bg-card px-3 py-2.5">
+            <p className="steward-kicker">Availability</p>
+            <p className="mt-1 text-lg font-semibold text-foreground">{healthyShare}% online</p>
+          </div>
+          <div className="rounded-lg border border-border bg-card px-3 py-2.5">
+            <p className="steward-kicker">Incidents</p>
+            <p className="mt-1 text-lg font-semibold text-foreground">{overview.incidents} active</p>
+          </div>
+          <div className="rounded-lg border border-border bg-card px-3 py-2.5">
+            <p className="steward-kicker">Top Priority</p>
+            <p className="mt-1 truncate text-sm font-medium text-foreground">
+              {topIncident ? topIncident.title : "No unresolved incidents"}
+            </p>
+          </div>
         </div>
       </div>
 
@@ -116,29 +136,31 @@ export default function DashboardPage() {
           <div className="flex flex-col gap-4">
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
               <Card>
-                <CardContent className="flex items-center gap-4 p-5">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
+                <CardContent className="flex items-center gap-3 p-4">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
                     <Server className="h-5 w-5 text-primary" />
                   </div>
                   <div>
-                    <p className="text-2xl font-semibold">{overview.devices}</p>
-                    <p className="text-xs text-muted-foreground">Total Devices</p>
+                    <p className="steward-kicker">Inventory</p>
+                    <p className="mt-1 text-2xl font-semibold">{overview.devices}</p>
+                    <p className="text-xs text-muted-foreground">Total devices</p>
                   </div>
                 </CardContent>
               </Card>
               <Card>
-                <CardContent className="flex items-center gap-4 p-5">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-green-500/10">
+                <CardContent className="flex items-center gap-3 p-4">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-500/10">
                     <Wifi className="h-5 w-5 text-green-600 dark:text-green-400" />
                   </div>
                   <div>
-                    <p className="text-2xl font-semibold">{overview.online}</p>
+                    <p className="steward-kicker">Reachable</p>
+                    <p className="mt-1 text-2xl font-semibold">{overview.online}</p>
                     <p className="text-xs text-muted-foreground">Online</p>
                   </div>
                 </CardContent>
               </Card>
               <Card>
-                <CardContent className="flex items-center gap-4 p-5">
+                <CardContent className="flex items-center gap-3 p-4">
                   <div className={cn(
                     "flex h-10 w-10 items-center justify-center rounded-lg",
                     overview.incidents > 0 ? "bg-destructive/10" : "bg-muted",
@@ -149,24 +171,26 @@ export default function DashboardPage() {
                     )} />
                   </div>
                   <div>
-                    <p className="text-2xl font-semibold">{overview.incidents}</p>
-                    <p className="text-xs text-muted-foreground">Open Incidents</p>
+                    <p className="steward-kicker">Incidents</p>
+                    <p className="mt-1 text-2xl font-semibold">{overview.incidents}</p>
+                    <p className="text-xs text-muted-foreground">Open incidents</p>
                   </div>
                 </CardContent>
               </Card>
               <Card>
-                <CardContent className="flex items-center gap-4 p-5">
+                <CardContent className="flex items-center gap-3 p-4">
                   <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-500/10">
                     <Lightbulb className="h-5 w-5 text-amber-600 dark:text-amber-400" />
                   </div>
                   <div>
-                    <p className="text-2xl font-semibold">{overview.recommendations}</p>
+                    <p className="steward-kicker">Suggestions</p>
+                    <p className="mt-1 text-2xl font-semibold">{overview.recommendations}</p>
                     <p className="text-xs text-muted-foreground">Recommendations</p>
                   </div>
                 </CardContent>
               </Card>
               <Card>
-                <CardContent className="flex items-center gap-4 p-5">
+                <CardContent className="flex items-center gap-3 p-4">
                   <div className={cn(
                     "flex h-10 w-10 items-center justify-center rounded-lg",
                     overview.pendingApprovals > 0 ? "bg-orange-500/10" : "bg-muted",
@@ -177,19 +201,21 @@ export default function DashboardPage() {
                     )} />
                   </div>
                   <div>
-                    <p className="text-2xl font-semibold">{overview.pendingApprovals}</p>
-                    <p className="text-xs text-muted-foreground">Pending Approvals</p>
+                    <p className="steward-kicker">Queue</p>
+                    <p className="mt-1 text-2xl font-semibold">{overview.pendingApprovals}</p>
+                    <p className="text-xs text-muted-foreground">Pending approvals</p>
                   </div>
                 </CardContent>
               </Card>
               <Card>
-                <CardContent className="flex items-center gap-4 p-5">
+                <CardContent className="flex items-center gap-3 p-4">
                   <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-cyan-500/10">
                     <Zap className="h-5 w-5 text-cyan-600 dark:text-cyan-400" />
                   </div>
                   <div>
-                    <p className="text-2xl font-semibold">{overview.playbooksRunning}</p>
-                    <p className="text-xs text-muted-foreground">Playbooks Running</p>
+                    <p className="steward-kicker">Execution</p>
+                    <p className="mt-1 text-2xl font-semibold">{overview.playbooksRunning}</p>
+                    <p className="text-xs text-muted-foreground">Playbooks running</p>
                   </div>
                 </CardContent>
               </Card>

@@ -8,7 +8,7 @@
     "playwright:install": "node scripts/ensure-playwright.mjs",
     "predev": "node scripts/ensure-network-tools.mjs && node scripts/ensure-playwright.mjs && node scripts/ensure-remote-desktop-runtime.mjs --best-effort && node scripts/free-port.mjs 3010 3011",
     "dev": "next dev --port 3010",
-    "prestart": "node scripts/ensure-network-tools.mjs && node scripts/ensure-playwright.mjs && node scripts/ensure-remote-desktop-runtime.mjs",
+    "prestart": "node scripts/ensure-network-tools.mjs && node scripts/ensure-playwright.mjs && node scripts/ensure-remote-desktop-runtime.mjs --best-effort",
     "build": "next build --webpack",
     "start": "node scripts/start-prod.mjs",
     "lint": "eslint",
