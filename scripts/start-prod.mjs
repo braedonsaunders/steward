@@ -58,29 +58,39 @@ function replaceDirectory(fromPath, toPath) {
   cpSync(fromPath, toPath, { recursive: true });
 }
 
-function syncStandaloneRuntimeAssets() {
+function stageStandaloneRuntime() {
+  const builtStandaloneDir = path.resolve(".next/standalone");
+  const runtimeDir = path.resolve("build/standalone-runtime");
+  replaceDirectory(builtStandaloneDir, runtimeDir);
+
   const repoStaticDir = path.resolve(".next/static");
-  const standaloneStaticDir = path.resolve(".next/standalone/.next/static");
-  replaceDirectory(repoStaticDir, standaloneStaticDir);
+  const runtimeStaticDir = path.resolve(runtimeDir, ".next/static");
+  replaceDirectory(repoStaticDir, runtimeStaticDir);
 
   const repoPublicDir = path.resolve("public");
   if (existsSync(repoPublicDir)) {
-    const standalonePublicDir = path.resolve(".next/standalone/public");
-    replaceDirectory(repoPublicDir, standalonePublicDir);
+    const runtimePublicDir = path.resolve(runtimeDir, "public");
+    replaceDirectory(repoPublicDir, runtimePublicDir);
   }
+
+  return {
+    runtimeDir,
+    standaloneServerPath: path.resolve(runtimeDir, "server.js"),
+  };
 }
 
 const { port, hostname } = parseArgs(process.argv.slice(2));
-const standaloneServerPath = path.resolve(".next/standalone/server.js");
+const builtStandaloneServerPath = path.resolve(".next/standalone/server.js");
 
-if (!existsSync(standaloneServerPath)) {
+if (!existsSync(builtStandaloneServerPath)) {
   fail("[start-prod] Missing .next/standalone/server.js. Run `npm run build` first.");
 }
 
-syncStandaloneRuntimeAssets();
+const { runtimeDir, standaloneServerPath } = stageStandaloneRuntime();
 
 const child = spawn(process.execPath, [standaloneServerPath], {
   stdio: "inherit",
+  cwd: runtimeDir,
   env: {
     ...process.env,
     NODE_ENV: "production",
