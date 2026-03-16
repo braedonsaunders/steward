@@ -14,7 +14,6 @@
   <p>
     <img alt="Self-hosted" src="https://img.shields.io/badge/self--hosted-yes-0f766e?style=for-the-badge" />
     <img alt="SQLite-backed state" src="https://img.shields.io/badge/state-SQLite-1d4ed8?style=for-the-badge" />
-    <img alt="Agent loop" src="https://img.shields.io/badge/agent-discover%20-%3E%20understand%20-%3E%20act%20-%3E%20learn-111827?style=for-the-badge" />
     <img alt="RBAC" src="https://img.shields.io/badge/access-RBAC%20%2B%20SSO-7c3aed?style=for-the-badge" />
     <img alt="Remote access" src="https://img.shields.io/badge/remote-RDP%20%2F%20VNC%20%2F%20terminal-0f172a?style=for-the-badge" />
   </p>
