@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { isAuthorized } from "@/lib/auth/guard";
 import { ensureStewardLoop } from "@/lib/agent/loop";
+import { expireStale } from "@/lib/approvals/queue";
 import { stateStore } from "@/lib/state/store";
 
 export const runtime = "nodejs";
@@ -25,6 +26,7 @@ export async function GET(request: NextRequest) {
         }
         pumping = true;
         try {
+          expireStale();
           const state = await stateStore.getState();
           const controlPlane = stateStore.getControlPlaneHealth();
           controller.enqueue(encoder.encode(`event: state\ndata: ${JSON.stringify({ ...state, controlPlane })}\n\n`));

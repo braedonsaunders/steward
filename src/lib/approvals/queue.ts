@@ -1,4 +1,5 @@
 import { enqueueNotificationEvent } from "@/lib/notifications/manager";
+import { isPlaybookApprovalExpired } from "@/lib/playbooks/approval-utils";
 import { stateStore } from "@/lib/state/store";
 import type { Device, PlaybookRun } from "@/lib/state/types";
 
@@ -63,6 +64,10 @@ export function createApproval(run: PlaybookRun, device: Device): PlaybookRun {
 export function approveAction(id: string, approvedBy: string = "user"): PlaybookRun | undefined {
   const run = stateStore.getPlaybookRunById(id);
   if (!run || run.status !== "pending_approval") return undefined;
+  if (isPlaybookApprovalExpired(run)) {
+    expireStale();
+    return undefined;
+  }
 
   const updated: PlaybookRun = {
     ...run,
@@ -93,6 +98,10 @@ export function denyAction(
 ): PlaybookRun | undefined {
   const run = stateStore.getPlaybookRunById(id);
   if (!run || run.status !== "pending_approval") return undefined;
+  if (isPlaybookApprovalExpired(run)) {
+    expireStale();
+    return undefined;
+  }
 
   const updated: PlaybookRun = {
     ...run,
@@ -118,12 +127,12 @@ export function denyAction(
  * Expire stale pending approvals past their TTL.
  */
 export function expireStale(): number {
-  const pending = stateStore.getPendingApprovals();
+  const pending = stateStore.getPlaybookRuns({ status: "pending_approval" });
   const now = Date.now();
   let expired = 0;
 
   for (const run of pending) {
-    if (run.expiresAt && new Date(run.expiresAt).getTime() < now) {
+    if (isPlaybookApprovalExpired(run, now)) {
       const escalationAlreadySent = Boolean(
         run.evidence.preSnapshot
         && typeof run.evidence.preSnapshot.approvalEscalatedAt === "string",

@@ -3,6 +3,7 @@ export const runtime = "nodejs";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { isAuthorized } from "@/lib/auth/guard";
+import { expireStale } from "@/lib/approvals/queue";
 import { stateStore } from "@/lib/state/store";
 
 export async function GET(request: NextRequest) {
@@ -10,6 +11,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  expireStale();
   const pending = stateStore.getPendingApprovals();
 
   // Enrich with device names

@@ -2153,6 +2153,7 @@ const runControlPlaneTick = async (): Promise<void> => {
   coordinatorRunning = true;
   try {
     const settings = stateStore.getRuntimeSettings();
+    expireStale();
     stateStore.cleanupExpiredRuntimeLeases();
     stateStore.requeueStaleDurableJobs(scannerJobStaleMs(settings), {
       kinds: Array.from(SCANNER_JOB_KINDS),
@@ -2222,6 +2223,7 @@ const startLeaderWorkers = (settings: RuntimeSettings, options?: { immediate?: b
       void processNotificationJobs().catch((error) => {
         console.error("Notification worker failed", error);
       });
+      expireStale();
       localToolRuntime.expireStaleApprovals();
     }, sessionSweepIntervalMs);
   }

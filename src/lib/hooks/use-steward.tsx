@@ -35,6 +35,7 @@ import type {
   UserRole,
 } from "@/lib/state/types";
 import type { DeviceAdoptionStatus } from "@/lib/state/device-adoption";
+import { filterActivePlaybookApprovals } from "@/lib/playbooks/approval-utils";
 import { defaultRuntimeSettings } from "@/lib/state/runtime-defaults";
 import { persistApiToken, withApiTokenQuery, withClientApiToken } from "@/lib/auth/client-token";
 
@@ -379,7 +380,7 @@ export function StewardProvider({ children }: { children: ReactNode }) {
             const next = JSON.parse(event.data) as StatePayload;
             setState(next);
             setControlPlane(next.controlPlane ?? null);
-          setPendingApprovals((next.playbookRuns ?? []).filter((run) => run.status === "pending_approval"));
+          setPendingApprovals(filterActivePlaybookApprovals(next.playbookRuns ?? []));
           setLatestDigest(next.dailyDigests?.[0] ?? null);
           setLoading(false);
           setError(null);

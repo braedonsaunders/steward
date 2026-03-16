@@ -4,7 +4,9 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 import { isAuthorized } from "@/lib/auth/guard";
-import { approveAction, denyAction } from "@/lib/approvals/queue";
+import { approveAction, denyAction, expireStale } from "@/lib/approvals/queue";
+import { isPlaybookApprovalExpired } from "@/lib/playbooks/approval-utils";
+import { stateStore } from "@/lib/state/store";
 
 const ActionSchema = z.object({
   action: z.enum(["approve", "deny"]),
@@ -24,6 +26,20 @@ export async function POST(
   const parsed = ActionSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  }
+
+  const run = stateStore.getPlaybookRunById(id);
+  if (!run) {
+    return NextResponse.json({ error: "Approval not found" }, { status: 404 });
+  }
+
+  if (run.status !== "pending_approval") {
+    return NextResponse.json({ error: "Approval already processed" }, { status: 409 });
+  }
+
+  if (isPlaybookApprovalExpired(run)) {
+    expireStale();
+    return NextResponse.json({ error: "Approval expired" }, { status: 410 });
   }
 
   if (parsed.data.action === "approve") {
