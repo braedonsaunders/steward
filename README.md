@@ -3,11 +3,6 @@
   <h1>Steward</h1>
   <p><strong>Your network's first employee.</strong></p>
   <p>
-    Steward is a self-hosted autonomous IT operations agent for the messy real-world networks
-    that small teams actually run: servers, switches, NAS boxes, access points, printers,
-    Docker hosts, VMs, and the mystery device nobody wants to touch.
-  </p>
-  <p>
     <a href="#quickstart"><strong>Quickstart</strong></a>
     |
     <a href="#screenshots"><strong>Screenshots</strong></a>
