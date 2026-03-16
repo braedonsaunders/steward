@@ -24,9 +24,6 @@ Steward is a self-hosted IT operations control plane for small network - local-f
 > Status: this repository already implements a substantial control plane. The implementation checklist lives in [tasks.md](./tasks.md).
 
 ## Screenshots
-
-> These are intentional placeholders. Replace the SVGs in `docs/screenshots/` with real captures later and the README layout stays intact.
-
 <table>
   <tr>
     <td width="50%">
