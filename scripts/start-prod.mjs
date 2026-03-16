@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { cpSync, existsSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 
@@ -58,10 +58,40 @@ function replaceDirectory(fromPath, toPath) {
   cpSync(fromPath, toPath, { recursive: true });
 }
 
+function cleanupOldRuntimeDirectories(buildRootDir, currentRuntimeDir) {
+  if (!existsSync(buildRootDir)) {
+    return;
+  }
+
+  for (const entry of readdirSync(buildRootDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    if (!entry.name.startsWith("standalone-runtime")) {
+      continue;
+    }
+
+    const candidatePath = path.resolve(buildRootDir, entry.name);
+    if (candidatePath === currentRuntimeDir) {
+      continue;
+    }
+
+    try {
+      rmSync(candidatePath, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+    } catch {
+      // A prior runtime may still be draining on Windows. Leave it for the next launch.
+    }
+  }
+}
+
 function stageStandaloneRuntime() {
   const builtStandaloneDir = path.resolve(".next/standalone");
-  const runtimeDir = path.resolve("build/standalone-runtime");
-  replaceDirectory(builtStandaloneDir, runtimeDir);
+  const buildRootDir = path.resolve("build");
+  mkdirSync(buildRootDir, { recursive: true });
+
+  const runtimeDir = path.resolve(buildRootDir, `standalone-runtime-${Date.now()}-${process.pid}`);
+  cpSync(builtStandaloneDir, runtimeDir, { recursive: true });
 
   const repoStaticDir = path.resolve(".next/static");
   const runtimeStaticDir = path.resolve(runtimeDir, ".next/static");
@@ -72,6 +102,8 @@ function stageStandaloneRuntime() {
     const runtimePublicDir = path.resolve(runtimeDir, "public");
     replaceDirectory(repoPublicDir, runtimePublicDir);
   }
+
+  cleanupOldRuntimeDirectories(buildRootDir, runtimeDir);
 
   return {
     runtimeDir,

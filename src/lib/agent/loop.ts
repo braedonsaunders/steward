@@ -17,7 +17,21 @@ import {
 } from "@/lib/playbooks/factory";
 import { createApproval, expireStale } from "@/lib/approvals/queue";
 import { adapterRegistry } from "@/lib/adapters/registry";
+import { mergeProtectedDeviceMetadata } from "@/lib/devices/protected-metadata";
 import { ensureDigestScheduler, stopDigestScheduler } from "@/lib/digest/scheduler";
+import {
+  DISCOVERY_ENRICHMENT_BROWSER_JOB_KIND,
+  DISCOVERY_ENRICHMENT_FINGERPRINT_JOB_KIND,
+  DISCOVERY_ENRICHMENT_HOSTNAME_JOB_KIND,
+  DISCOVERY_ENRICHMENT_JOB_KINDS,
+  DISCOVERY_ENRICHMENT_NMAP_JOB_KIND,
+  type DiscoveryEnrichmentQueueSummary,
+  emptyDiscoveryEnrichmentQueueSummary,
+  executeDiscoveryEnrichmentJob,
+  planDiscoveryEnrichmentJobs,
+  type DiscoveryEnrichmentPhase,
+  type DiscoveryEnrichmentJobPayload,
+} from "@/lib/discovery/enrichment-plane";
 import { routeFinding } from "@/lib/findings/router";
 import { localToolRuntime } from "@/lib/local-tools/runtime";
 import { getAdoptionRecord, getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
@@ -70,9 +84,6 @@ const LEGACY_SERVICE_CONTRACT_FAILURE_INCIDENT_TYPE = "service-contract.failure"
 const TLS_CERT_WARNING_WINDOW_DAYS = 30;
 const TLS_CERT_CRITICAL_WINDOW_DAYS = 7;
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
 const daysUntilIso = (value: string): number | null => {
   const at = new Date(value).getTime();
   if (!Number.isFinite(at)) {
@@ -84,33 +95,6 @@ const daysUntilIso = (value: string): number | null => {
 const tlsServiceLabel = (device: Device, service: Device["services"][number]): string => {
   const base = service.httpInfo?.title?.trim() || service.product?.trim() || service.name;
   return `${base} on ${device.name}:${service.port}`;
-};
-
-const mergeProtectedDeviceMetadata = (device: Device): Device => {
-  const latest = stateStore.getDeviceById(device.id);
-  if (!latest) {
-    return device;
-  }
-
-  const latestAdoption = getAdoptionRecord(latest);
-  const incomingAdoption = isRecord(device.metadata.adoption) ? device.metadata.adoption : {};
-  const latestStatus = getDeviceAdoptionStatus(latest);
-  const incomingStatus = typeof incomingAdoption.status === "string" ? incomingAdoption.status : undefined;
-  const preserveStickyStatus = (latestStatus === "adopted" || latestStatus === "ignored")
-    && (incomingStatus === undefined || incomingStatus === "discovered");
-
-  return {
-    ...device,
-    metadata: {
-      ...latest.metadata,
-      ...device.metadata,
-      adoption: {
-        ...latestAdoption,
-        ...incomingAdoption,
-        ...(preserveStickyStatus ? { status: latestStatus } : {}),
-      },
-    },
-  };
 };
 
 const latencyFromPingOutput = (stdout: string): number | undefined => {
@@ -1591,6 +1575,7 @@ let coordinatorHandle: NodeJS.Timeout | undefined;
 let currentCoordinatorIntervalMs: number | undefined;
 let coordinatorRunning = false;
 let scannerWorkerRunning = false;
+let discoveryEnrichmentWorkerRunning = false;
 let runtimeWorkerRunning = false;
 let scannerCycleRunning = false;
 let sessionSweepHandle: NodeJS.Timeout | undefined;
@@ -1609,12 +1594,14 @@ const MONITOR_EXECUTE_JOB_KIND = "monitor.execute";
 const AGENT_WAKE_JOB_KIND = "agent.wake";
 const AGENT_ASSURANCE_JOB_KIND = "agent.assurance";
 const SCANNER_JOB_KINDS = [SCANNER_DISCOVERY_JOB_KIND] as const;
+const DISCOVERY_JOB_KINDS = [...DISCOVERY_ENRICHMENT_JOB_KINDS] as const;
 const RUNTIME_JOB_KINDS = [MONITOR_EXECUTE_JOB_KIND, AGENT_WAKE_JOB_KIND, AGENT_ASSURANCE_JOB_KIND] as const;
 const MIN_LEADER_LEASE_MS = 90_000;
 const MIN_CYCLE_LEASE_MS = 4 * 60 * 1000;
 const MIN_AGENT_WAKE_LEASE_MS = 60_000;
 const MANUAL_SCANNER_DEDUPE_WINDOW_MS = 30_000;
 const MIN_RUNTIME_JOB_STALE_MS = 60_000;
+const MIN_DISCOVERY_JOB_STALE_MS = 5 * 60_000;
 
 const emptyCycleSummary = (): StewardCycleSummary => ({
   discovered: 0,
@@ -1664,6 +1651,9 @@ const scannerJobStaleMs = (settings: RuntimeSettings): number =>
 
 const runtimeJobStaleMs = (settings: RuntimeSettings): number =>
   Math.max(MIN_RUNTIME_JOB_STALE_MS, settings.protocolSessionSweepIntervalMs * 4);
+
+const discoveryEnrichmentJobStaleMs = (settings: RuntimeSettings): number =>
+  Math.max(MIN_DISCOVERY_JOB_STALE_MS, settings.protocolSessionSweepIntervalMs * 6);
 
 const coordinatorIntervalMs = (settings: RuntimeSettings): number =>
   Math.max(
@@ -1794,6 +1784,91 @@ const enqueueAssuranceJob = (
     `${kind}:${contract.id}:${schedulerSlotKey(intervalMs, nowMs)}`,
   );
   return kind;
+};
+
+const enqueueDiscoveryEnrichmentJob = (
+  payload: DiscoveryEnrichmentJobPayload,
+  nowMs = Date.now(),
+): void => {
+  const kind = payload.phase === "fingerprint"
+    ? DISCOVERY_ENRICHMENT_FINGERPRINT_JOB_KIND
+    : payload.phase === "nmapDeep"
+      ? DISCOVERY_ENRICHMENT_NMAP_JOB_KIND
+      : payload.phase === "browserObservation"
+        ? DISCOVERY_ENRICHMENT_BROWSER_JOB_KIND
+        : DISCOVERY_ENRICHMENT_HOSTNAME_JOB_KIND;
+  const bucket = schedulerSlotKey(30_000, nowMs);
+  const deviceKey = payload.deviceIds.slice(0, 8).join(",");
+  stateStore.enqueueDurableJob(
+    kind,
+    { ...payload },
+    `${kind}:${bucket}:${deviceKey}:${payload.deviceIds.length}`,
+  );
+};
+
+const isDiscoveryEnrichmentPhase = (value: unknown): value is DiscoveryEnrichmentPhase =>
+  value === "fingerprint"
+  || value === "nmapDeep"
+  || value === "browserObservation"
+  || value === "hostname";
+
+const latestDiscoveryScanMode = (): "incremental" | "deep" => {
+  const latestScannerRun = stateStore.getLatestSuccessfulScannerRun();
+  if (latestScannerRun?.details?.discoveryScanMode === "deep") {
+    return "deep";
+  }
+  return "incremental";
+};
+
+const queueDueDiscoveryEnrichmentJobs = async (
+  scanMode = latestDiscoveryScanMode(),
+  schedulerSource: "scanner-cycle" | "control-plane" = "control-plane",
+): Promise<DiscoveryEnrichmentQueueSummary> => {
+  const summary = emptyDiscoveryEnrichmentQueueSummary();
+  const state = await stateStore.getState();
+  const runtimeSettings = stateStore.getRuntimeSettings();
+  const plans = planDiscoveryEnrichmentJobs(state.devices, runtimeSettings, scanMode);
+  const nowMs = Date.now();
+
+  for (const plan of plans) {
+    summary.dueTargets += plan.dueTargetCount;
+    summary.deferredTargets += plan.deferredTargetCount;
+    if (plan.deferredTargetCount > 0) {
+      summary.phasesWithBacklog += 1;
+    }
+
+    const queueBusy = stateStore.hasDurableJobsInFlight([plan.kind]);
+    summary.phases.push({
+      phase: plan.phase,
+      targetCount: plan.targetCount,
+      dueTargetCount: plan.dueTargetCount,
+      deferredTargetCount: plan.deferredTargetCount,
+      queued: false,
+      queueBusy,
+    });
+
+    if (queueBusy) {
+      continue;
+    }
+
+    enqueueDiscoveryEnrichmentJob({
+      phase: plan.phase,
+      deviceIds: plan.deviceIds,
+      scanMode: plan.scanMode,
+      requestedAt: new Date(nowMs).toISOString(),
+      dueTargetCount: plan.dueTargetCount,
+      deferredTargetCount: plan.deferredTargetCount,
+      schedulerSource,
+    }, nowMs);
+    const phaseSummary = summary.phases[summary.phases.length - 1];
+    if (phaseSummary) {
+      phaseSummary.queued = true;
+    }
+    summary.queuedJobs += 1;
+    summary.queuedTargets += plan.targetCount;
+  }
+
+  return summary;
 };
 
 const queueDueAssuranceJobs = async (): Promise<AssuranceSweepSummary> => {
@@ -2103,6 +2178,52 @@ const processScannerJobs = async (limit = 1): Promise<void> => {
   }
 };
 
+const processDiscoveryEnrichmentJobs = async (limit = 4): Promise<void> => {
+  if (discoveryEnrichmentWorkerRunning || scannerCycleRunning) {
+    return;
+  }
+
+  discoveryEnrichmentWorkerRunning = true;
+  try {
+    const runtimeSettings = stateStore.getRuntimeSettings();
+    let processed = 0;
+    while (processed < limit) {
+      const [job] = stateStore.claimDurableJobs(1, {
+        kinds: Array.from(DISCOVERY_JOB_KINDS),
+      });
+      if (!job) {
+        break;
+      }
+      try {
+        const phase = isDiscoveryEnrichmentPhase(job.payload.phase) ? job.payload.phase : "hostname";
+        const payload = {
+          phase,
+          deviceIds: Array.isArray(job.payload.deviceIds)
+            ? job.payload.deviceIds.filter((value): value is string => typeof value === "string")
+            : [],
+          scanMode: job.payload.scanMode === "deep" ? "deep" : "incremental",
+          requestedAt: typeof job.payload.requestedAt === "string" ? job.payload.requestedAt : new Date().toISOString(),
+          dueTargetCount: Number(job.payload.dueTargetCount ?? 0),
+          deferredTargetCount: Number(job.payload.deferredTargetCount ?? 0),
+          schedulerSource: job.payload.schedulerSource === "scanner-cycle" ? "scanner-cycle" : "control-plane",
+        } satisfies DiscoveryEnrichmentJobPayload;
+        await executeDiscoveryEnrichmentJob(payload, runtimeSettings);
+        stateStore.completeDurableJob(job.id);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        stateStore.failDurableJob(
+          job.id,
+          message,
+          Math.min(15 * 60_000, 15_000 * Math.max(1, job.attempts + 1)),
+        );
+      }
+      processed += 1;
+    }
+  } finally {
+    discoveryEnrichmentWorkerRunning = false;
+  }
+};
+
 const processRuntimeJobs = async (limit = 25): Promise<void> => {
   if (runtimeWorkerRunning) {
     return;
@@ -2158,6 +2279,9 @@ const runControlPlaneTick = async (): Promise<void> => {
     stateStore.requeueStaleDurableJobs(scannerJobStaleMs(settings), {
       kinds: Array.from(SCANNER_JOB_KINDS),
     });
+    stateStore.requeueStaleDurableJobs(discoveryEnrichmentJobStaleMs(settings), {
+      kinds: Array.from(DISCOVERY_JOB_KINDS),
+    });
     stateStore.requeueStaleDurableJobs(runtimeJobStaleMs(settings), {
       kinds: Array.from(RUNTIME_JOB_KINDS),
     });
@@ -2169,6 +2293,7 @@ const runControlPlaneTick = async (): Promise<void> => {
     }
 
     await queueDueAssuranceJobs();
+    await queueDueDiscoveryEnrichmentJobs();
 
     const latestPeriodicAgentWake = stateStore.getLatestAgentRunByWakeReason("periodic_review");
     const agentWakeQueueBusy = stateStore.hasDurableJobsInFlight([AGENT_WAKE_JOB_KIND]);
@@ -2178,6 +2303,7 @@ const runControlPlaneTick = async (): Promise<void> => {
 
     await Promise.all([
       processScannerJobs(),
+      processDiscoveryEnrichmentJobs(),
       processRuntimeJobs(),
     ]);
   } finally {
@@ -2289,6 +2415,7 @@ const refreshLeadership = async (): Promise<void> => {
       stateStore.requeueProcessingDurableJobs({
         kinds: [
           ...Array.from(SCANNER_JOB_KINDS),
+          ...Array.from(DISCOVERY_JOB_KINDS),
           ...Array.from(RUNTIME_JOB_KINDS),
         ],
       });
@@ -2367,9 +2494,11 @@ const runScannerCycle = async (
       discoveryPhaseTimeoutMs(trigger, runtimeSettings),
       "Discovery phase timed out before cycle completion.",
     );
+    const discoveryEnrichment = await queueDueDiscoveryEnrichmentJobs(discover.scanMode, "scanner-cycle");
     runRecord.details = {
       ...runRecord.details,
       discovery: discover.diagnostics ?? null,
+      discoveryEnrichment,
       discoveryScanMode: discover.scanMode,
       activeTargets: discover.activeTargets,
     };
@@ -2401,8 +2530,17 @@ const runScannerCycle = async (
     if ((discover.diagnostics?.constrainedPhaseCount ?? 0) > 0) {
       summaryParts.push(`discovery-limited=${discover.diagnostics?.constrainedPhaseCount ?? 0}`);
     }
+    if ((discover.diagnostics?.deferredPhaseCount ?? 0) > 0) {
+      summaryParts.push(`discovery-backlog=${discover.diagnostics?.deferredPhaseCount ?? 0}`);
+    }
     if ((discover.diagnostics?.failedPhaseCount ?? 0) > 0) {
       summaryParts.push(`discovery-failed=${discover.diagnostics?.failedPhaseCount ?? 0}`);
+    }
+    if (discoveryEnrichment.queuedJobs > 0) {
+      summaryParts.push(`enrichment-queued=${discoveryEnrichment.queuedJobs}`);
+    }
+    if (discoveryEnrichment.phasesWithBacklog > 0) {
+      summaryParts.push(`enrichment-backlog=${discoveryEnrichment.phasesWithBacklog}`);
     }
     runRecord.summary = summaryParts.join(", ");
     runRecord.details = {

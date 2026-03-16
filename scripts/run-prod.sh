@@ -8,7 +8,37 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "$REPO_ROOT"
 
 LEGACY_STANDALONE_SERVER_PATH="${REPO_ROOT}/.next/standalone/server.js"
-RUNTIME_STANDALONE_SERVER_PATH="${REPO_ROOT}/build/standalone-runtime/server.js"
+RUNTIME_STANDALONE_ROOT_PREFIX="${REPO_ROOT}/build/standalone-runtime"
+
+is_steward_command_line() {
+  local command_line="${1:-}"
+  [[ "$command_line" == *"scripts/start-prod.mjs"* || "$command_line" == *"$LEGACY_STANDALONE_SERVER_PATH"* || "$command_line" == *"$RUNTIME_STANDALONE_ROOT_PREFIX"* ]]
+}
+
+expand_steward_process_tree() {
+  local seed_pid="${1:-}"
+  if [[ -z "$seed_pid" ]]; then
+    return
+  fi
+
+  local current_pid="$seed_pid"
+  while [[ -n "$current_pid" && "$current_pid" != "0" ]]; do
+    echo "$current_pid"
+    local parent_pid
+    parent_pid="$(ps -o ppid= -p "$current_pid" 2>/dev/null | tr -d '[:space:]')"
+    if [[ -z "$parent_pid" || "$parent_pid" == "0" ]]; then
+      break
+    fi
+
+    local parent_command_line
+    parent_command_line="$(ps -o command= -p "$parent_pid" 2>/dev/null || true)"
+    if ! is_steward_command_line "$parent_command_line"; then
+      break
+    fi
+
+    current_pid="$parent_pid"
+  done
+}
 
 stop_legacy_standalone_server() {
   mapfile -t pids < <(pgrep -f "$LEGACY_STANDALONE_SERVER_PATH" || true)
@@ -35,8 +65,10 @@ stop_steward_listener_on_port() {
   for pid in "${pids[@]}"; do
     local command_line
     command_line="$(ps -o command= -p "$pid" 2>/dev/null || true)"
-    if [[ "$command_line" == *"scripts/start-prod.mjs"* || "$command_line" == *"$LEGACY_STANDALONE_SERVER_PATH"* || "$command_line" == *"$RUNTIME_STANDALONE_SERVER_PATH"* ]]; then
-      steward_pids+=("$pid")
+    if is_steward_command_line "$command_line"; then
+      while IFS= read -r steward_pid; do
+        [[ -n "$steward_pid" ]] && steward_pids+=("$steward_pid")
+      done < <(expand_steward_process_tree "$pid")
       continue
     fi
 
@@ -48,8 +80,9 @@ stop_steward_listener_on_port() {
     return
   fi
 
-  echo "Stopping current Steward listener on port ${PORT} (${steward_pids[*]})..."
-  kill "${steward_pids[@]}" >/dev/null 2>&1 || true
+  mapfile -t unique_steward_pids < <(printf '%s\n' "${steward_pids[@]}" | sort -u)
+  echo "Stopping current Steward listener on port ${PORT} (${unique_steward_pids[*]})..."
+  kill "${unique_steward_pids[@]}" >/dev/null 2>&1 || true
   sleep 1
 }
 

@@ -331,7 +331,7 @@ async function injectCredentialIntoCommand(
   }
 
   const secret = await vault.getSecret(credential.vaultSecretRef);
-  if (!secret || secret.trim().length === 0) {
+  if (secret === undefined || secret === null) {
     stateStore.logCredentialAccess({
       credentialId: credential.id,
       deviceId: device.id,

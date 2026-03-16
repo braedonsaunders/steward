@@ -889,13 +889,21 @@ class WebSessionManager {
       await page.goto(parsedUrl.toString(), { waitUntil: "domcontentloaded", timeout: 30_000 });
 
       let usedCredential = false;
-      const inferredSelectors = args.username && args.password
+      const hasLoginCredentialInput = typeof args.username === "string"
+        && args.username.length > 0
+        && typeof args.password === "string";
+      const inferredSelectors = hasLoginCredentialInput
         ? await inferLoginSelectors(page)
         : {};
       const usernameSelector = chooseLoginSelector(args.usernameSelector, inferredSelectors.usernameSelector);
       const passwordSelector = chooseLoginSelector(args.passwordSelector, inferredSelectors.passwordSelector);
       const submitSelector = chooseLoginSelector(args.submitSelector, inferredSelectors.submitSelector);
-      if (usernameSelector && passwordSelector && args.username && args.password) {
+      if (usernameSelector && passwordSelector && hasLoginCredentialInput) {
+        const loginUsername = args.username;
+        const loginPassword = args.password;
+        if (typeof loginUsername !== "string" || typeof loginPassword !== "string") {
+          throw new Error("Login credentials disappeared while preparing the browser flow.");
+        }
         for (let attempt = 0; attempt < 2; attempt += 1) {
           if (attempt > 0) {
             await page.goto(parsedUrl.toString(), { waitUntil: "domcontentloaded", timeout: 30_000 });
@@ -903,8 +911,8 @@ class WebSessionManager {
           }
           await page.waitForTimeout(2500);
           authResponses.length = 0;
-          await page.fill(usernameSelector, args.username, { timeout: 15_000 });
-          await page.fill(passwordSelector, args.password, { timeout: 15_000 });
+          await page.fill(usernameSelector, loginUsername, { timeout: 15_000 });
+          await page.fill(passwordSelector, loginPassword, { timeout: 15_000 });
           await syncCsrfFields(page);
           await page.waitForTimeout(250);
           if (submitSelector) {
@@ -932,8 +940,8 @@ class WebSessionManager {
               page,
               usernameSelector,
               passwordSelector,
-              username: args.username,
-              password: args.password,
+              username: loginUsername,
+              password: loginPassword,
               origin: parsedUrl.origin,
             });
             if (ajaxFallback.success) {
@@ -947,7 +955,7 @@ class WebSessionManager {
             break;
           }
         }
-        usedCredential = Boolean(args.credentialId) || Boolean(args.password);
+        usedCredential = Boolean(args.credentialId) || typeof args.password === "string";
       }
 
       for (const step of args.steps ?? []) {

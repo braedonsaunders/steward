@@ -1,14 +1,10 @@
 import { collectActiveCandidates } from "@/lib/discovery/active";
-import { observeBrowserSurfaces } from "@/lib/discovery/browser-observer";
 import { mergeDiscoveryCandidates } from "@/lib/discovery/classify";
 import { buildObservation, dedupeObservations } from "@/lib/discovery/evidence";
-import { runNmapDeepFingerprint } from "@/lib/discovery/nmap-deep";
 import { collectPacketIntelSnapshot } from "@/lib/discovery/packet-intel";
 import { collectPassiveCandidates } from "@/lib/discovery/passive";
 import {
   CURRENT_FINGERPRINT_VERSION,
-  applyFingerprintResults,
-  fingerprintBatch,
 } from "@/lib/discovery/fingerprint";
 import { discoverMulticast } from "@/lib/discovery/multicast";
 import { getLocalInterfaceIdentity } from "@/lib/discovery/local";
@@ -23,7 +19,7 @@ import type {
   DiscoveryPhaseTelemetry,
   DiscoverySnapshot,
 } from "@/lib/discovery/types";
-import type { ServiceFingerprint } from "@/lib/state/types";
+import type { Device, ServiceFingerprint } from "@/lib/state/types";
 
 interface DiscoveryRunOptions {
   forceDeepScan?: boolean;
@@ -34,6 +30,9 @@ const normalizeCandidate = (candidate: DiscoveryCandidate): DiscoveryCandidate =
   ...candidate,
   observations: Array.isArray(candidate.observations) ? candidate.observations : [],
 });
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const isEligibleManagedIp = (ip: string): boolean => {
   const octets = ip.split(".").map((value) => Number(value));
@@ -51,9 +50,11 @@ const isEligibleManagedIp = (ip: string): boolean => {
 
 let lastDeepScanAt = 0;
 let activeTargetCursor = 0;
-let hostnameCursor = 0;
 let fingerprintCursor = 0;
 let lastOuiUpdateAt = 0;
+
+const DISCOVERY_PHASE_STATE_METADATA_KEY = "discoveryPhases";
+export type ScheduledDiscoveryPhaseKey = "fingerprint" | "nmapDeep" | "browserObservation" | "hostname";
 
 const HTTP_PORTS = new Set([80, 443, 8080, 8443, 8000, 9000, 5000, 5001, 7443, 9443]);
 const SSH_PORTS = new Set([22, 2222]);
@@ -64,6 +65,16 @@ const MQTT_PORTS = new Set([1883, 8883]);
 const SMB_PORTS = new Set([445]);
 const NETBIOS_PORTS = new Set([137, 139]);
 const UNKNOWN_SERVICE_NAMES = new Set(["", "unknown", "tcpwrapped", "generic"]);
+const DISCOVERY_FINGERPRINT_ATTEMPT_COOLDOWN_MS = 15 * 60_000;
+const DISCOVERY_DEEP_FINGERPRINT_ATTEMPT_COOLDOWN_MS = 5 * 60_000;
+const DISCOVERY_NMAP_REFRESH_MS = 8 * 60 * 60_000;
+const DISCOVERY_DEEP_NMAP_REFRESH_MS = 2 * 60 * 60_000;
+const DISCOVERY_NMAP_ATTEMPT_COOLDOWN_MS = 90 * 60_000;
+const DISCOVERY_DEEP_NMAP_ATTEMPT_COOLDOWN_MS = 30 * 60_000;
+const DISCOVERY_BROWSER_REFRESH_MS = 6 * 60 * 60_000;
+const DISCOVERY_DEEP_BROWSER_REFRESH_MS = 2 * 60 * 60_000;
+const DISCOVERY_BROWSER_ATTEMPT_COOLDOWN_MS = 90 * 60_000;
+const DISCOVERY_DEEP_BROWSER_ATTEMPT_COOLDOWN_MS = 30 * 60_000;
 
 const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> => {
   let timer: NodeJS.Timeout | undefined;
@@ -79,6 +90,62 @@ const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, fallback: 
       clearTimeout(timer);
     }
   }
+};
+
+export const parseIsoMs = (value: unknown): number | null => {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return null;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+export const timeSinceIsoMs = (value: unknown, nowMs: number): number => {
+  const parsed = parseIsoMs(value);
+  return parsed === null ? Number.POSITIVE_INFINITY : Math.max(0, nowMs - parsed);
+};
+
+const pluralize = (count: number, singular: string, plural = `${singular}s`): string =>
+  count === 1 ? singular : plural;
+
+const joinPhaseNotes = (...notes: Array<string | undefined>): string | undefined => {
+  const parts = notes
+    .map((note) => (typeof note === "string" ? note.trim() : ""))
+    .filter((note) => note.length > 0);
+  return parts.length > 0 ? parts.join(" ") : undefined;
+};
+
+const deferredTargetNote = (options: {
+  targetCount?: number;
+  dueTargetCount?: number;
+  deferredTargetCount?: number;
+  skipped?: boolean;
+}): string | undefined => {
+  const dueTargetCount = typeof options.dueTargetCount === "number"
+    ? Math.max(0, Math.floor(options.dueTargetCount))
+    : undefined;
+  if (dueTargetCount === undefined || dueTargetCount === 0) {
+    return undefined;
+  }
+
+  const selectedTargetCount = typeof options.targetCount === "number"
+    ? Math.max(0, Math.floor(options.targetCount))
+    : undefined;
+  const deferredTargetCount = typeof options.deferredTargetCount === "number"
+    ? Math.max(0, Math.floor(options.deferredTargetCount))
+    : Math.max(0, dueTargetCount - (selectedTargetCount ?? dueTargetCount));
+
+  if (deferredTargetCount <= 0) {
+    return undefined;
+  }
+
+  if (options.skipped) {
+    return `${deferredTargetCount} due ${pluralize(deferredTargetCount, "target")} deferred to later cycles.`;
+  }
+
+  const processedTargetCount = selectedTargetCount ?? Math.max(0, dueTargetCount - deferredTargetCount);
+  return `Scheduled ${processedTargetCount} of ${dueTargetCount} due ${pluralize(dueTargetCount, "target")}; ${deferredTargetCount} deferred to later cycles.`;
 };
 
 const withTimeoutResult = async <T>(
@@ -105,11 +172,11 @@ const DISCOVERY_MIN_STEP_BUDGET_MS = 2_000;
 const DISCOVERY_MIN_CORE_STEP_BUDGET_MS = 5_000;
 const DISCOVERY_ACTIVE_SCAN_BUDGET_MS = 90_000;
 const DISCOVERY_ADAPTER_DISCOVERY_BUDGET_MS = 15_000;
-const DISCOVERY_FINGERPRINT_BUDGET_MS = 25_000;
-const DISCOVERY_NMAP_DEEP_BUDGET_MS = 25_000;
-const DISCOVERY_BROWSER_OBSERVATION_BUDGET_MS = 30_000;
+export const DISCOVERY_FINGERPRINT_BUDGET_MS = 25_000;
+export const DISCOVERY_NMAP_DEEP_BUDGET_MS = 25_000;
+export const DISCOVERY_BROWSER_OBSERVATION_BUDGET_MS = 30_000;
 const DISCOVERY_PACKET_INTEL_BUDGET_MS = 12_000;
-const DISCOVERY_HOSTNAME_BUDGET_MS = 10_000;
+export const DISCOVERY_HOSTNAME_BUDGET_MS = 10_000;
 const DISCOVERY_ADAPTER_ENRICH_BUDGET_MS = 20_000;
 
 const remainingBudgetMs = (deadlineAt: number): number =>
@@ -134,22 +201,6 @@ const computeStepBudgetMs = (
   return Math.max(minimumMs, Math.min(Math.floor(desiredMs), availableMs));
 };
 
-const budgetedTargetLimit = (
-  configuredMaxTargets: number,
-  timeoutPerTargetMs: number,
-  maxConcurrency: number,
-  stepBudgetMs: number,
-): number => {
-  if (!Number.isFinite(stepBudgetMs) || configuredMaxTargets <= 0) {
-    return configuredMaxTargets;
-  }
-
-  const safeTimeoutMs = Math.max(1_000, Math.floor(timeoutPerTargetMs));
-  const safeConcurrency = Math.max(1, Math.floor(maxConcurrency));
-  const batches = Math.max(1, Math.floor(stepBudgetMs / safeTimeoutMs));
-  return Math.max(0, Math.min(configuredMaxTargets, batches * safeConcurrency));
-};
-
 const runBudgetedStep = async <T>(
   label: string,
   fallback: T,
@@ -161,6 +212,8 @@ const runBudgetedStep = async <T>(
     minimumMs?: number;
     telemetry?: DiscoveryPhaseTelemetry[];
     targetCount?: number;
+    dueTargetCount?: number;
+    deferredTargetCount?: number;
     note?: string;
   },
   run: (stepBudgetMs: number) => Promise<T>,
@@ -182,7 +235,12 @@ const runBudgetedStep = async <T>(
       elapsedMs: 0,
       desiredBudgetMs: Math.max(0, Math.floor(options.desiredMs)),
       targetCount: options.targetCount,
-      note: options.note ?? "No discovery budget remained for this phase.",
+      dueTargetCount: options.dueTargetCount,
+      deferredTargetCount: options.deferredTargetCount,
+      note: joinPhaseNotes(
+        options.note ?? "No discovery budget remained for this phase.",
+        deferredTargetNote({ ...options, skipped: true }),
+      ),
     });
     console.warn(`[discovery] Skipping ${label}; no budget remains in this discovery cycle.`);
     return fallback;
@@ -201,9 +259,14 @@ const runBudgetedStep = async <T>(
       budgetMs: stepBudgetMs,
       desiredBudgetMs: Math.max(0, Math.floor(options.desiredMs)),
       targetCount: options.targetCount,
-      note: result.timedOut
-        ? options.note ?? "Phase exceeded its budget and returned partial results."
-        : options.note,
+      dueTargetCount: options.dueTargetCount,
+      deferredTargetCount: options.deferredTargetCount,
+      note: joinPhaseNotes(
+        result.timedOut
+          ? options.note ?? "Phase exceeded its budget and returned partial results."
+          : options.note,
+        deferredTargetNote(options),
+      ),
     });
     if (result.timedOut) {
       console.warn(`[discovery] ${label} exceeded its ${stepBudgetMs}ms budget; continuing with partial results.`);
@@ -221,6 +284,8 @@ const runBudgetedStep = async <T>(
       budgetMs: stepBudgetMs,
       desiredBudgetMs: Math.max(0, Math.floor(options.desiredMs)),
       targetCount: options.targetCount,
+      dueTargetCount: options.dueTargetCount,
+      deferredTargetCount: options.deferredTargetCount,
       note: error instanceof Error ? error.message : String(error),
     });
     console.error(`[discovery] ${label} failed:`, error);
@@ -260,30 +325,26 @@ const reverseHostname = async (ip: string): Promise<string | undefined> => {
   return undefined;
 };
 
-const enrichHostnames = async (
+export const enrichHostnames = async (
   candidates: DiscoverySnapshot["merged"],
-  deepScan: boolean,
+  selected: DiscoveryCandidate[],
+  maxConcurrency: number,
 ): Promise<DiscoverySnapshot["merged"]> => {
-  const unresolved = candidates.filter((candidate) => !candidate.hostname).sort((a, b) => a.ip.localeCompare(b.ip));
-  const maxChecks = deepScan ? 768 : 192;
-
-  if (unresolved.length === 0) {
+  if (selected.length === 0) {
     return candidates;
   }
 
-  const offset = hostnameCursor % unresolved.length;
-  const selected = unresolved.slice(offset, offset + maxChecks);
-  if (selected.length < maxChecks) {
-    selected.push(...unresolved.slice(0, maxChecks - selected.length));
+  const resolved: Array<{ ip: string; hostname: string | undefined }> = [];
+  for (let idx = 0; idx < selected.length; idx += maxConcurrency) {
+    const batch = selected.slice(idx, idx + maxConcurrency);
+    const batchResults = await Promise.all(
+      batch.map(async (candidate) => ({
+        ip: candidate.ip,
+        hostname: await reverseHostname(candidate.ip),
+      })),
+    );
+    resolved.push(...batchResults);
   }
-  hostnameCursor = (hostnameCursor + maxChecks) % Math.max(1, unresolved.length);
-
-  const resolved = await Promise.all(
-    selected.map(async (candidate) => ({
-      ip: candidate.ip,
-      hostname: await reverseHostname(candidate.ip),
-    })),
-  );
   const byIp = new Map(resolved.filter((item) => item.hostname).map((item) => [item.ip, item.hostname as string]));
 
   return candidates.map((candidate) => {
@@ -322,7 +383,7 @@ const enrichHostnames = async (
 
 /* ---------- Fingerprint Target Selection ---------- */
 
-const selectFingerprintTargets = (
+export const selectFingerprintTargets = (
   candidates: DiscoveryCandidate[],
   deepScan: boolean,
   maxTargets: number,
@@ -357,16 +418,27 @@ const selectFingerprintTargets = (
 
   // Only fingerprint candidates with at least one open service port
   const eligible = candidates.filter((c) => {
+    const phaseState = getDiscoveryPhaseState(c, "fingerprint");
+    const lastAttemptAgeMs = timeSinceIsoMs(phaseState.lastAttemptedAt, nowMs);
+    const attemptCooldownMs = forceRefresh
+      ? 0
+      : deepScan
+        ? DISCOVERY_DEEP_FINGERPRINT_ATTEMPT_COOLDOWN_MS
+        : DISCOVERY_FINGERPRINT_ATTEMPT_COOLDOWN_MS;
+
     if (c.services.length === 0) {
       if (!forceRefresh) {
         return false;
       }
-      return true;
+      return lastAttemptAgeMs >= attemptCooldownMs;
     }
 
     const fp = c.metadata.fingerprint as Record<string, unknown> | undefined;
     const missingCoverage = hasCoverageGaps(c);
     if (forceRefresh || missingCoverage) {
+      if (lastAttemptAgeMs < attemptCooldownMs) {
+        return false;
+      }
       if (!fp?.lastFingerprintedAt) return true;
       const ageMs = nowMs - new Date(String(fp.lastFingerprintedAt)).getTime();
       const refreshCooldown = forceRefresh ? 0 : 5 * 60_000;
@@ -380,6 +452,10 @@ const selectFingerprintTargets = (
       const isUnknown = !c.typeHint || c.typeHint === "unknown";
       const cooldown = isUnknown ? 10 * 60_000 : 60 * 60_000;
       if (Number.isFinite(ageMs) && ageMs < cooldown) return false;
+    }
+
+    if (lastAttemptAgeMs < attemptCooldownMs) {
+      return false;
     }
 
     return true;
@@ -408,7 +484,7 @@ const selectFingerprintTargets = (
 const isUnknownServiceName = (name: string | undefined): boolean =>
   !name || UNKNOWN_SERVICE_NAMES.has(name.trim().toLowerCase());
 
-const mergeServiceSets = (
+export const mergeServiceSets = (
   current: ServiceFingerprint[],
   patches: ServiceFingerprint[],
 ): ServiceFingerprint[] => {
@@ -442,7 +518,374 @@ const mergeServiceSets = (
   return Array.from(byKey.values()).sort((a, b) => a.port - b.port);
 };
 
-const applyProbeResults = <
+export const getDiscoveryPhaseState = (
+  candidate: DiscoveryCandidate,
+  phaseKey: ScheduledDiscoveryPhaseKey,
+): Record<string, unknown> => {
+  const root = candidate.metadata[DISCOVERY_PHASE_STATE_METADATA_KEY];
+  if (!isRecord(root)) {
+    return {};
+  }
+
+  const phase = root[phaseKey];
+  return isRecord(phase) ? phase : {};
+};
+
+export const withDiscoveryPhaseState = (
+  candidate: DiscoveryCandidate,
+  phaseKey: ScheduledDiscoveryPhaseKey,
+  patch: Record<string, unknown>,
+): DiscoveryCandidate => {
+  const root = isRecord(candidate.metadata[DISCOVERY_PHASE_STATE_METADATA_KEY])
+    ? candidate.metadata[DISCOVERY_PHASE_STATE_METADATA_KEY] as Record<string, unknown>
+    : {};
+  const current = isRecord(root[phaseKey]) ? root[phaseKey] as Record<string, unknown> : {};
+
+  return {
+    ...candidate,
+    metadata: {
+      ...candidate.metadata,
+      [DISCOVERY_PHASE_STATE_METADATA_KEY]: {
+        ...root,
+        [phaseKey]: {
+          ...current,
+          ...patch,
+        },
+      },
+    },
+  };
+};
+
+export const annotateDiscoveryPhaseTargets = (
+  candidates: DiscoveryCandidate[],
+  targets: DiscoveryCandidate[],
+  phaseKey: ScheduledDiscoveryPhaseKey,
+  patch: Record<string, unknown>,
+): DiscoveryCandidate[] => {
+  if (targets.length === 0) {
+    return candidates;
+  }
+
+  const targetIps = new Set(targets.map((candidate) => candidate.ip));
+  return candidates.map((candidate) =>
+    targetIps.has(candidate.ip)
+      ? withDiscoveryPhaseState(candidate, phaseKey, patch)
+      : candidate,
+  );
+};
+
+export const takeTargetsByEstimatedWork = (
+  candidates: DiscoveryCandidate[],
+  options: {
+    maxTargets: number;
+    stepBudgetMs: number;
+    maxConcurrency: number;
+    estimateTargetMs: (candidate: DiscoveryCandidate) => number;
+    budgetUtilizationRatio?: number;
+  },
+): DiscoveryCandidate[] => {
+  const maxTargets = Math.max(0, Math.floor(options.maxTargets));
+  if (maxTargets === 0 || candidates.length === 0) {
+    return [];
+  }
+
+  const budgetUtilizationRatio = Math.min(0.95, Math.max(0.25, options.budgetUtilizationRatio ?? 0.65));
+  const workBudgetMs = Math.max(
+    1_000,
+    Math.floor(options.stepBudgetMs * Math.max(1, options.maxConcurrency) * budgetUtilizationRatio),
+  );
+  const selected: DiscoveryCandidate[] = [];
+  let totalEstimatedMs = 0;
+
+  for (const candidate of candidates) {
+    if (selected.length >= maxTargets) {
+      break;
+    }
+
+    const estimateMs = Math.max(500, Math.floor(options.estimateTargetMs(candidate)));
+    if (selected.length > 0 && totalEstimatedMs + estimateMs > workBudgetMs) {
+      break;
+    }
+
+    selected.push(candidate);
+    totalEstimatedMs += estimateMs;
+  }
+
+  if (selected.length > 0) {
+    return selected;
+  }
+
+  return candidates.slice(0, Math.min(1, maxTargets));
+};
+
+const countBrowserEndpoints = (candidate: DiscoveryCandidate): number => {
+  const uniquePorts = new Set<number>();
+  for (const service of candidate.services) {
+    if (service.transport !== "tcp") {
+      continue;
+    }
+    if (HTTP_PORTS.has(service.port) || /http/i.test(service.name)) {
+      uniquePorts.add(service.port);
+    }
+  }
+  return Math.max(1, Math.min(3, uniquePorts.size || 2));
+};
+
+export const estimateFingerprintTargetMs = (
+  candidate: DiscoveryCandidate,
+  deepScan: boolean,
+): number => {
+  const ports = new Set(candidate.services.map((service) => service.port));
+  const aggressive = deepScan;
+  const tlsTargets = [...ports].filter((port) => [443, 8443, 7443, 9443, 5001].includes(port)).slice(0, aggressive ? 3 : 2).length;
+  const webTargets = [
+    ...[...ports].filter((port) => [443, 8443, 7443, 9443, 5001].includes(port)),
+    ...[...ports].filter((port) => [80, 8080, 8000, 9000].includes(port)),
+  ].slice(0, aggressive ? 4 : 2).length;
+  const bannerTargets = [...ports].filter((port) => [21, 23, 25, 110, 143].includes(port)).length;
+  const unknownTargets = candidate.services
+    .filter((service) => isUnknownServiceName(service.name))
+    .slice(0, aggressive ? 10 : 4)
+    .length;
+
+  let estimatedMs = 750;
+  if ([...SSH_PORTS].some((port) => ports.has(port))) {
+    estimatedMs += 1_800;
+  }
+  estimatedMs += tlsTargets * 2_400;
+  estimatedMs += webTargets * 1_900;
+  if (ports.has(161) || aggressive) {
+    estimatedMs += 1_800;
+  }
+  estimatedMs += bannerTargets * 900;
+  if ([...DNS_PORTS].some((port) => ports.has(port)) || aggressive) {
+    estimatedMs += 1_400;
+  }
+  if ([...WINRM_PORTS].some((port) => ports.has(port))) {
+    estimatedMs += 1_700;
+  }
+  if ([...MQTT_PORTS].some((port) => ports.has(port))) {
+    estimatedMs += 1_300;
+  }
+  if ([...SMB_PORTS].some((port) => ports.has(port))) {
+    estimatedMs += 1_400;
+  }
+  if ([...NETBIOS_PORTS].some((port) => ports.has(port)) || aggressive) {
+    estimatedMs += 1_300;
+  }
+  estimatedMs += unknownTargets * 3_800;
+  estimatedMs += Math.max(0, candidate.services.length - 4) * 350;
+
+  if (aggressive && candidate.services.length === 0) {
+    estimatedMs += 7_000;
+  }
+
+  return Math.min(36_000, estimatedMs);
+};
+
+export const estimateNmapDeepTargetMs = (
+  configuredTimeoutMs: number,
+): number => Math.max(8_000, Math.min(45_000, configuredTimeoutMs + 4_000));
+
+export const estimateBrowserObservationTargetMs = (
+  candidate: DiscoveryCandidate,
+  configuredTimeoutMs: number,
+): number => 2_000 + countBrowserEndpoints(candidate) * Math.min(configuredTimeoutMs, 7_000);
+
+export const estimateHostnameLookupMs = (): number =>
+  process.platform === "win32" ? 3_500 : 2_200;
+
+export const hydrateCandidatesFromDevices = (
+  candidates: DiscoveryCandidate[],
+  devices: Device[],
+): DiscoveryCandidate[] => {
+  const devicesByIp = new Map<string, Device>();
+  const devicesByMac = new Map<string, Device>();
+
+  for (const device of devices) {
+    devicesByIp.set(device.ip, device);
+    for (const ip of device.secondaryIps ?? []) {
+      if (!devicesByIp.has(ip)) {
+        devicesByIp.set(ip, device);
+      }
+    }
+
+    if (device.mac) {
+      devicesByMac.set(device.mac.toLowerCase(), device);
+    }
+  }
+
+  return candidates.map((candidate) => {
+    const previous = devicesByIp.get(candidate.ip)
+      ?? (candidate.mac ? devicesByMac.get(candidate.mac.toLowerCase()) : undefined);
+    if (!previous) {
+      return candidate;
+    }
+
+    return {
+      ...candidate,
+      hostname: candidate.hostname ?? previous.hostname,
+      vendor: candidate.vendor ?? previous.vendor,
+      os: candidate.os ?? previous.os,
+      services: mergeServiceSets(candidate.services, previous.services ?? []),
+      metadata: {
+        ...previous.metadata,
+        ...candidate.metadata,
+      },
+    };
+  });
+};
+
+export const planNmapTargets = (
+  candidates: DiscoveryCandidate[],
+  options: {
+    deepScan: boolean;
+    maxTargets: number;
+    stepBudgetMs: number;
+    maxConcurrency: number;
+    timeoutMs: number;
+    budgetUtilizationRatio?: number;
+  },
+): { dueTargets: DiscoveryCandidate[]; selectedTargets: DiscoveryCandidate[] } => {
+  const nowMs = Date.now();
+  const refreshMs = options.deepScan ? DISCOVERY_DEEP_NMAP_REFRESH_MS : DISCOVERY_NMAP_REFRESH_MS;
+  const attemptCooldownMs = options.deepScan
+    ? DISCOVERY_DEEP_NMAP_ATTEMPT_COOLDOWN_MS
+    : DISCOVERY_NMAP_ATTEMPT_COOLDOWN_MS;
+
+  const ordered = candidates
+    .filter((candidate) => candidate.services.length > 0)
+    .filter((candidate) => {
+      const nmapMetadata = isRecord(candidate.metadata.nmapDeep) ? candidate.metadata.nmapDeep : {};
+      const collectedAtMs = parseIsoMs(nmapMetadata.collectedAt);
+      const phaseState = getDiscoveryPhaseState(candidate, "nmapDeep");
+      const lastAttemptAgeMs = timeSinceIsoMs(phaseState.lastAttemptedAt, nowMs);
+      if (lastAttemptAgeMs < attemptCooldownMs) {
+        return false;
+      }
+
+      const neverCollected = collectedAtMs === null;
+      const stale = collectedAtMs !== null && nowMs - collectedAtMs >= refreshMs;
+      const needsRetry = phaseState.lastStatus === "timed_out" || phaseState.lastStatus === "failed";
+      return neverCollected || stale || needsRetry;
+    })
+    .sort((a, b) => {
+      const aNeverCollected = parseIsoMs(isRecord(a.metadata.nmapDeep) ? a.metadata.nmapDeep.collectedAt : undefined) === null ? 1 : 0;
+      const bNeverCollected = parseIsoMs(isRecord(b.metadata.nmapDeep) ? b.metadata.nmapDeep.collectedAt : undefined) === null ? 1 : 0;
+      if (aNeverCollected !== bNeverCollected) {
+        return bNeverCollected - aNeverCollected;
+      }
+
+      const aUnknown = !a.typeHint || a.typeHint === "unknown" ? 1 : 0;
+      const bUnknown = !b.typeHint || b.typeHint === "unknown" ? 1 : 0;
+      if (aUnknown !== bUnknown) {
+        return bUnknown - aUnknown;
+      }
+
+      const aAttemptAge = timeSinceIsoMs(getDiscoveryPhaseState(a, "nmapDeep").lastAttemptedAt, nowMs);
+      const bAttemptAge = timeSinceIsoMs(getDiscoveryPhaseState(b, "nmapDeep").lastAttemptedAt, nowMs);
+      if (aAttemptAge !== bAttemptAge) {
+        return bAttemptAge - aAttemptAge;
+      }
+
+      const serviceDiff = b.services.length - a.services.length;
+      if (serviceDiff !== 0) {
+        return serviceDiff;
+      }
+
+      return a.ip.localeCompare(b.ip);
+    });
+
+  return {
+    dueTargets: ordered,
+    selectedTargets: takeTargetsByEstimatedWork(ordered, {
+      maxTargets: options.maxTargets,
+      stepBudgetMs: options.stepBudgetMs,
+      maxConcurrency: options.maxConcurrency,
+      estimateTargetMs: () => estimateNmapDeepTargetMs(options.timeoutMs),
+      budgetUtilizationRatio: options.budgetUtilizationRatio,
+    }),
+  };
+};
+
+export const planBrowserObservationTargets = (
+  candidates: DiscoveryCandidate[],
+  options: {
+    deepScan: boolean;
+    maxTargets: number;
+    stepBudgetMs: number;
+    maxConcurrency: number;
+    timeoutMs: number;
+    budgetUtilizationRatio?: number;
+  },
+): { dueTargets: DiscoveryCandidate[]; selectedTargets: DiscoveryCandidate[] } => {
+  const nowMs = Date.now();
+  const refreshMs = options.deepScan ? DISCOVERY_DEEP_BROWSER_REFRESH_MS : DISCOVERY_BROWSER_REFRESH_MS;
+  const attemptCooldownMs = options.deepScan
+    ? DISCOVERY_DEEP_BROWSER_ATTEMPT_COOLDOWN_MS
+    : DISCOVERY_BROWSER_ATTEMPT_COOLDOWN_MS;
+
+  const ordered = candidates
+    .filter((candidate) => candidate.services.some((service) =>
+      HTTP_PORTS.has(service.port)
+      || service.name.toLowerCase().includes("http")
+    ))
+    .filter((candidate) => {
+      const browserMetadata = isRecord(candidate.metadata.browserObservation)
+        ? candidate.metadata.browserObservation
+        : {};
+      const collectedAtMs = parseIsoMs(browserMetadata.collectedAt);
+      const phaseState = getDiscoveryPhaseState(candidate, "browserObservation");
+      const lastAttemptAgeMs = timeSinceIsoMs(phaseState.lastAttemptedAt, nowMs);
+      if (lastAttemptAgeMs < attemptCooldownMs) {
+        return false;
+      }
+
+      const neverCollected = collectedAtMs === null;
+      const stale = collectedAtMs !== null && nowMs - collectedAtMs >= refreshMs;
+      const needsRetry = phaseState.lastStatus === "timed_out" || phaseState.lastStatus === "failed";
+      return neverCollected || stale || needsRetry;
+    })
+    .sort((a, b) => {
+      const aNeverCollected = parseIsoMs(isRecord(a.metadata.browserObservation) ? a.metadata.browserObservation.collectedAt : undefined) === null ? 1 : 0;
+      const bNeverCollected = parseIsoMs(isRecord(b.metadata.browserObservation) ? b.metadata.browserObservation.collectedAt : undefined) === null ? 1 : 0;
+      if (aNeverCollected !== bNeverCollected) {
+        return bNeverCollected - aNeverCollected;
+      }
+
+      const aUnknown = !a.typeHint || a.typeHint === "unknown" ? 1 : 0;
+      const bUnknown = !b.typeHint || b.typeHint === "unknown" ? 1 : 0;
+      if (aUnknown !== bUnknown) {
+        return bUnknown - aUnknown;
+      }
+
+      const aAttemptAge = timeSinceIsoMs(getDiscoveryPhaseState(a, "browserObservation").lastAttemptedAt, nowMs);
+      const bAttemptAge = timeSinceIsoMs(getDiscoveryPhaseState(b, "browserObservation").lastAttemptedAt, nowMs);
+      if (aAttemptAge !== bAttemptAge) {
+        return bAttemptAge - aAttemptAge;
+      }
+
+      const endpointDiff = countBrowserEndpoints(b) - countBrowserEndpoints(a);
+      if (endpointDiff !== 0) {
+        return endpointDiff;
+      }
+
+      return a.ip.localeCompare(b.ip);
+    });
+
+  return {
+    dueTargets: ordered,
+    selectedTargets: takeTargetsByEstimatedWork(ordered, {
+      maxTargets: options.maxTargets,
+      stepBudgetMs: options.stepBudgetMs,
+      maxConcurrency: options.maxConcurrency,
+      estimateTargetMs: (candidate) => estimateBrowserObservationTargetMs(candidate, options.timeoutMs),
+      budgetUtilizationRatio: options.budgetUtilizationRatio,
+    }),
+  };
+};
+
+export const applyProbeResults = <
   T extends {
     ip: string;
     services: ServiceFingerprint[];
@@ -551,9 +994,8 @@ export const runDiscovery = async (options: DiscoveryRunOptions = {}): Promise<D
     isEligibleManagedIp(candidate.ip) && !localIps.has(candidate.ip);
 
   const now = Date.now();
-  const manualScan = options.forceDeepScan === true;
   const deepScan =
-    manualScan ||
+    options.forceDeepScan === true ||
     lastDeepScanAt === 0 ||
     now - lastDeepScanAt >= settings.deepScanIntervalMs;
   const discoveryBudgetMs =
@@ -603,7 +1045,7 @@ export const runDiscovery = async (options: DiscoveryRunOptions = {}): Promise<D
         reserveMs: 72_000,
         telemetry: phaseTelemetry,
       },
-      async (stepBudgetMs) => discoverMulticast(Math.max(1_000, stepBudgetMs), {
+      async (stepBudgetMs) => discoverMulticast(Math.max(1_000, stepBudgetMs - 250), {
         enableMdns: settings.enableMdnsDiscovery,
         enableSsdp: settings.enableSsdpDiscovery,
       }),
@@ -633,7 +1075,7 @@ export const runDiscovery = async (options: DiscoveryRunOptions = {}): Promise<D
       targetOffset: activeTargetCursor,
       maxTargets: deepScan ? settings.deepActiveTargets : settings.incrementalActiveTargets,
       maxPortScanHosts: deepScan ? settings.deepPortScanHosts : settings.incrementalPortScanHosts,
-      nmapSubnetSweepTimeoutMs: Math.max(15_000, Math.min(120_000, stepBudgetMs)),
+      nmapSubnetSweepTimeoutMs: Math.max(15_000, Math.min(120_000, Math.max(15_000, stepBudgetMs - 1_000))),
     }),
   );
   const active = activeRaw
@@ -669,156 +1111,8 @@ export const runDiscovery = async (options: DiscoveryRunOptions = {}): Promise<D
   /* ── Phase 3+4: Merge, Fingerprint, Enrich ────────────────────────── */
 
   const allCandidates = [...passive, ...multicastCandidates, ...active, ...adapterCandidates];
-  let merged = mergeDiscoveryCandidates(allCandidates);
-
-  // Service fingerprinting (incremental batch)
-  const configuredMax = deepScan ? settings.deepFingerprintTargets : settings.incrementalFingerprintTargets;
-  const maxFpTargets = manualScan ? Math.max(configuredMax, merged.length) : configuredMax;
-  const fingerprintConcurrency = deepScan ? 8 : 3;
-  const fingerprintPlanningBudgetMs = computeStepBudgetMs(
-    deadlineAt,
-    DISCOVERY_FINGERPRINT_BUDGET_MS,
-    35_000,
-    DISCOVERY_MIN_CORE_STEP_BUDGET_MS,
-  );
-  const fpTargets = fingerprintPlanningBudgetMs === null
-    ? []
-    : selectFingerprintTargets(
-      merged,
-      deepScan,
-      budgetedTargetLimit(
-        maxFpTargets,
-        Math.max(1_000, Math.min(3_000, fingerprintPlanningBudgetMs)),
-        fingerprintConcurrency,
-        fingerprintPlanningBudgetMs,
-      ),
-      manualScan,
-    );
-  if (fpTargets.length > 0) {
-    const fpResults = await runBudgetedStep(
-      "service fingerprinting",
-      [] as Awaited<ReturnType<typeof fingerprintBatch>>,
-      {
-        key: "service-fingerprinting",
-        deadlineAt,
-        desiredMs: DISCOVERY_FINGERPRINT_BUDGET_MS,
-        reserveMs: 35_000,
-        minimumMs: DISCOVERY_MIN_CORE_STEP_BUDGET_MS,
-        telemetry: phaseTelemetry,
-        targetCount: fpTargets.length,
-      },
-      async (stepBudgetMs) => fingerprintBatch(fpTargets, {
-        maxConcurrency: fingerprintConcurrency,
-        timeoutMs: Math.max(1_000, Math.min(3_000, stepBudgetMs)),
-        enableSnmp: settings.enableSnmpProbe,
-        aggressive: deepScan,
-      }),
-    );
-    if (fpResults.length > 0) {
-      merged = applyFingerprintResults(merged, fpResults);
-    }
-  }
-
-  // Deep nmap service/version + NSE script fingerprinting
-  if (settings.enableAdvancedNmapFingerprint) {
-    const maxNmapTargets = deepScan ? settings.deepNmapTargets : settings.incrementalNmapTargets;
-    const nmapConcurrency = deepScan ? 4 : 2;
-    const nmapPlanningBudgetMs = computeStepBudgetMs(
-      deadlineAt,
-      DISCOVERY_NMAP_DEEP_BUDGET_MS,
-      25_000,
-      DISCOVERY_MIN_CORE_STEP_BUDGET_MS,
-    );
-    const nmapCandidates = (nmapPlanningBudgetMs === null ? [] : fpTargets)
-      .filter((candidate) => candidate.services.length > 0)
-      .slice(0, nmapPlanningBudgetMs === null
-        ? 0
-        : budgetedTargetLimit(
-          maxNmapTargets,
-          Math.max(5_000, Math.min(settings.nmapFingerprintTimeoutMs, nmapPlanningBudgetMs)),
-          nmapConcurrency,
-          nmapPlanningBudgetMs,
-        ));
-    if (nmapCandidates.length > 0) {
-      const nmapResults = await runBudgetedStep(
-        "deep nmap fingerprinting",
-        [] as Awaited<ReturnType<typeof runNmapDeepFingerprint>>,
-        {
-          key: "deep-nmap-fingerprinting",
-          deadlineAt,
-          desiredMs: DISCOVERY_NMAP_DEEP_BUDGET_MS,
-          reserveMs: 25_000,
-          minimumMs: DISCOVERY_MIN_CORE_STEP_BUDGET_MS,
-          telemetry: phaseTelemetry,
-          targetCount: nmapCandidates.length,
-        },
-        async (stepBudgetMs) => runNmapDeepFingerprint(nmapCandidates, {
-          timeoutMs: Math.max(5_000, Math.min(settings.nmapFingerprintTimeoutMs, stepBudgetMs)),
-          maxConcurrency: nmapConcurrency,
-        }),
-      );
-      if (nmapResults.length > 0) {
-        merged = applyProbeResults(merged, nmapResults, "nmapDeep");
-      }
-    }
-  }
-
-  // Browser-aware HTTP console observation (Playwright when available)
-  if (settings.enableBrowserObservation) {
-    const configuredBrowserTargets = deepScan
-      ? settings.deepBrowserObservationTargets
-      : settings.incrementalBrowserObservationTargets;
-    const browserConcurrency = deepScan ? 3 : 2;
-    const browserPlanningBudgetMs = computeStepBudgetMs(
-      deadlineAt,
-      DISCOVERY_BROWSER_OBSERVATION_BUDGET_MS,
-      15_000,
-      DISCOVERY_MIN_CORE_STEP_BUDGET_MS,
-    );
-    const maxBrowserTargets = browserPlanningBudgetMs === null
-      ? 0
-      : budgetedTargetLimit(
-        configuredBrowserTargets,
-        Math.max(2_000, Math.min(settings.browserObservationTimeoutMs, browserPlanningBudgetMs)),
-        browserConcurrency,
-        browserPlanningBudgetMs,
-      );
-    const browserCandidates = merged
-      .filter((candidate) => candidate.services.some((service) => HTTP_PORTS.has(service.port)))
-      .sort((a, b) => {
-        const aUnknown = !a.typeHint || a.typeHint === "unknown" ? 0 : 1;
-        const bUnknown = !b.typeHint || b.typeHint === "unknown" ? 0 : 1;
-        if (aUnknown !== bUnknown) {
-          return aUnknown - bUnknown;
-        }
-        return b.services.length - a.services.length;
-      })
-      .slice(0, Math.max(0, maxBrowserTargets));
-    if (browserCandidates.length > 0) {
-      const browserResults = await runBudgetedStep(
-        "browser observation",
-        [] as Awaited<ReturnType<typeof observeBrowserSurfaces>>,
-        {
-          key: "browser-observation",
-          deadlineAt,
-          desiredMs: DISCOVERY_BROWSER_OBSERVATION_BUDGET_MS,
-          reserveMs: 15_000,
-          minimumMs: DISCOVERY_MIN_CORE_STEP_BUDGET_MS,
-          telemetry: phaseTelemetry,
-          targetCount: browserCandidates.length,
-        },
-        async (stepBudgetMs) => observeBrowserSurfaces(browserCandidates, {
-          timeoutMs: Math.max(2_000, Math.min(settings.browserObservationTimeoutMs, stepBudgetMs)),
-          maxTargets: maxBrowserTargets,
-          captureScreenshots: settings.browserObservationCaptureScreenshots,
-          maxConcurrency: browserConcurrency,
-        }),
-      );
-      if (browserResults.length > 0) {
-        merged = applyProbeResults(merged, browserResults, "browserObservation");
-      }
-    }
-  }
+  const state = await stateStore.getState();
+  let merged = hydrateCandidatesFromDevices(mergeDiscoveryCandidates(allCandidates), state.devices);
 
   // Passive packet intelligence (Wireshark-style metadata via tshark)
   if (settings.enablePacketIntel) {
@@ -836,7 +1130,7 @@ export const runDiscovery = async (options: DiscoveryRunOptions = {}): Promise<D
         durationSec: Math.min(60, settings.packetIntelDurationSec + (deepScan ? 2 : 0)),
         maxPackets: deepScan ? settings.packetIntelMaxPackets * 2 : settings.packetIntelMaxPackets,
         topTalkers: settings.packetIntelTopTalkers,
-        timeoutMs: Math.max(3_000, Math.min((settings.packetIntelDurationSec + 4) * 1_000, stepBudgetMs)),
+        timeoutMs: Math.max(3_000, Math.min((settings.packetIntelDurationSec + 4) * 1_000, Math.max(3_000, stepBudgetMs - 500))),
       }),
     );
     if (packetSnapshot) {
@@ -845,22 +1139,6 @@ export const runDiscovery = async (options: DiscoveryRunOptions = {}): Promise<D
       });
     }
   }
-
-  // Hostname enrichment
-  const unresolvedHostnames = merged.filter((candidate) => !candidate.hostname).length;
-  merged = await runBudgetedStep(
-    "hostname enrichment",
-    merged,
-    {
-      key: "hostname-enrichment",
-      deadlineAt,
-      desiredMs: DISCOVERY_HOSTNAME_BUDGET_MS,
-      reserveMs: 5_000,
-      telemetry: phaseTelemetry,
-      targetCount: unresolvedHostnames,
-    },
-    async () => enrichHostnames(merged, deepScan),
-  );
 
   // Adapter enrichment
   merged = await runBudgetedStep(
@@ -903,6 +1181,7 @@ export const runDiscovery = async (options: DiscoveryRunOptions = {}): Promise<D
   const timedOutPhaseCount = phaseTelemetry.filter((phase) => phase.status === "timed_out").length;
   const skippedPhaseCount = phaseTelemetry.filter((phase) => phase.status === "skipped").length;
   const failedPhaseCount = phaseTelemetry.filter((phase) => phase.status === "failed").length;
+  const deferredPhaseCount = phaseTelemetry.filter((phase) => (phase.deferredTargetCount ?? 0) > 0).length;
   const diagnostics: DiscoveryDiagnostics = {
     scanMode: deepScan ? "deep" : "incremental",
     startedAt: new Date(now).toISOString(),
@@ -914,6 +1193,7 @@ export const runDiscovery = async (options: DiscoveryRunOptions = {}): Promise<D
     timedOutPhaseCount,
     skippedPhaseCount,
     failedPhaseCount,
+    deferredPhaseCount,
     phases: phaseTelemetry,
   };
 

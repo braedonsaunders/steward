@@ -121,6 +121,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function secretIsMissing(secret: string | undefined | null): secret is undefined | null {
+  return secret === undefined || secret === null;
+}
+
 function getCredentialForBroker(
   deviceId: string,
   protocols: string[],
@@ -1158,7 +1162,7 @@ async function executeSshBroker(
   }
 
   const secret = await vault.getSecret(credential.vaultSecretRef);
-  if (!secret || secret.trim().length === 0) {
+  if (secretIsMissing(secret)) {
     logCredentialAccess(context, operation, device, "ssh", "missing_secret", {
       accountLabel: credential.accountLabel ?? null,
       credentialStatus: credential.status,
@@ -1268,7 +1272,7 @@ async function executeTelnetBroker(
   }
 
   const secret = await vault.getSecret(credential.vaultSecretRef);
-  if (!secret || secret.trim().length === 0) {
+  if (secretIsMissing(secret)) {
     logCredentialAccess(context, operation, device, "telnet", "missing_secret", {
       accountLabel: credential.accountLabel ?? null,
       credentialStatus: credential.status,
@@ -1379,7 +1383,7 @@ async function executeWinrmBroker(
     }
 
     const secret = await vault.getSecret(credential.vaultSecretRef);
-    if (!secret || secret.trim().length === 0) {
+    if (secretIsMissing(secret)) {
       logCredentialAccess(context, operation, device, "ssh", "missing_secret", {
         accountLabel: credential.accountLabel ?? null,
         credentialStatus: credential.status,
@@ -1498,7 +1502,7 @@ async function executeWinrmBroker(
   }
 
   const secret = await vault.getSecret(credential.vaultSecretRef);
-  if (!secret || secret.trim().length === 0) {
+  if (secretIsMissing(secret)) {
     logCredentialAccess(context, operation, device, "winrm", "missing_secret", {
       accountLabel: credential.accountLabel ?? null,
       credentialStatus: credential.status,
@@ -1857,7 +1861,7 @@ async function executePowerShellSshBroker(
   }
 
   const secret = await vault.getSecret(credential.vaultSecretRef);
-  if (!secret || secret.trim().length === 0) {
+  if (secretIsMissing(secret)) {
     return brokerResult({
       status: "failed",
       phase: "not-started",
@@ -1940,7 +1944,7 @@ async function executeWmiBroker(
   }
   const secret = await vault.getSecret(credential.vaultSecretRef);
   const accountLabel = credential.accountLabel?.trim() ?? "";
-  if (!secret || !accountLabel) {
+  if (secretIsMissing(secret) || !accountLabel) {
     return brokerResult({ status: "failed", phase: "not-started", proof: "none", summary: "WMI credential incomplete", output: "WMI requires a username and password.", details: { credentialId: credential.id } });
   }
   if (!commandLooksRemoteForWmi(broker.command)) {
@@ -2007,7 +2011,7 @@ async function executeSmbBroker(
   }
   const secret = await vault.getSecret(credential.vaultSecretRef);
   const accountLabel = credential.accountLabel?.trim() ?? "";
-  if (!secret || !accountLabel) {
+  if (secretIsMissing(secret) || !accountLabel) {
     return brokerResult({ status: "failed", phase: "not-started", proof: "none", summary: "SMB credential incomplete", output: "SMB requires a username and password.", details: { credentialId: credential.id } });
   }
   if (!commandLooksRemoteForSmb(broker.command)) {
@@ -2091,7 +2095,7 @@ async function executeRdpBroker(
       `$computerName = '${escapePowerShellSingleQuoted(renderedHost)}'`,
       `$port = ${port}`,
       "$target = if ($port -eq 3389) { $computerName } else { $computerName + ':' + $port }",
-      ...(secret && accountLabel
+      ...(!secretIsMissing(secret) && accountLabel
         ? [
           `$username = '${escapePowerShellSingleQuoted(accountLabel)}'`,
           `$password = '${escapePowerShellSingleQuoted(secret)}'`,
@@ -2106,7 +2110,7 @@ async function executeRdpBroker(
   if (!result.ok) {
     return brokerResult({ status: "failed", phase: "executed", proof: "process", summary: action === "check" ? "RDP reachability check failed" : "RDP launch failed", output: result.output, details: { ...result.details, host: renderedHost, port, action } });
   }
-  if (credential && secret && accountLabel) {
+  if (credential && !secretIsMissing(secret) && accountLabel) {
     await markCredentialValidatedFromUse({ deviceId: device.id, credentialId: credential.id, actor: context.actor, method: action === "check" ? "rdp.check" : "rdp.launch", details: { adapterId: operation.adapterId, operationId: operation.id, host: renderedHost, port, action } });
   }
   return brokerResult({ status: "succeeded", phase: "executed", proof: "process", summary: action === "check" ? "RDP reachability verified" : "RDP client launched", output: result.output, details: { ...result.details, host: renderedHost, port, action } });
@@ -2156,7 +2160,7 @@ async function executeHttpBroker(
   );
   if (credential) {
     const secret = await vault.getSecret(credential.vaultSecretRef);
-    if (!secret || secret.trim().length === 0) {
+    if (secretIsMissing(secret)) {
       logCredentialAccess(context, operation, device, "http-api", "missing_secret", {
         accountLabel: credential.accountLabel ?? null,
         credentialStatus: credential.status,
@@ -2348,7 +2352,7 @@ async function executeMqttBroker(
 
   if (credential) {
     const candidateSecret = await vault.getSecret(credential.vaultSecretRef);
-    if (!candidateSecret || candidateSecret.trim().length === 0) {
+    if (secretIsMissing(candidateSecret)) {
       logCredentialAccess(context, operation, device, "mqtt", "missing_secret", {
         accountLabel: credential.accountLabel ?? null,
         credentialStatus: credential.status,

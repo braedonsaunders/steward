@@ -20,8 +20,11 @@ import {
 import { useSteward } from "@/lib/hooks/use-steward";
 import {
   constrainedDiscoveryPhases,
+  deferredDiscoveryPhases,
+  discoveryEnrichmentPhaseLabel,
   formatDurationMs,
   parseDiscoveryDiagnostics,
+  parseDiscoveryEnrichmentSummary,
   phaseStatusLabel,
   slowestDiscoveryPhase,
 } from "@/lib/discovery/diagnostics";
@@ -60,7 +63,12 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import type { LLMProvider, RuntimeSettings, WebResearchProvider } from "@/lib/state/types";
+import type {
+  ControlPlaneQueueLane,
+  LLMProvider,
+  RuntimeSettings,
+  WebResearchProvider,
+} from "@/lib/state/types";
 import { formatIncidentType } from "@/lib/incidents/utils";
 import { cn } from "@/lib/utils";
 import { withApiTokenQuery, withClientApiToken } from "@/lib/auth/client-token";
@@ -87,6 +95,53 @@ function relativeTime(dateStr: string): string {
 
   return new Date(dateStr).toLocaleDateString();
 }
+
+const DISCOVERY_ENRICHMENT_KIND_PREFIX = "discovery.enrichment.";
+
+const isDiscoveryEnrichmentLane = (kind: string): boolean =>
+  kind.startsWith(DISCOVERY_ENRICHMENT_KIND_PREFIX);
+
+const queueLaneLabel = (kind: string): string => {
+  if (kind === "scanner.discovery") {
+    return "Core scanner";
+  }
+  if (kind === "monitor.execute") {
+    return "Monitor execution";
+  }
+  if (kind === "agent.wake") {
+    return "Agent wake";
+  }
+  if (kind === "agent.assurance") {
+    return "Agent assurance routing";
+  }
+  if (kind === "discovery.enrichment.fingerprint") {
+    return "Discovery enrichment: service fingerprinting";
+  }
+  if (kind === "discovery.enrichment.nmap") {
+    return "Discovery enrichment: deep nmap fingerprinting";
+  }
+  if (kind === "discovery.enrichment.browser") {
+    return "Discovery enrichment: browser observation";
+  }
+  if (kind === "discovery.enrichment.hostname") {
+    return "Discovery enrichment: hostname enrichment";
+  }
+  return kind;
+};
+
+const summarizeQueueLanes = (lanes: ControlPlaneQueueLane[]): {
+  pending: number;
+  processing: number;
+  completed: number;
+} => lanes.reduce((summary, lane) => ({
+  pending: summary.pending + lane.pending,
+  processing: summary.processing + lane.processing,
+  completed: summary.completed + lane.completed,
+}), {
+  pending: 0,
+  processing: 0,
+  completed: 0,
+});
 
 const categoryIcon = {
   cloud: Cloud,
@@ -1338,13 +1393,33 @@ function GeneralSection({ tab }: { tab: GeneralTabValue }) {
     () => (lastScannerRun ? parseDiscoveryDiagnostics(lastScannerRun.details) : null),
     [lastScannerRun],
   );
+  const lastScannerEnrichment = useMemo(
+    () => (lastScannerRun ? parseDiscoveryEnrichmentSummary(lastScannerRun.details) : null),
+    [lastScannerRun],
+  );
   const lastScannerConstrainedPhases = useMemo(
     () => constrainedDiscoveryPhases(lastScannerDiscovery),
+    [lastScannerDiscovery],
+  );
+  const lastScannerDeferredPhases = useMemo(
+    () => deferredDiscoveryPhases(lastScannerDiscovery),
     [lastScannerDiscovery],
   );
   const lastScannerSlowestPhase = useMemo(
     () => slowestDiscoveryPhase(lastScannerDiscovery),
     [lastScannerDiscovery],
+  );
+  const discoveryEnrichmentLanes = useMemo(
+    () => controlPlane?.queue.filter((lane) => isDiscoveryEnrichmentLane(lane.kind)) ?? [],
+    [controlPlane],
+  );
+  const otherQueueLanes = useMemo(
+    () => controlPlane?.queue.filter((lane) => !isDiscoveryEnrichmentLane(lane.kind)) ?? [],
+    [controlPlane],
+  );
+  const discoveryEnrichmentQueueSummary = useMemo(
+    () => summarizeQueueLanes(discoveryEnrichmentLanes),
+    [discoveryEnrichmentLanes],
   );
   const lastSuccessfulScannerRun = controlPlane?.lastSuccessfulScannerRun ?? null;
   const lastSuccessfulPeriodicWake = controlPlane?.lastPeriodicAgentWake ?? null;
@@ -1556,6 +1631,11 @@ function GeneralSection({ tab }: { tab: GeneralTabValue }) {
                                 {lastScannerConstrainedPhases.length} constrained
                               </Badge>
                             ) : null}
+                            {lastScannerDeferredPhases.length > 0 ? (
+                              <Badge variant="outline" className="text-[10px]">
+                                {lastScannerDeferredPhases.length} backlog
+                              </Badge>
+                            ) : null}
                             {lastScannerDiscovery.failedPhaseCount > 0 ? (
                               <Badge variant="destructive" className="text-[10px]">
                                 {lastScannerDiscovery.failedPhaseCount} failed
@@ -1574,6 +1654,15 @@ function GeneralSection({ tab }: { tab: GeneralTabValue }) {
                                   <span className="font-medium text-foreground">{phase.label}</span>
                                   <span>{formatDurationMs(phase.elapsedMs)}</span>
                                   {phase.budgetMs ? <span>budget {formatDurationMs(phase.budgetMs)}</span> : null}
+                                  {typeof phase.targetCount === "number" ? (
+                                    <span>
+                                      targets {phase.targetCount}
+                                      {typeof phase.dueTargetCount === "number" && phase.dueTargetCount > phase.targetCount
+                                        ? `/${phase.dueTargetCount}`
+                                        : ""}
+                                    </span>
+                                  ) : null}
+                                  {(phase.deferredTargetCount ?? 0) > 0 ? <span>deferred {phase.deferredTargetCount}</span> : null}
                                 </div>
                                 <Badge
                                   variant={phase.status === "failed" ? "destructive" : phase.status === "timed_out" ? "secondary" : "outline"}
@@ -1585,10 +1674,55 @@ function GeneralSection({ tab }: { tab: GeneralTabValue }) {
                             ))}
                           </div>
                         </div>
-                      ) : null}
-                      {lastSuccessfulScannerRun && lastSuccessfulScannerRun.id !== lastScannerRun.id ? (
-                        <p className="text-xs text-muted-foreground">
-                          Last successful completion: {new Date(lastSuccessfulScannerRun.completedAt ?? lastSuccessfulScannerRun.startedAt).toLocaleString()}
+                        ) : null}
+                        {lastScannerEnrichment && lastScannerEnrichment.phases.length > 0 ? (
+                          <div className="space-y-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2">
+                            <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+                              <Badge variant="secondary" className="text-[10px]">
+                                Background enrichment
+                              </Badge>
+                              <span>due {lastScannerEnrichment.dueTargets}</span>
+                              {lastScannerEnrichment.deferredTargets > 0 ? (
+                                <span>deferred {lastScannerEnrichment.deferredTargets}</span>
+                              ) : null}
+                              {lastScannerEnrichment.phases.filter((phase) => phase.queued).length > 0 ? (
+                                <span>
+                                  queued {lastScannerEnrichment.phases.filter((phase) => phase.queued).length}
+                                </span>
+                              ) : null}
+                              {lastScannerEnrichment.phases.filter((phase) => phase.queueBusy).length > 0 ? (
+                                <span>
+                                  {lastScannerEnrichment.phases.filter((phase) => phase.queueBusy).length} already active
+                                </span>
+                              ) : null}
+                            </div>
+                            <div className="space-y-1">
+                              {lastScannerEnrichment.phases.map((phase) => (
+                                <div key={phase.phase} className="flex flex-wrap items-center justify-between gap-2 text-[10px]">
+                                  <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
+                                    <span className="font-medium text-foreground">
+                                      {discoveryEnrichmentPhaseLabel(phase.phase)}
+                                    </span>
+                                    <span>wave {phase.targetCount}</span>
+                                    <span>due {phase.dueTargetCount}</span>
+                                    {phase.deferredTargetCount > 0 ? (
+                                      <span>deferred {phase.deferredTargetCount}</span>
+                                    ) : null}
+                                  </div>
+                                  <Badge
+                                    variant={phase.queued ? "default" : phase.queueBusy ? "secondary" : "outline"}
+                                    className="text-[10px]"
+                                  >
+                                    {phase.queued ? "queued" : phase.queueBusy ? "already active" : "planned"}
+                                  </Badge>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                        {lastSuccessfulScannerRun && lastSuccessfulScannerRun.id !== lastScannerRun.id ? (
+                          <p className="text-xs text-muted-foreground">
+                            Last successful completion: {new Date(lastSuccessfulScannerRun.completedAt ?? lastSuccessfulScannerRun.startedAt).toLocaleString()}
                         </p>
                       ) : null}
                     </div>
@@ -1732,13 +1866,69 @@ function GeneralSection({ tab }: { tab: GeneralTabValue }) {
                       </div>
 
                       <div className="space-y-2">
-                        {controlPlane.queue.length === 0 ? (
+                        <div>
+                          <p className="text-xs font-medium text-foreground">Background discovery enrichment</p>
+                          <p className="text-xs text-muted-foreground">
+                            Deep fingerprinting, browser observation, and hostname waves now run outside the core scanner loop.
+                          </p>
+                        </div>
+                        {discoveryEnrichmentLanes.length === 0 ? (
+                          <p className="text-xs text-muted-foreground">No discovery enrichment workers have queued work yet.</p>
+                        ) : (
+                          <>
+                            <div className="grid gap-3 md:grid-cols-3">
+                              <div className="rounded-md border bg-card/40 px-3 py-2">
+                                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Pending</p>
+                                <p className="mt-1 text-lg font-semibold">{discoveryEnrichmentQueueSummary.pending}</p>
+                              </div>
+                              <div className="rounded-md border bg-card/40 px-3 py-2">
+                                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Processing</p>
+                                <p className="mt-1 text-lg font-semibold">{discoveryEnrichmentQueueSummary.processing}</p>
+                              </div>
+                              <div className="rounded-md border bg-card/40 px-3 py-2">
+                                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Completed</p>
+                                <p className="mt-1 text-lg font-semibold">{discoveryEnrichmentQueueSummary.completed}</p>
+                              </div>
+                            </div>
+                            {discoveryEnrichmentLanes.map((lane) => (
+                              <div key={lane.kind} className="rounded-md border bg-card/40 px-3 py-2 text-xs">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <div className="space-y-0.5">
+                                    <p className="font-medium text-foreground">{queueLaneLabel(lane.kind)}</p>
+                                    <p className="text-muted-foreground">{lane.kind}</p>
+                                  </div>
+                                  <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
+                                    <span>pending {lane.pending}</span>
+                                    <span>processing {lane.processing}</span>
+                                    <span>completed {lane.completed}</span>
+                                  </div>
+                                </div>
+                                <div className="mt-1 flex flex-wrap items-center gap-3 text-muted-foreground">
+                                  {lane.oldestPendingRunAfter ? <span>Oldest due {relativeTime(lane.oldestPendingRunAfter)}</span> : null}
+                                  {lane.oldestProcessingUpdatedAt ? <span>Oldest processing update {relativeTime(lane.oldestProcessingUpdatedAt)}</span> : null}
+                                  {lane.newestUpdatedAt ? <span>Latest update {relativeTime(lane.newestUpdatedAt)}</span> : null}
+                                </div>
+                              </div>
+                            ))}
+                          </>
+                        )}
+                      </div>
+
+                      <div className="space-y-2">
+                        <div>
+                          <p className="text-xs font-medium text-foreground">Other queue lanes</p>
+                          <p className="text-xs text-muted-foreground">Core scanner, monitor, and agent control-plane work.</p>
+                        </div>
+                        {otherQueueLanes.length === 0 ? (
                           <p className="text-xs text-muted-foreground">No queued control-plane jobs recorded yet.</p>
                         ) : (
-                          controlPlane.queue.map((lane) => (
+                          otherQueueLanes.map((lane) => (
                             <div key={lane.kind} className="rounded-md border bg-card/40 px-3 py-2 text-xs">
                               <div className="flex flex-wrap items-center justify-between gap-2">
-                                <p className="font-medium text-foreground">{lane.kind}</p>
+                                <div className="space-y-0.5">
+                                  <p className="font-medium text-foreground">{queueLaneLabel(lane.kind)}</p>
+                                  <p className="text-muted-foreground">{lane.kind}</p>
+                                </div>
                                 <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
                                   <span>pending {lane.pending}</span>
                                   <span>processing {lane.processing}</span>

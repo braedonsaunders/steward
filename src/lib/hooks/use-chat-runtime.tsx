@@ -71,6 +71,70 @@ interface ChatRuntimeContextValue {
 
 const ChatRuntimeContext = createContext<ChatRuntimeContextValue | null>(null);
 
+function isValidDateString(value: unknown): value is string {
+  return typeof value === "string" && !Number.isNaN(new Date(value).getTime());
+}
+
+function getSessionSortTime(session: Pick<ChatSessionRecord, "updatedAt">): number {
+  const timestamp = new Date(session.updatedAt).getTime();
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
+function parseChatSessionRecord(value: unknown): ChatSessionRecord | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (typeof record.id !== "string" || typeof record.title !== "string") {
+    return null;
+  }
+  if (!isValidDateString(record.createdAt) || !isValidDateString(record.updatedAt)) {
+    return null;
+  }
+
+  return {
+    id: record.id,
+    title: record.title,
+    deviceId: typeof record.deviceId === "string" ? record.deviceId : undefined,
+    provider: typeof record.provider === "string" ? record.provider : undefined,
+    model: typeof record.model === "string" ? record.model : undefined,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  };
+}
+
+function parseChatSessionsPayload(value: unknown): ChatSessionRecord[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => parseChatSessionRecord(entry))
+    .filter((entry): entry is ChatSessionRecord => entry !== null);
+}
+
+function parseChatSessionDetailPayload(
+  value: unknown,
+): { session: ChatSessionRecord; messages: ChatMessageRecord[] } | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const session = parseChatSessionRecord(record);
+  if (!session) {
+    return null;
+  }
+
+  return {
+    session,
+    messages: Array.isArray(record.messages)
+      ? record.messages as ChatMessageRecord[]
+      : [],
+  };
+}
+
 function isAbortError(error: unknown): boolean {
   if (error instanceof DOMException) {
     return error.name === "AbortError";
@@ -171,12 +235,32 @@ export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
     sessionsRef.current = sessions;
   }, [sessions]);
 
+  const pruneSessionState = useCallback((sessionId: string) => {
+    setSessions((prev) => prev.filter((session) => session.id !== sessionId));
+    setMessagesBySession((prev) => {
+      const next = { ...prev };
+      delete next[sessionId];
+      return next;
+    });
+    setLoadedSessionIds((prev) => {
+      const next = { ...prev };
+      delete next[sessionId];
+      return next;
+    });
+    setLoadingSessionIds((prev) => {
+      const next = { ...prev };
+      delete next[sessionId];
+      return next;
+    });
+    freshSessionIdsRef.current.delete(sessionId);
+  }, []);
+
   const upsertSessionRecord = useCallback((session: ChatSessionRecord) => {
     setSessions((prev) => {
       const withoutCurrent = prev.filter((item) => item.id !== session.id);
       const next = [session, ...withoutCurrent];
       next.sort((left, right) => (
-        new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
+        getSessionSortTime(right) - getSessionSortTime(left)
       ));
       return next;
     });
@@ -225,7 +309,11 @@ export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
     setSessionsLoading(true);
     try {
       const res = await fetch("/api/chat/sessions", withClientApiToken({ cache: "no-store" }));
-      const data = (await res.json()) as ChatSessionRecord[];
+      const payload = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(`Failed to load chat sessions (${res.status})`);
+      }
+      const data = parseChatSessionsPayload(payload);
       if (refreshSessionsRequestIdRef.current === requestId) {
         setSessions(data);
       }
@@ -268,18 +356,27 @@ export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
       const request = (async (): Promise<ChatMessageRecord[]> => {
         try {
           const res = await fetch(`/api/chat/sessions/${sessionId}`, withClientApiToken({ cache: "no-store" }));
-          const data = (await res.json()) as ChatSessionRecord & { messages: ChatMessageRecord[] };
-          const nextMessages = data.messages ?? [];
-          const { messages: _messages, ...session } = data;
-          void _messages;
+          const payload = await res.json().catch(() => null);
+          if (res.status === 404) {
+            pruneSessionState(sessionId);
+            return [];
+          }
+          if (!res.ok) {
+            throw new Error(`Failed to load chat session (${res.status})`);
+          }
 
-          upsertSessionRecord(session);
+          const parsed = parseChatSessionDetailPayload(payload);
+          if (!parsed) {
+            throw new Error("Invalid chat session payload");
+          }
+
+          upsertSessionRecord(parsed.session);
           setMessagesBySession((prev) => ({
             ...prev,
-            [sessionId]: nextMessages,
+            [sessionId]: parsed.messages,
           }));
           setLoadedSessionIds((prev) => ({ ...prev, [sessionId]: true }));
-          return nextMessages;
+          return parsed.messages;
         } catch {
           if (!options?.silent) {
             setMessagesBySession((prev) => ({
@@ -307,7 +404,7 @@ export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [upsertSessionRecord],
+    [pruneSessionState, upsertSessionRecord],
   );
 
   const createSession = useCallback(async (deviceId?: string) => {
@@ -317,7 +414,14 @@ export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ title: "New Chat", deviceId }),
       }));
-      const session = (await res.json()) as ChatSessionRecord;
+      const payload = await res.json().catch(() => null);
+      if (!res.ok) {
+        return null;
+      }
+      const session = parseChatSessionRecord(payload);
+      if (!session) {
+        return null;
+      }
       freshSessionIdsRef.current.add(session.id);
       upsertSessionRecord(session);
       setMessagesBySession((prev) => ({ ...prev, [session.id]: [] }));
@@ -332,11 +436,14 @@ export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
     const trimmedTitle = title.trim();
     if (!trimmedTitle) return;
 
-    await fetch(`/api/chat/sessions/${id}`, withClientApiToken({
+    const res = await fetch(`/api/chat/sessions/${id}`, withClientApiToken({
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ title: trimmedTitle }),
     }));
+    if (!res.ok) {
+      return;
+    }
 
     setSessions((prev) =>
       prev.map((session) => (
@@ -368,25 +475,12 @@ export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
 
   const deleteSession = useCallback(async (id: string) => {
     stopStreaming(id);
-    await fetch(`/api/chat/sessions/${id}`, withClientApiToken({ method: "DELETE" }));
-    setSessions((prev) => prev.filter((session) => session.id !== id));
-    setMessagesBySession((prev) => {
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
-    setLoadedSessionIds((prev) => {
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
-    setLoadingSessionIds((prev) => {
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
-    freshSessionIdsRef.current.delete(id);
-  }, [stopStreaming]);
+    const res = await fetch(`/api/chat/sessions/${id}`, withClientApiToken({ method: "DELETE" }));
+    if (!res.ok) {
+      return;
+    }
+    pruneSessionState(id);
+  }, [pruneSessionState, stopStreaming]);
 
   const streamChat = useCallback(
     async (

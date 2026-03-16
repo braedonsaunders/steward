@@ -106,7 +106,7 @@ function findExistingCredential(
 }
 
 export async function storeDeviceCredential(input: StoreDeviceCredentialInput): Promise<DeviceCredential> {
-  if (!input.secret || input.secret.trim().length === 0) {
+  if (typeof input.secret !== "string") {
     throw new Error("Credential secret is required");
   }
 
@@ -180,7 +180,7 @@ export async function validateDeviceCredential(
   }
 
   const secret = await vault.getSecret(credential.vaultSecretRef);
-  const hasSecret = typeof secret === "string" && secret.length > 0;
+  const hasSecret = typeof secret === "string";
   if (!hasSecret) {
     throw new Error("Stored credential secret is missing");
   }
@@ -265,7 +265,7 @@ export async function updateDeviceCredential(input: UpdateDeviceCredentialInput)
   if (nextProtocol === "http-api" && requiresHttpApiAccountLabel(nextScope) && !nextAccountLabel) {
     throw new Error("HTTP Basic credentials require an accountLabel username.");
   }
-  if (input.secret && input.secret.trim().length > 0) {
+  if (input.secret !== undefined) {
     const unlocked = await vault.ensureUnlocked();
     if (!unlocked) {
       throw new Error("Vault is unavailable");

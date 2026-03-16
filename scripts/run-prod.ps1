@@ -8,10 +8,27 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
 $legacyStandaloneServerPath = Join-Path $repoRoot ".next\standalone\server.js"
-$runtimeStandaloneServerPath = Join-Path $repoRoot "build\standalone-runtime\server.js"
+$runtimeStandaloneRootPrefix = Join-Path $repoRoot "build\standalone-runtime"
 
 function Get-NodeProcessInfo {
   @(Get-CimInstance Win32_Process -Filter "name = 'node.exe'" | Where-Object { $_.CommandLine })
+}
+
+function Test-IsStewardNodeProcess {
+  param(
+    $ProcessInfo
+  )
+
+  if ($null -eq $ProcessInfo) {
+    return $false
+  }
+
+  $commandLine = [string]$ProcessInfo.CommandLine
+  return (
+    $commandLine.Contains("scripts/start-prod.mjs") -or
+    $commandLine.Contains($legacyStandaloneServerPath) -or
+    $commandLine.Contains($runtimeStandaloneRootPrefix)
+  )
 }
 
 function Stop-ProcessesById {
@@ -38,6 +55,44 @@ function Stop-LegacyStandaloneServer {
   Stop-ProcessesById -ProcessIds $legacyProcessIds -Reason "Stopping legacy Steward standalone server that locks .next"
 }
 
+function Expand-StewardProcessTree {
+  param(
+    [hashtable]$ProcessesById,
+    [int[]]$SeedProcessIds
+  )
+
+  $expandedProcessIds = New-Object System.Collections.Generic.HashSet[int]
+  $pendingProcessIds = New-Object System.Collections.Generic.Queue[int]
+
+  foreach ($processId in $SeedProcessIds) {
+    if ($processId -gt 0) {
+      $pendingProcessIds.Enqueue([int]$processId)
+    }
+  }
+
+  while ($pendingProcessIds.Count -gt 0) {
+    $currentProcessId = $pendingProcessIds.Dequeue()
+    if (-not $expandedProcessIds.Add($currentProcessId)) {
+      continue
+    }
+
+    $processInfo = $ProcessesById[$currentProcessId]
+    if ($null -eq $processInfo) {
+      continue
+    }
+
+    $parentProcessId = [int]$processInfo.ParentProcessId
+    if ($parentProcessId -gt 0) {
+      $parentProcess = $ProcessesById[$parentProcessId]
+      if (Test-IsStewardNodeProcess -ProcessInfo $parentProcess) {
+        $pendingProcessIds.Enqueue($parentProcessId)
+      }
+    }
+  }
+
+  return @($expandedProcessIds)
+}
+
 function Stop-StewardListenerOnPort {
   param(
     [int]$TargetPort
@@ -55,27 +110,22 @@ function Stop-StewardListenerOnPort {
     $processesById[[int]$process.ProcessId] = $process
   }
 
-  $stewardProcessIds = New-Object System.Collections.Generic.List[int]
+  $stewardSeedProcessIds = New-Object System.Collections.Generic.List[int]
   foreach ($processId in $listenerProcessIds) {
     $process = $processesById[$processId]
     if ($null -eq $process) {
       throw "Port $TargetPort is already in use by process $processId. Stop it manually before running Steward."
     }
 
-    $commandLine = [string]$process.CommandLine
-    $isStewardProcess =
-      $commandLine.Contains("scripts/start-prod.mjs") -or
-      $commandLine.Contains($legacyStandaloneServerPath) -or
-      $commandLine.Contains($runtimeStandaloneServerPath)
-
-    if (-not $isStewardProcess) {
+    if (-not (Test-IsStewardNodeProcess -ProcessInfo $process)) {
       throw "Port $TargetPort is already in use by non-Steward process $processId. Stop it manually before running Steward."
     }
 
-    [void]$stewardProcessIds.Add($processId)
+    [void]$stewardSeedProcessIds.Add($processId)
   }
 
-  Stop-ProcessesById -ProcessIds $stewardProcessIds.ToArray() -Reason "Stopping current Steward listener on port $TargetPort"
+  $stewardProcessIds = Expand-StewardProcessTree -ProcessesById $processesById -SeedProcessIds $stewardSeedProcessIds.ToArray()
+  Stop-ProcessesById -ProcessIds $stewardProcessIds -Reason "Stopping current Steward listener on port $TargetPort"
 }
 
 function Invoke-Step {

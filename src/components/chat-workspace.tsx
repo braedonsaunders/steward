@@ -75,15 +75,30 @@ export interface ChatWorkspaceProps {
 type ChatMessage = ChatMessageRecord;
 type ChatSession = ChatSessionRecord;
 
+function parseDisplayDate(dateStr: string): Date | null {
+  const date = new Date(dateStr);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 function formatTime(dateStr: string): string {
-  return new Date(dateStr).toLocaleTimeString([], {
+  const date = parseDisplayDate(dateStr);
+  if (!date) {
+    return "Unknown time";
+  }
+
+  return date.toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit",
   });
 }
 
 function relativeDate(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
+  const date = parseDisplayDate(dateStr);
+  if (!date) {
+    return "Unknown time";
+  }
+
+  const diff = Date.now() - date.getTime();
   const minutes = Math.floor(diff / 60000);
   if (minutes < 1) return "just now";
   if (minutes < 60) return `${minutes}m ago`;
@@ -91,7 +106,7 @@ function relativeDate(dateStr: string): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   if (days < 7) return `${days}d ago`;
-  return new Date(dateStr).toLocaleDateString();
+  return date.toLocaleDateString();
 }
 
 function normalizeToolOutput(value?: string): string | undefined {
@@ -1550,10 +1565,11 @@ export function ChatWorkspace({
 
   useEffect(() => {
     if (!activeSessionId) return;
+    if (!activeSession) return;
     if (activeSessionLoaded) return;
     if (messagesLoading) return;
     void loadSessionMessages(activeSessionId);
-  }, [activeSessionId, activeSessionLoaded, loadSessionMessages, messagesLoading]);
+  }, [activeSession, activeSessionId, activeSessionLoaded, loadSessionMessages, messagesLoading]);
 
   useEffect(() => {
     if (!onWidgetMutation) {

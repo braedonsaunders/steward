@@ -14,7 +14,7 @@ export const runtime = "nodejs";
 
 const createSchema = z.object({
   protocol: z.string().trim().min(1),
-  secret: z.string().min(1),
+  secret: z.string(),
   adapterId: z.string().trim().min(1).optional(),
   accountLabel: z.string().trim().min(1).max(256).optional(),
   scopeJson: z.record(z.string(), z.unknown()).optional(),

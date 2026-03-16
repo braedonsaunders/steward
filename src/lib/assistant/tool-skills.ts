@@ -227,6 +227,75 @@ function resolveMode(kind: OperationKind, requested?: unknown): OperationMode {
   return MUTATING_KINDS.has(kind) ? "mutate" : "read";
 }
 
+const DEVICE_REQUIRED_ERROR =
+  "Valid device_id is required. This is a non-retryable blocker until you supply a resolvable device id, IP, hostname, or unique device name.";
+const ATTACHED_DEVICE_REQUIRED_ERROR =
+  "Valid device_id is required or chat must be attached to a device. This is a non-retryable blocker until the chat is attached or the device target resolves.";
+
+function normalizeLookupToken(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function compactLookupToken(value: string): string {
+  return normalizeLookupToken(value).replace(/[^a-z0-9]/g, "");
+}
+
+function buildLookupAliases(value: string | undefined): string[] {
+  if (typeof value !== "string") {
+    return [];
+  }
+
+  const normalized = normalizeLookupToken(value);
+  if (normalized.length === 0) {
+    return [];
+  }
+
+  const aliases = new Set<string>([normalized]);
+  const compact = compactLookupToken(value);
+  if (compact.length > 0) {
+    aliases.add(compact);
+  }
+
+  const shortLabel = normalized.split(".")[0]?.trim();
+  if (shortLabel) {
+    aliases.add(shortLabel);
+    const compactShort = shortLabel.replace(/[^a-z0-9]/g, "");
+    if (compactShort.length > 0) {
+      aliases.add(compactShort);
+    }
+  }
+
+  return Array.from(aliases);
+}
+
+function scoreLookupAlias(targetAliases: string[], value: string | undefined, weights: {
+  exact: number;
+  prefix: number;
+  contains: number;
+}): number {
+  const candidateAliases = buildLookupAliases(value);
+  let best = 0;
+  for (const targetAlias of targetAliases) {
+    if (targetAlias.length === 0) {
+      continue;
+    }
+    for (const alias of candidateAliases) {
+      if (alias === targetAlias) {
+        best = Math.max(best, weights.exact);
+        continue;
+      }
+      if (alias.startsWith(targetAlias) || targetAlias.startsWith(alias)) {
+        best = Math.max(best, weights.prefix);
+        continue;
+      }
+      if (targetAlias.length >= 3 && (alias.includes(targetAlias) || targetAlias.includes(alias))) {
+        best = Math.max(best, weights.contains);
+      }
+    }
+  }
+  return best;
+}
+
 async function resolveDeviceByTarget(rawTarget: string | undefined, attachedDeviceId?: string): Promise<Device | null> {
   const target = rawTarget?.trim();
   if ((!target || target.length === 0) && attachedDeviceId) {
@@ -240,11 +309,27 @@ async function resolveDeviceByTarget(rawTarget: string | undefined, attachedDevi
   const byId = stateStore.getDeviceById(target);
   if (byId) return byId;
 
-  const normalized = target.toLowerCase();
+  const targetAliases = buildLookupAliases(target);
   const state = await stateStore.getState();
-  return state.devices.find((device) =>
-    device.ip.toLowerCase() === normalized || device.name.toLowerCase() === normalized,
-  ) ?? null;
+  const scored = state.devices
+    .map((device) => ({
+      device,
+      score: Math.max(
+        scoreLookupAlias(targetAliases, device.id, { exact: 140, prefix: 118, contains: 0 }),
+        scoreLookupAlias(targetAliases, device.ip, { exact: 136, prefix: 0, contains: 0 }),
+        scoreLookupAlias(targetAliases, device.hostname, { exact: 124, prefix: 104, contains: 82 }),
+        scoreLookupAlias(targetAliases, device.name, { exact: 120, prefix: 100, contains: 78 }),
+      ),
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score || left.device.name.localeCompare(right.device.name));
+  if (scored.length === 0) {
+    return null;
+  }
+  if (scored.length === 1 || scored[0].score > scored[1].score) {
+    return scored[0].device;
+  }
+  return null;
 }
 
 function validateDeviceReadyForToolUse(
@@ -254,21 +339,48 @@ function validateDeviceReadyForToolUse(
   const adoptionStatus = getDeviceAdoptionStatus(device);
   if (options?.allowPreOnboardingExecution) {
     if (adoptionStatus === "ignored") {
-      return { ok: false, reason: `Device ${device.name} is ignored and cannot be probed.` };
+      return {
+        ok: false,
+        reason: `Device ${device.name} is ignored and cannot be probed. This is a non-retryable blocker until the device is unignored.`,
+      };
     }
     return { ok: true };
   }
 
   if (adoptionStatus !== "adopted") {
-    return { ok: false, reason: `Device ${device.name} is not adopted yet.` };
+    return {
+      ok: false,
+      reason: `Device ${device.name} is not adopted yet. This is a non-retryable blocker for managed chat tools until adoption starts or the device is attached to its onboarding flow.`,
+    };
   }
 
   const run = stateStore.getLatestAdoptionRun(device.id);
   if (!run || run.status !== "completed") {
-    return { ok: false, reason: `Device ${device.name} onboarding is not complete yet.` };
+    return {
+      ok: false,
+      reason: `Device ${device.name} onboarding is not complete yet. This is a non-retryable blocker for managed chat tools until onboarding finishes or the chat is attached to that onboarding session.`,
+    };
   }
 
   return { ok: true };
+}
+
+function deviceHasObservedProtocol(device: Device, protocols: string[], servicePorts: number[]): boolean {
+  if (device.protocols.some((value) => protocols.includes(normalizeCredentialProtocol(value)))) {
+    return true;
+  }
+
+  if (stateStore.getAccessMethods(device.id).some((method) => {
+    const kind = normalizeCredentialProtocol(method.kind);
+    const protocol = normalizeCredentialProtocol(method.protocol);
+    return protocols.includes(kind) || protocols.includes(protocol);
+  })) {
+    return true;
+  }
+
+  return device.services.some((service) =>
+    service.transport === "tcp" && servicePorts.includes(service.port),
+  );
 }
 
 function validateDeviceReadyForContractToolUse(
@@ -584,7 +696,7 @@ async function localPlaywrightAvailable(): Promise<boolean> {
 }
 
 function inferAdapterForKind(kind: OperationKind, device: Device): string {
-  const protocols = new Set(device.protocols.map((protocol) => protocol.toLowerCase()));
+  const protocols = new Set(device.protocols.map((protocol) => normalizeCredentialProtocol(protocol)));
 
   if (kind === "http.request") return "http-api";
   if (kind === "mqtt.message") return "mqtt";
@@ -600,22 +712,24 @@ function inferAdapterForKind(kind: OperationKind, device: Device): string {
     if (protocols.has("ssh")) return "ssh";
   }
   if (kind === "shell.command") {
-    if (protocols.has("ssh")) return "ssh";
-    if (protocols.has("winrm")) return "winrm";
+    if (protocols.has("ssh") || deviceHasObservedProtocol(device, ["ssh"], [22, 2222])) return "ssh";
+    if (protocols.has("winrm") || deviceHasObservedProtocol(device, ["winrm"], [5985, 5986])) return "winrm";
     if (protocols.has("powershell-ssh")) return "powershell-ssh";
     if (protocols.has("wmi")) return "wmi";
-    if (protocols.has("smb")) return "smb";
-    if (protocols.has("docker")) return "docker";
-    if (protocols.has("snmp")) return "snmp";
+    if (protocols.has("smb") || deviceHasObservedProtocol(device, ["smb"], [445])) return "smb";
+    if (protocols.has("docker") || deviceHasObservedProtocol(device, ["docker"], [2375, 2376])) return "docker";
+    if (protocols.has("telnet") || deviceHasObservedProtocol(device, ["telnet"], [23])) return "telnet";
+    if (protocols.has("snmp") || deviceHasObservedProtocol(device, ["snmp"], [161])) return "snmp";
   }
-  if (protocols.has("ssh")) return "ssh";
-  if (protocols.has("winrm")) return "winrm";
+  if (protocols.has("ssh") || deviceHasObservedProtocol(device, ["ssh"], [22, 2222])) return "ssh";
+  if (protocols.has("winrm") || deviceHasObservedProtocol(device, ["winrm"], [5985, 5986])) return "winrm";
   if (protocols.has("powershell-ssh")) return "powershell-ssh";
   if (protocols.has("wmi")) return "wmi";
-  if (protocols.has("smb")) return "smb";
+  if (protocols.has("smb") || deviceHasObservedProtocol(device, ["smb"], [445])) return "smb";
+  if (protocols.has("telnet") || deviceHasObservedProtocol(device, ["telnet"], [23])) return "telnet";
   if (protocols.has("rdp")) return "rdp";
   if (protocols.has("vnc")) return "vnc";
-  if (protocols.has("docker")) return "docker";
+  if (protocols.has("docker") || deviceHasObservedProtocol(device, ["docker"], [2375, 2376])) return "docker";
   if (protocols.has("mqtt")) return "mqtt";
   if (protocols.has("http-api") || protocols.has("http")) return "http-api";
   return "ssh";
@@ -681,6 +795,16 @@ function inputString(input: Record<string, unknown>, ...keys: string[]): string 
     const value = input[key];
     if (typeof value === "string" && value.trim().length > 0) {
       return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function inputRawString(input: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = input[key];
+    if (typeof value === "string") {
+      return value;
     }
   }
   return undefined;
@@ -1147,7 +1271,7 @@ async function resolveBrowserCredential(device: Device): Promise<{
     };
   }
   const secret = await vault.getSecret(selected.vaultSecretRef);
-  if (!secret || secret.trim().length === 0) {
+  if (secret === undefined || secret === null) {
     return { credentialId: selected.id, username: selected.accountLabel?.trim() };
   }
   return {
@@ -1930,6 +2054,11 @@ function defaultCommandTemplate(
       const command = userCommand || "ps --format '{{.Names}} {{.Status}} {{.Image}}'";
       return `docker -H ${dockerHostTarget(device, input)} ${command}`;
     }
+    if (adapterId === "telnet") {
+      const command = userCommand || "help";
+      const port = inputPort(input) ?? 23;
+      return `telnet {{host}}:${port} # managed-session command: ${command}`;
+    }
     if (adapterId === "snmp") {
       const community = sanitizeSnmpToken(
         inputString(input, "community", "snmp_community"),
@@ -2055,6 +2184,24 @@ function defaultBrokerRequest(
         command: `${kind === "service.restart" ? "Restart-Service" : "Stop-Service"} -Name '${service}' -ErrorAction Stop`,
         ...(host ? { host } : {}),
         port,
+      };
+    }
+  }
+
+  if (adapterId === "telnet") {
+    const host = inputString(input, "host", "computer_name", "telnet_host");
+    const port = inputPort(input) ?? 23;
+    if (kind === "shell.command") {
+      const command = typeof input.command === "string" && input.command.trim().length > 0
+        ? input.command.trim()
+        : "help";
+      const expectRegex = inputString(input, "expect_regex");
+      return {
+        protocol: "telnet",
+        command,
+        ...(host ? { host } : {}),
+        port,
+        ...(expectRegex ? { expectRegex } : {}),
       };
     }
   }
@@ -2309,7 +2456,7 @@ function localToolBrokerRequest(
 
 function buildCommonToolArgumentProperties(): Record<string, unknown> {
   return {
-    device_id: { type: "string", description: "Target device id, exact name, or IP." },
+    device_id: { type: "string", description: "Target device id, IP, hostname, or unique device name." },
     operation_kind: { type: "string", description: "Optional operation override when a skill supports multiple actions." },
     mode: { type: "string", description: "Optional mode override: read or mutate." },
     adapter_id: { type: "string", description: "Optional adapter override when multiple protocols are possible." },
@@ -2727,7 +2874,8 @@ export async function buildAdapterSkillTools(
         if (!device) {
           return {
             ok: false,
-            error: "Tool call requires a valid device_id (device id, IP, or exact name).",
+            error: DEVICE_REQUIRED_ERROR,
+            retryable: false,
           };
         }
 
@@ -2735,7 +2883,7 @@ export async function buildAdapterSkillTools(
           allowPreOnboardingExecution: options?.allowPreOnboardingExecution,
         });
         if (!readiness.ok) {
-          return { ok: false, error: readiness.reason, deviceId: device.id };
+          return { ok: false, error: readiness.reason, deviceId: device.id, retryable: false };
         }
 
         if (!options?.allowPreOnboardingExecution && !hasSelectedProfileForAdapter(device.id, liveDescriptor.adapterId)) {
@@ -2882,7 +3030,7 @@ export async function buildAdapterSkillTools(
         },
         device_id: {
           type: "string",
-          description: "Target device id, exact name, or IP. Optional for device_summary/dependencies when chat is attached to a device.",
+          description: "Target device id, IP, hostname, or unique device name. Optional for device_summary/dependencies when chat is attached to a device.",
         },
         same_subnet_as_device_id: {
           type: "string",
@@ -2982,14 +3130,14 @@ export async function buildAdapterSkillTools(
         options?.attachedDeviceId,
       );
       if (!device) {
-        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+        return { ok: false, error: ATTACHED_DEVICE_REQUIRED_ERROR, retryable: false };
       }
 
       const readiness = validateDeviceReadyForExplorationToolUse(device, {
         allowPreOnboardingExecution: options?.allowPreOnboardingExecution,
       });
       if (!readiness.ok) {
-        return { ok: false, error: readiness.reason, deviceId: device.id };
+        return { ok: false, error: readiness.reason, deviceId: device.id, retryable: false };
       }
 
       const observationWindowMinutes = clampInt(args.observation_window_minutes, 5, 10_080, 720);
@@ -3094,13 +3242,13 @@ export async function buildAdapterSkillTools(
   });
 
   tools.steward_shell_read = dynamicTool({
-    description: "Run an investigative read-only command over supported remote transports such as SSH, WinRM, PowerShell over SSH, WMI, SMB, or Docker. For WMI, the command itself must use `$session` or `-CimSession`; for SMB, only share-scoped file operations using `$sharePath` or `$shareRoot` are valid. Use port for non-default management ports instead of embedding transport wrappers in the command.",
+    description: "Run an investigative read-only command over supported remote transports such as SSH, Telnet, WinRM, PowerShell over SSH, WMI, SMB, or Docker. For WMI, the command itself must use `$session` or `-CimSession`; for SMB, only share-scoped file operations using `$sharePath` or `$shareRoot` are valid. Use port for non-default management ports instead of embedding transport wrappers in the command.",
     inputSchema: jsonSchema({
       type: "object",
       properties: {
         device_id: { type: "string", description: "Target device id, name, or IP" },
         command: { type: "string", description: "Read-only command to execute remotely" },
-        protocol: { type: "string", description: "Optional protocol override: ssh, winrm, powershell-ssh, wmi, smb, docker" },
+        protocol: { type: "string", description: "Optional protocol override: ssh, telnet, winrm, powershell-ssh, wmi, smb, docker" },
         port: { type: "integer", description: "Optional management port override, such as SSH on 2222." },
       },
       required: ["device_id", "command"],
@@ -3113,14 +3261,14 @@ export async function buildAdapterSkillTools(
         options?.attachedDeviceId,
       );
       if (!device) {
-        return { ok: false, error: "Valid device_id is required." };
+        return { ok: false, error: DEVICE_REQUIRED_ERROR, retryable: false };
       }
 
       const readiness = validateDeviceReadyForExplorationToolUse(device, {
         allowPreOnboardingExecution: options?.allowPreOnboardingExecution,
       });
       if (!readiness.ok) {
-        return { ok: false, error: readiness.reason, deviceId: device.id };
+        return { ok: false, error: readiness.reason, deviceId: device.id, retryable: false };
       }
 
       const command = typeof args.command === "string" ? args.command.trim() : "";
@@ -3305,14 +3453,14 @@ export async function buildAdapterSkillTools(
         options?.attachedDeviceId,
       );
       if (!device) {
-        return { ok: false, error: "Valid device_id is required." };
+        return { ok: false, error: DEVICE_REQUIRED_ERROR, retryable: false };
       }
 
       const readiness = validateDeviceReadyForExplorationToolUse(device, {
         allowPreOnboardingExecution: options?.allowPreOnboardingExecution,
       });
       if (!readiness.ok) {
-        return { ok: false, error: readiness.reason, deviceId: device.id };
+        return { ok: false, error: readiness.reason, deviceId: device.id, retryable: false };
       }
 
       const requestedMode = args.mode === "read" || args.mode === "mutate" ? args.mode : undefined;
@@ -3611,7 +3759,7 @@ export async function buildAdapterSkillTools(
         options?.attachedDeviceId,
       );
       if (!device) {
-        return { ok: false, error: "Valid device_id is required." };
+        return { ok: false, error: DEVICE_REQUIRED_ERROR, retryable: false };
       }
 
       const brokerRequest = defaultBrokerRequest("mqtt.message", "mqtt", {
@@ -3755,13 +3903,13 @@ export async function buildAdapterSkillTools(
       }
       const device = await resolveDeviceByTarget(inputString(args, "device_id"), options?.attachedDeviceId);
       if (!device) {
-        return { ok: false, error: "Valid device_id is required." };
+        return { ok: false, error: DEVICE_REQUIRED_ERROR, retryable: false };
       }
       const useStoredCredentials = args.use_stored_credentials !== false;
       const providedUsername = inputString(args, "username");
-      const providedPassword = inputString(args, "password");
+      const providedPassword = inputRawString(args, "password");
       const stored = useStoredCredentials ? await resolveBrowserCredential(device) : {};
-      if (!providedUsername && !providedPassword && stored.unsupportedAuthMode) {
+      if (providedUsername === undefined && providedPassword === undefined && stored.unsupportedAuthMode) {
         return {
           ok: false,
           error: `Browser automation cannot apply stored ${httpApiCredentialAuthLabel(stored.unsupportedAuthMode)} credentials. Use broker-backed HTTP/API tools instead.`,
@@ -3807,7 +3955,7 @@ export async function buildAdapterSkillTools(
       const args = isRecord(argsUnknown) ? argsUnknown : {};
       const device = await resolveDeviceByTarget(inputString(args, "device_id"), options?.attachedDeviceId);
       if (!device) {
-        return { ok: false, error: "Valid device_id is required." };
+        return { ok: false, error: DEVICE_REQUIRED_ERROR, retryable: false };
       }
       const flows = await adapterRegistry.getDeviceWebFlows(device);
       return {
@@ -3848,7 +3996,7 @@ export async function buildAdapterSkillTools(
       const args = isRecord(argsUnknown) ? argsUnknown : {};
       const device = await resolveDeviceByTarget(inputString(args, "device_id"), options?.attachedDeviceId);
       if (!device) {
-        return { ok: false, error: "Valid device_id is required." };
+        return { ok: false, error: DEVICE_REQUIRED_ERROR, retryable: false };
       }
       const intent = inputString(args, "intent")?.toLowerCase();
       const flowId = inputString(args, "flow_id");
@@ -3978,14 +4126,14 @@ export async function buildAdapterSkillTools(
         options?.attachedDeviceId,
       );
       if (!device) {
-        return { ok: false, error: "Valid device_id is required." };
+        return { ok: false, error: DEVICE_REQUIRED_ERROR, retryable: false };
       }
 
       const readiness = validateDeviceReadyForExplorationToolUse(device, {
         allowPreOnboardingExecution: options?.allowPreOnboardingExecution,
       });
       if (!readiness.ok) {
-        return { ok: false, error: readiness.reason, deviceId: device.id };
+        return { ok: false, error: readiness.reason, deviceId: device.id, retryable: false };
       }
 
       const runtime = stateStore.getRuntimeSettings();
@@ -4336,7 +4484,7 @@ export async function buildAdapterSkillTools(
         options?.attachedDeviceId,
       );
       if (!device) {
-        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+        return { ok: false, error: ATTACHED_DEVICE_REQUIRED_ERROR, retryable: false };
       }
 
       const snapshot = await completeDeviceOnboarding({
@@ -4986,12 +5134,12 @@ export async function buildAdapterSkillTools(
         options?.attachedDeviceId,
       );
       if (!device) {
-        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+        return { ok: false, error: ATTACHED_DEVICE_REQUIRED_ERROR, retryable: false };
       }
 
       const readiness = validateDeviceReadyForContractToolUse(device);
       if (!readiness.ok) {
-        return { ok: false, error: readiness.reason, deviceId: device.id };
+        return { ok: false, error: readiness.reason, deviceId: device.id, retryable: false };
       }
 
       const snapshot = buildContractSnapshotPayload(device.id);
@@ -5055,12 +5203,12 @@ export async function buildAdapterSkillTools(
         options?.attachedDeviceId,
       );
       if (!device) {
-        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+        return { ok: false, error: ATTACHED_DEVICE_REQUIRED_ERROR, retryable: false };
       }
 
       const readiness = validateDeviceReadyForContractToolUse(device);
       if (!readiness.ok) {
-        return { ok: false, error: readiness.reason, deviceId: device.id };
+        return { ok: false, error: readiness.reason, deviceId: device.id, retryable: false };
       }
 
       const responsibility = await createResponsibility({
@@ -5124,12 +5272,12 @@ export async function buildAdapterSkillTools(
         options?.attachedDeviceId,
       );
       if (!device) {
-        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+        return { ok: false, error: ATTACHED_DEVICE_REQUIRED_ERROR, retryable: false };
       }
 
       const readiness = validateDeviceReadyForContractToolUse(device);
       if (!readiness.ok) {
-        return { ok: false, error: readiness.reason, deviceId: device.id };
+        return { ok: false, error: readiness.reason, deviceId: device.id, retryable: false };
       }
 
       const resolved = resolveResponsibilityForDevice(device.id, {
@@ -5196,12 +5344,12 @@ export async function buildAdapterSkillTools(
         options?.attachedDeviceId,
       );
       if (!device) {
-        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+        return { ok: false, error: ATTACHED_DEVICE_REQUIRED_ERROR, retryable: false };
       }
 
       const readiness = validateDeviceReadyForContractToolUse(device);
       if (!readiness.ok) {
-        return { ok: false, error: readiness.reason, deviceId: device.id };
+        return { ok: false, error: readiness.reason, deviceId: device.id, retryable: false };
       }
 
       const resolved = resolveResponsibilityForDevice(device.id, {
@@ -5306,12 +5454,12 @@ export async function buildAdapterSkillTools(
         options?.attachedDeviceId,
       );
       if (!device) {
-        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+        return { ok: false, error: ATTACHED_DEVICE_REQUIRED_ERROR, retryable: false };
       }
 
       const readiness = validateDeviceReadyForContractToolUse(device);
       if (!readiness.ok) {
-        return { ok: false, error: readiness.reason, deviceId: device.id };
+        return { ok: false, error: readiness.reason, deviceId: device.id, retryable: false };
       }
 
       const responsibilitySelector = {
@@ -5417,12 +5565,12 @@ export async function buildAdapterSkillTools(
         options?.attachedDeviceId,
       );
       if (!device) {
-        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+        return { ok: false, error: ATTACHED_DEVICE_REQUIRED_ERROR, retryable: false };
       }
 
       const readiness = validateDeviceReadyForContractToolUse(device);
       if (!readiness.ok) {
-        return { ok: false, error: readiness.reason, deviceId: device.id };
+        return { ok: false, error: readiness.reason, deviceId: device.id, retryable: false };
       }
 
       const resolvedAssurance = resolveAssuranceForDevice(device.id, {
@@ -5518,12 +5666,12 @@ export async function buildAdapterSkillTools(
         options?.attachedDeviceId,
       );
       if (!device) {
-        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+        return { ok: false, error: ATTACHED_DEVICE_REQUIRED_ERROR, retryable: false };
       }
 
       const readiness = validateDeviceReadyForContractToolUse(device);
       if (!readiness.ok) {
-        return { ok: false, error: readiness.reason, deviceId: device.id };
+        return { ok: false, error: readiness.reason, deviceId: device.id, retryable: false };
       }
 
       const resolved = resolveAssuranceForDevice(device.id, {
@@ -5780,14 +5928,14 @@ export async function buildAdapterSkillTools(
       const args = isRecord(argsUnknown) ? argsUnknown : {};
       const device = await resolveDeviceByTarget(inputString(args, "device_id"), options?.attachedDeviceId);
       if (!device) {
-        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+        return { ok: false, error: ATTACHED_DEVICE_REQUIRED_ERROR, retryable: false };
       }
 
       const readiness = validateDeviceReadyForToolUse(device, {
         allowPreOnboardingExecution: options?.allowPreOnboardingExecution,
       });
       if (!readiness.ok) {
-        return { ok: false, error: readiness.reason, deviceId: device.id };
+        return { ok: false, error: readiness.reason, deviceId: device.id, retryable: false };
       }
 
       const protocol = (() => {
@@ -5960,11 +6108,11 @@ export async function buildAdapterSkillTools(
       const markCredentialValidated = args.mark_credential_validated !== false;
       const timeoutMs = clampInt(args.post_login_wait_ms, 0, 60_000, 1_000);
       const providedUsername = inputString(args, "username");
-      const providedPassword = inputString(args, "password");
+      const providedPassword = inputRawString(args, "password");
       const stored = device && useStoredCredentials
         ? await resolveBrowserCredential(device)
         : {};
-      if (!providedUsername && !providedPassword && stored.unsupportedAuthMode) {
+      if (providedUsername === undefined && providedPassword === undefined && stored.unsupportedAuthMode) {
         return {
           ok: false,
           error: `Browser automation cannot apply stored ${httpApiCredentialAuthLabel(stored.unsupportedAuthMode)} credentials. Use broker-backed HTTP/API tools instead of steward_browser_browse for this device.`,
@@ -6101,14 +6249,14 @@ export async function buildAdapterSkillTools(
         options?.attachedDeviceId,
       );
       if (!device) {
-        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+        return { ok: false, error: ATTACHED_DEVICE_REQUIRED_ERROR, retryable: false };
       }
 
       const readiness = validateDeviceReadyForToolUse(device, {
         allowPreOnboardingExecution: true,
       });
       if (!readiness.ok) {
-        return { ok: false, error: readiness.reason, deviceId: device.id };
+        return { ok: false, error: readiness.reason, deviceId: device.id, retryable: false };
       }
 
       const readSelectedProfileIds = (snapshot: Awaited<ReturnType<typeof getDeviceAdoptionSnapshot>> | null): string[] => {
@@ -6512,14 +6660,14 @@ export async function buildAdapterSkillTools(
         options?.attachedDeviceId,
       );
       if (!device) {
-        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+        return { ok: false, error: ATTACHED_DEVICE_REQUIRED_ERROR, retryable: false };
       }
 
       const readiness = validateDeviceReadyForToolUse(device, {
         allowPreOnboardingExecution: true,
       });
       if (!readiness.ok) {
-        return { ok: false, error: readiness.reason, deviceId: device.id };
+        return { ok: false, error: readiness.reason, deviceId: device.id, retryable: false };
       }
 
       if (action === "list") {
@@ -6540,8 +6688,8 @@ export async function buildAdapterSkillTools(
         if (!protocolInput) {
           return { ok: false, error: "protocol is required for store." };
         }
-        const secret = inputString(args, "secret");
-        if (!secret) {
+        const secret = inputRawString(args, "secret");
+        if (secret === undefined) {
           return { ok: false, error: "secret is required for store." };
         }
 
@@ -6642,13 +6790,13 @@ export async function buildAdapterSkillTools(
         deviceId: device.id,
         credentialId: resolved.value.id,
         protocol: replacementProtocolRaw ? nextProtocol : undefined,
-        secret: inputString(args, "secret"),
+        secret: inputRawString(args, "secret"),
         accountLabel: nextAccountLabel,
         scopeJson,
       });
 
-        const redacted = redactDeviceCredential(updated);
-        const protocolLabel = protocolDisplayLabel(redacted.protocol);
+      const redacted = redactDeviceCredential(updated);
+      const protocolLabel = protocolDisplayLabel(redacted.protocol);
       const summary = `Updated ${protocolLabel} credential for ${device.name}. Steward trusts manually entered credentials and will verify the transport during real operations.`;
       return {
         ok: true,
@@ -6795,7 +6943,7 @@ export async function buildAdapterSkillTools(
         options?.attachedDeviceId,
       );
       if (!device) {
-        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+        return { ok: false, error: ATTACHED_DEVICE_REQUIRED_ERROR, retryable: false };
       }
 
       if (action === "list") {
@@ -6902,7 +7050,7 @@ export async function buildAdapterSkillTools(
       if (control.execution.kind === "operation") {
         const readiness = validateDeviceReadyForToolUse(device);
         if (!readiness.ok) {
-          return { ok: false, error: readiness.reason };
+          return { ok: false, error: readiness.reason, retryable: false };
         }
       }
 
@@ -7015,7 +7163,7 @@ export async function buildAdapterSkillTools(
         options?.attachedDeviceId,
       );
       if (!device) {
-        return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+        return { ok: false, error: ATTACHED_DEVICE_REQUIRED_ERROR, retryable: false };
       }
 
       if (action === "list") {
@@ -7287,7 +7435,7 @@ export async function buildAdapterSkillTools(
           options?.attachedDeviceId,
         );
         if (!device) {
-          return { ok: false, error: "Valid device_id is required or chat must be attached to a device." };
+          return { ok: false, error: ATTACHED_DEVICE_REQUIRED_ERROR, retryable: false };
         }
 
         const widgetId = inputString(args, "widget_id");

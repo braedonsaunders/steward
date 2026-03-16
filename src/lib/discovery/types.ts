@@ -30,6 +30,8 @@ export interface DiscoveryPhaseTelemetry {
   budgetMs?: number;
   desiredBudgetMs?: number;
   targetCount?: number;
+  dueTargetCount?: number;
+  deferredTargetCount?: number;
   note?: string;
 }
 
@@ -44,7 +46,28 @@ export interface DiscoveryDiagnostics {
   timedOutPhaseCount: number;
   skippedPhaseCount: number;
   failedPhaseCount: number;
+  deferredPhaseCount: number;
   phases: DiscoveryPhaseTelemetry[];
+}
+
+export type DiscoveryEnrichmentPhase = "fingerprint" | "nmapDeep" | "browserObservation" | "hostname";
+
+export interface DiscoveryEnrichmentPhaseSummary {
+  phase: DiscoveryEnrichmentPhase;
+  targetCount: number;
+  dueTargetCount: number;
+  deferredTargetCount: number;
+  queued: boolean;
+  queueBusy: boolean;
+}
+
+export interface DiscoveryEnrichmentSummary {
+  queuedJobs: number;
+  queuedTargets: number;
+  dueTargets: number;
+  deferredTargets: number;
+  phasesWithBacklog: number;
+  phases: DiscoveryEnrichmentPhaseSummary[];
 }
 
 export interface DiscoverySnapshot {
