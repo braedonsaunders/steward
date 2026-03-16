@@ -32,6 +32,7 @@ import { DeviceAutomationsPanel } from "@/components/device-automations-panel";
 import { DeviceSettingsPanel } from "@/components/device-settings-panel";
 import { DeviceWidgetsPanel } from "@/components/device-widgets-panel";
 import { getDeviceIdentityDescription } from "@/lib/devices/identity";
+import { useChatRuntime, type ChatMessageRecord, type ChatSessionRecord } from "@/lib/hooks/use-chat-runtime";
 import { useSteward } from "@/lib/hooks/use-steward";
 import { getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
 import type {
@@ -233,7 +234,7 @@ function AnimatedTabPanel({
       initial={persistent || reduceMotion ? false : "hidden"}
       animate={reduceMotion ? undefined : active ? "visible" : "hidden"}
       variants={reduceMotion ? undefined : tabPanelVariants}
-      className={cn("h-full min-h-0", className)}
+      className={cn("h-full min-h-0 min-w-0", className)}
     >
       {children}
     </motion.div>
@@ -280,6 +281,7 @@ type DeviceManageTab = "access" | "workloads" | "automations";
 export default function DeviceDetailPage() {
   const params = useParams<{ id: string }>();
   const deviceId = params.id;
+  const { hydrateSession } = useChatRuntime();
   const {
     devices,
     incidents,
@@ -477,14 +479,15 @@ export default function DeviceDetailPage() {
     setActivePrimaryTab("steward");
     try {
       const res = await fetch(`/api/devices/${device.id}/onboarding/session`, withClientApiToken({ method: "POST" }));
-      const data = (await res.json()) as { session?: { id?: string } | null };
+      const data = (await res.json()) as {
+        session?: ChatSessionRecord | null;
+        messages?: ChatMessageRecord[];
+      };
       if (data.session?.id) {
+        hydrateSession(data.session, data.messages ?? []);
         setHasOnboardingSession(true);
-        setPreferredChatSessionId(undefined);
-        window.requestAnimationFrame(() => {
-          setPreferredChatSessionId(data.session?.id);
-          setPendingOnboardingReveal(true);
-        });
+        setPreferredChatSessionId(data.session.id);
+        setPendingOnboardingReveal(true);
       }
       setChatSessionRefreshToken((prev) => (prev ?? 0) + 1);
     } finally {
@@ -574,7 +577,7 @@ export default function DeviceDetailPage() {
         <Tabs
           value={activePrimaryTab}
           onValueChange={(value) => setActivePrimaryTab(value as DevicePrimaryTab)}
-          className="flex min-h-0 flex-1 flex-col"
+          className="flex min-h-0 min-w-0 flex-1 flex-col"
         >
           <TabsList className="h-auto w-fit flex-wrap justify-start self-start">
             <TabsTrigger className="h-8 flex-none px-3 text-xs sm:h-9 sm:text-sm" value="overview">Overview</TabsTrigger>
@@ -588,7 +591,7 @@ export default function DeviceDetailPage() {
 
           <TabsContent value="overview" forceMount className="mt-3 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
             <AnimatedTabPanel active={activePrimaryTab === "overview"} persistent className="overflow-hidden">
-              <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[1.5fr_1fr]">
+              <div className="grid h-full min-h-0 min-w-0 gap-4 xl:grid-cols-[1.5fr_1fr]">
                 <Card className="overflow-hidden border-border/70 bg-[linear-gradient(160deg,rgba(14,116,144,0.08),rgba(255,255,255,0.9)_45%,rgba(14,165,233,0.05))]">
                   <CardHeader className="pb-4">
                     <div className="flex items-start gap-3">
@@ -711,7 +714,7 @@ export default function DeviceDetailPage() {
                   </CardContent>
                 </Card>
 
-                <div className="min-h-0">
+                <div className="min-h-0 min-w-0">
                   <Card className="flex h-full min-h-0 flex-col overflow-hidden bg-card/85">
                     <CardHeader className="pb-3">
                       <div className="flex items-center gap-2">
@@ -765,7 +768,7 @@ export default function DeviceDetailPage() {
 
           <TabsContent value="steward" forceMount className="mt-3 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
             <AnimatedTabPanel active={activePrimaryTab === "steward"} persistent className="overflow-hidden">
-              <div ref={chatPanelRef} className="h-full min-h-0">
+              <div ref={chatPanelRef} className="h-full min-h-0 min-w-0">
                 <Card className="flex h-full min-h-0 min-w-0 overflow-hidden bg-card/85">
                   <ChatWorkspace
                     initialDeviceId={device.id}
@@ -783,7 +786,7 @@ export default function DeviceDetailPage() {
 
         <TabsContent value="remote" forceMount className="mt-3 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
           <AnimatedTabPanel active={activePrimaryTab === "remote"} persistent className="overflow-hidden">
-            <div className="h-full min-h-0 overflow-hidden">
+            <div className="h-full min-h-0 min-w-0 overflow-hidden">
               <DeviceRemoteDesktopPanel
                 deviceId={device.id}
                 deviceName={device.name}
@@ -798,7 +801,7 @@ export default function DeviceDetailPage() {
 
         <TabsContent value="widgets" forceMount className="mt-3 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
           <AnimatedTabPanel active={activePrimaryTab === "widgets"} persistent className="overflow-hidden">
-            <div className="h-full min-h-0 overflow-hidden">
+            <div className="h-full min-h-0 min-w-0 overflow-hidden">
               <DeviceWidgetsPanel
                 deviceId={device.id}
                 active={activePrimaryTab === "widgets"}
@@ -814,7 +817,7 @@ export default function DeviceDetailPage() {
             <Tabs
               value={activeManageTab}
               onValueChange={(value) => setActiveManageTab(value as DeviceManageTab)}
-              className="flex h-full min-h-0 flex-col gap-3 overflow-hidden"
+              className="flex h-full min-h-0 min-w-0 flex-col gap-3 overflow-hidden"
             >
               <div className="space-y-1">
                 <p className="text-sm font-medium text-foreground">Manage</p>
@@ -834,7 +837,7 @@ export default function DeviceDetailPage() {
                   persistent
                   className="overflow-auto"
                 >
-                  <div className="h-full min-h-0 overflow-auto">
+                  <div className="h-full min-h-0 min-w-0 overflow-auto">
                     <DeviceAccessPanel
                       deviceId={device.id}
                       active={activePrimaryTab === "manage" && activeManageTab === "access"}
@@ -850,7 +853,7 @@ export default function DeviceDetailPage() {
                   persistent
                   className="overflow-hidden"
                 >
-                  <div className="h-full min-h-0 overflow-hidden">
+                  <div className="h-full min-h-0 min-w-0 overflow-hidden">
                     <DeviceWorkloadsPanel
                       deviceId={device.id}
                       active={activePrimaryTab === "manage" && activeManageTab === "workloads"}
@@ -866,7 +869,7 @@ export default function DeviceDetailPage() {
                   persistent
                   className="overflow-hidden"
                 >
-                  <div className="h-full min-h-0 overflow-hidden">
+                  <div className="h-full min-h-0 min-w-0 overflow-hidden">
                     <DeviceAutomationsPanel
                       deviceId={device.id}
                       active={activePrimaryTab === "manage" && activeManageTab === "automations"}
@@ -881,7 +884,7 @@ export default function DeviceDetailPage() {
 
         <TabsContent value="activity" forceMount className="mt-3 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
           <AnimatedTabPanel active={activePrimaryTab === "activity"} persistent className="overflow-hidden">
-            <div className="grid h-full min-h-0 gap-4 xl:grid-cols-2">
+            <div className="grid h-full min-h-0 min-w-0 gap-4 xl:grid-cols-2">
               <Card className="flex h-full min-h-0 flex-col min-w-0 bg-card/85">
                 <CardHeader>
                   <div className="flex items-center gap-2">
@@ -991,7 +994,7 @@ export default function DeviceDetailPage() {
 
         <TabsContent value="settings" forceMount className="mt-3 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
           <AnimatedTabPanel active={activePrimaryTab === "settings"} persistent className="overflow-auto">
-            <div className="h-full min-h-0 overflow-auto">
+            <div className="h-full min-h-0 min-w-0 overflow-auto">
               <DeviceSettingsPanel deviceId={device.id} />
             </div>
           </AnimatedTabPanel>

@@ -1,7 +1,8 @@
 import type { RuntimeSettings } from "@/lib/state/types";
 
 export const defaultRuntimeSettings = (): RuntimeSettings => ({
-  agentIntervalMs: 120_000,
+  scannerIntervalMs: 120_000,
+  agentWakeIntervalMs: 10 * 60 * 1000,
   deepScanIntervalMs: 30 * 60 * 1000,
   incrementalActiveTargets: 32,
   deepActiveTargets: 256,

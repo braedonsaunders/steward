@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { LayoutGrid, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -85,6 +85,7 @@ export function DeviceWidgetsPanel({
   widgetMutation = null,
   className,
 }: DeviceWidgetsPanelProps) {
+  const panelRef = useRef<HTMLDivElement>(null);
   const [widgets, setWidgets] = useState<DeviceWidget[]>([]);
   const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -92,6 +93,7 @@ export function DeviceWidgetsPanel({
   const [refreshing, setRefreshing] = useState(false);
   const [hasLoaded, setHasLoaded] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [panelWidth, setPanelWidth] = useState(0);
 
   useEffect(() => {
     setWidgets([]);
@@ -126,6 +128,28 @@ export function DeviceWidgetsPanel({
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [fullscreen]);
+
+  useEffect(() => {
+    const target = panelRef.current;
+    if (!target) {
+      return;
+    }
+
+    const updateWidth = () => {
+      setPanelWidth(Math.round(target.getBoundingClientRect().width));
+    };
+
+    updateWidth();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateWidth);
+      return () => window.removeEventListener("resize", updateWidth);
+    }
+
+    const observer = new ResizeObserver(() => updateWidth());
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [loading]);
 
   const loadWidgets = useCallback(async (options?: {
     background?: boolean;
@@ -232,10 +256,14 @@ export function DeviceWidgetsPanel({
     () => widgets.find((widget) => widget.id === selectedWidgetId) ?? null,
     [selectedWidgetId, widgets],
   );
+  const showSplitLayout = panelWidth >= 980;
+  const panelGridClass = showSplitLayout
+    ? "grid-cols-[280px_minmax(0,1fr)]"
+    : "grid-cols-1";
 
   if (loading) {
     return (
-      <div className={cn("grid min-w-0 gap-4 lg:grid-cols-[300px_1fr]", className)}>
+      <div ref={panelRef} className={cn("grid min-w-0 gap-4", panelGridClass, className)}>
         <Skeleton className="h-[420px] w-full rounded-2xl" />
         <Skeleton className="h-[520px] w-full rounded-2xl" />
       </div>
@@ -294,13 +322,15 @@ export function DeviceWidgetsPanel({
   return (
     <>
       <div
+        ref={panelRef}
         className={cn(
-          "relative grid h-full min-h-0 min-w-0 gap-4 overflow-x-hidden lg:grid-cols-[300px_1fr]",
+          "relative grid h-full min-h-0 min-w-0 gap-4 overflow-x-hidden",
+          panelGridClass,
           className,
         )}
       >
         <Card className="flex min-h-0 min-w-0 flex-col overflow-hidden">
-          <CardHeader className="gap-3 pb-3">
+          <CardHeader className="gap-3 px-3.5 pb-2.5 pt-3.5 md:px-4 md:pt-4">
             <div className="flex items-center gap-2">
               <LayoutGrid className="size-4 text-primary" />
               <CardTitle className="text-base">Saved Widgets</CardTitle>
@@ -322,20 +352,20 @@ export function DeviceWidgetsPanel({
           </CardHeader>
           <CardContent className="flex min-h-0 min-w-0 flex-1 p-0">
             <ScrollArea className="h-full min-w-0 [&>[data-radix-scroll-area-viewport]]:overflow-x-hidden">
-              <div className="space-y-2 p-3 pr-4">
+              <div className="min-w-0 space-y-2 px-2.5 pb-2.5 pt-0 md:px-3 md:pb-3">
                 {widgets.map((widget) => (
                   <button
                     key={widget.id}
                     type="button"
                     onClick={() => setSelectedWidgetId(widget.id)}
                     className={cn(
-                      "block w-full min-w-0 max-w-full overflow-hidden rounded-2xl border px-3 py-3 text-left transition-colors",
+                      "block w-full min-w-0 max-w-full overflow-hidden rounded-2xl border px-2.5 py-2.5 text-left transition-colors",
                       widget.id === selectedWidgetId
                         ? "border-primary bg-primary/5 shadow-sm"
                         : "border-border/70 bg-card hover:border-primary/40 hover:bg-accent/40",
                     )}
                   >
-                    <div className="flex min-w-0 flex-wrap items-start gap-2">
+                    <div className="grid min-w-0 max-w-full gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-medium text-foreground">{widget.name}</p>
                         {widget.description && (
@@ -344,15 +374,17 @@ export function DeviceWidgetsPanel({
                           </p>
                         )}
                       </div>
-                      <Badge
-                        variant={widget.status === "active" ? "default" : "outline"}
-                        className="shrink-0 capitalize"
-                      >
-                        {widget.status}
-                      </Badge>
-                      <Badge variant="outline" className="shrink-0">
-                        {widget.controls.length} control{widget.controls.length === 1 ? "" : "s"}
-                      </Badge>
+                      <div className="flex min-w-0 flex-wrap items-center gap-2 sm:justify-end">
+                        <Badge
+                          variant={widget.status === "active" ? "default" : "outline"}
+                          className="shrink-0 capitalize"
+                        >
+                          {widget.status}
+                        </Badge>
+                        <Badge variant="outline" className="shrink-0">
+                          {widget.controls.length} control{widget.controls.length === 1 ? "" : "s"}
+                        </Badge>
+                      </div>
                     </div>
                   </button>
                 ))}

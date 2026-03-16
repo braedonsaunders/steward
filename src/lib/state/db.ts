@@ -181,6 +181,23 @@ function createSchema(database: Database.Database): void {
       details     TEXT NOT NULL DEFAULT '{}'
     );
 
+    CREATE TABLE IF NOT EXISTS scanner_runs (
+      id          TEXT PRIMARY KEY,
+      startedAt   TEXT NOT NULL,
+      completedAt TEXT,
+      outcome     TEXT NOT NULL,
+      summary     TEXT NOT NULL,
+      details     TEXT NOT NULL DEFAULT '{}'
+    );
+
+    CREATE TABLE IF NOT EXISTS runtime_leases (
+      name         TEXT PRIMARY KEY,
+      holder       TEXT NOT NULL,
+      expiresAt    TEXT NOT NULL,
+      updatedAt    TEXT NOT NULL,
+      metadataJson TEXT NOT NULL DEFAULT '{}'
+    );
+
     CREATE TABLE IF NOT EXISTS policy_rules (
       id                TEXT PRIMARY KEY,
       name              TEXT NOT NULL,
@@ -552,6 +569,21 @@ function createSchema(database: Database.Database): void {
       lastSeenAt  TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS finding_occurrences (
+      id           TEXT PRIMARY KEY,
+      findingId    TEXT REFERENCES device_findings(id) ON DELETE SET NULL,
+      deviceId     TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+      dedupeKey    TEXT NOT NULL,
+      findingType  TEXT NOT NULL,
+      severity     TEXT NOT NULL,
+      status       TEXT NOT NULL,
+      summary      TEXT NOT NULL,
+      evidenceJson TEXT NOT NULL DEFAULT '{}',
+      source       TEXT NOT NULL,
+      observedAt   TEXT NOT NULL,
+      metadataJson TEXT NOT NULL DEFAULT '{}'
+    );
+
     CREATE TABLE IF NOT EXISTS notification_channels (
       id              TEXT PRIMARY KEY,
       name            TEXT NOT NULL,
@@ -835,6 +867,10 @@ function createSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_device_findings_device_status ON device_findings(deviceId, status);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_device_findings_dedupe_key
       ON device_findings(deviceId, dedupeKey);
+    CREATE INDEX IF NOT EXISTS idx_finding_occurrences_device_observed
+      ON finding_occurrences(deviceId, observedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_finding_occurrences_dedupe_observed
+      ON finding_occurrences(dedupeKey, observedAt DESC);
     CREATE INDEX IF NOT EXISTS idx_notification_channels_enabled
       ON notification_channels(enabled, kind, updatedAt DESC);
     CREATE INDEX IF NOT EXISTS idx_notification_deliveries_channel_created
@@ -877,7 +913,27 @@ function createSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_auth_oidc_states_expiresAt ON auth_oidc_states(expiresAt);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_settings_history_domain_version ON settings_history(domain, version);
     CREATE INDEX IF NOT EXISTS idx_settings_history_domain_effectiveFrom ON settings_history(domain, effectiveFrom DESC, createdAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_runtime_leases_expiresAt ON runtime_leases(expiresAt);
+    CREATE INDEX IF NOT EXISTS idx_scanner_runs_startedAt ON scanner_runs(startedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_startedAt ON agent_runs(startedAt DESC);
   `);
+
+  const scannerRunsBackfill = database.prepare(
+    "SELECT value FROM metadata WHERE key = 'migration.scanner_runs_backfill'",
+  ).get() as { value: string } | undefined;
+  if (!scannerRunsBackfill) {
+    database.exec(`
+      INSERT OR IGNORE INTO scanner_runs (id, startedAt, completedAt, outcome, summary, details)
+      SELECT id, startedAt, completedAt, outcome, summary, details
+      FROM agent_runs;
+
+      DELETE FROM agent_runs;
+    `);
+    database.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run(
+      "migration.scanner_runs_backfill",
+      new Date().toISOString(),
+    );
+  }
 
   // OUI vendor lookup tables
   database.exec(`
@@ -946,6 +1002,74 @@ function parseStringArray(value: unknown): string[] {
   return value
     .map((item) => String(item).trim())
     .filter((item) => item.length > 0);
+}
+
+function migrateLegacyWidgetJsonParsers(database: Database.Database): void {
+  const markerKey = "migration.widget_json_output_parser.v1";
+  const existingMarker = database
+    .prepare("SELECT value FROM metadata WHERE key = ?")
+    .get(markerKey) as { value?: string } | undefined;
+  if (existingMarker?.value === "done") {
+    return;
+  }
+
+  const migrate = database.transaction(() => {
+    const rows = database.prepare(`
+      SELECT id, js, revision
+      FROM device_widgets
+    `).all() as Array<{ id: string; js: string; revision?: number }>;
+
+    const updateWidget = database.prepare(`
+      UPDATE device_widgets
+      SET js = @js,
+          revision = @revision,
+          updatedAt = @updatedAt
+      WHERE id = @id
+    `);
+
+    const replacement = [
+      "function parseJson(text) {",
+      "  return SW.extractJsonOutput(text);",
+      "}",
+    ].join("\n");
+
+    for (const row of rows) {
+      if (
+        typeof row.js !== "string"
+        || !row.js.includes("function parseJson(text) {")
+        || !row.js.includes("const cleaned = text.replace(/#< CLIXML")
+        || !row.js.includes("const m = text.match(/[\\[{][\\s\\S]*[\\]}]/);")
+        || !row.js.includes("async function refreshAll()")
+      ) {
+        continue;
+      }
+
+      const start = row.js.indexOf("function parseJson(text) {");
+      const end = row.js.indexOf("\n\nasync function refreshAll()", start);
+      if (start === -1 || end === -1 || end <= start) {
+        continue;
+      }
+
+      const nextJs = `${row.js.slice(0, start)}${replacement}${row.js.slice(end)}`;
+      if (nextJs === row.js) {
+        continue;
+      }
+
+      updateWidget.run({
+        id: row.id,
+        js: nextJs,
+        revision: Math.max(1, Number(row.revision ?? 0) + 1),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    database.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run(
+      markerKey,
+      "done",
+    );
+  });
+
+  migrate();
 }
 
 function migrateCompletedOnboardingDraftCleanup(database: Database.Database): void {
@@ -1218,6 +1342,7 @@ export function getDb(): Database.Database {
     createSchema(stateDb);
     migrateLegacyWorkloadArchitecture(stateDb);
     migrateCompletedOnboardingDraftCleanup(stateDb);
+    migrateLegacyWidgetJsonParsers(stateDb);
   } catch (error) {
     try {
       stateDb.close();

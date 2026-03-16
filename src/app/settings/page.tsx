@@ -18,6 +18,13 @@ import {
   XCircle,
 } from "lucide-react";
 import { useSteward } from "@/lib/hooks/use-steward";
+import {
+  constrainedDiscoveryPhases,
+  formatDurationMs,
+  parseDiscoveryDiagnostics,
+  phaseStatusLabel,
+  slowestDiscoveryPhase,
+} from "@/lib/discovery/diagnostics";
 import { PROVIDER_REGISTRY, type ProviderMeta } from "@/lib/llm/registry";
 import {
   requiresWebResearchApiKey,
@@ -1216,7 +1223,9 @@ function RuntimeSaveButton({
 
 function GeneralSection({ tab }: { tab: GeneralTabValue }) {
   const {
+    scannerRuns,
     agentRuns,
+    controlPlane,
     runAgentCycle,
     runtimeSettings,
     saveRuntimeSettings,
@@ -1311,13 +1320,35 @@ function GeneralSection({ tab }: { tab: GeneralTabValue }) {
     }
   }, [loadWebResearchCredentials, tab]);
 
-  const lastRun = useMemo(() => {
+  const lastScannerRun = useMemo(() => {
+    if (scannerRuns.length === 0) return null;
+    const sorted = [...scannerRuns].sort(
+      (a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime(),
+    );
+    return sorted[0];
+  }, [scannerRuns]);
+  const lastAgentWake = useMemo(() => {
     if (agentRuns.length === 0) return null;
     const sorted = [...agentRuns].sort(
       (a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime(),
     );
     return sorted[0];
   }, [agentRuns]);
+  const lastScannerDiscovery = useMemo(
+    () => (lastScannerRun ? parseDiscoveryDiagnostics(lastScannerRun.details) : null),
+    [lastScannerRun],
+  );
+  const lastScannerConstrainedPhases = useMemo(
+    () => constrainedDiscoveryPhases(lastScannerDiscovery),
+    [lastScannerDiscovery],
+  );
+  const lastScannerSlowestPhase = useMemo(
+    () => slowestDiscoveryPhase(lastScannerDiscovery),
+    [lastScannerDiscovery],
+  );
+  const lastSuccessfulScannerRun = controlPlane?.lastSuccessfulScannerRun ?? null;
+  const lastSuccessfulPeriodicWake = controlPlane?.lastPeriodicAgentWake ?? null;
+  const scannerRunning = running || Boolean(lastScannerRun && !lastScannerRun.completedAt);
 
   const handleRunCycle = useCallback(async () => {
     setRunning(true);
@@ -1332,15 +1363,15 @@ function GeneralSection({ tab }: { tab: GeneralTabValue }) {
       setFeedback({
         type: "ok",
         message: result.started
-          ? "Cycle started. Live updates are streaming."
+          ? "Scanner cycle started. Live updates are streaming."
           : parts
-            ? `Cycle complete: ${parts}`
-            : "Cycle trigger accepted.",
+            ? `Scanner cycle complete: ${parts}`
+            : "Scanner cycle trigger accepted.",
       });
     } catch (err) {
       setFeedback({
         type: "error",
-        message: err instanceof Error ? err.message : "Agent cycle failed.",
+        message: err instanceof Error ? err.message : "Scanner cycle failed.",
       });
     } finally {
       setRunning(false);
@@ -1477,74 +1508,263 @@ function GeneralSection({ tab }: { tab: GeneralTabValue }) {
         return (
           <Card className="bg-card/60">
             <CardHeader>
-              <CardTitle className="text-base">Agent Status</CardTitle>
+              <CardTitle className="text-base">Scanner Status</CardTitle>
               <CardDescription>
-                Monitor and trigger the autonomous agent loop, then tune how often it re-evaluates the network.
+                Monitor and trigger the background scanner loop, then tune how often it re-evaluates the network.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="rounded-lg border bg-background/50 px-4 py-3">
-                {lastRun ? (
+                {lastScannerRun ? (
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <p className="text-sm font-medium">Last Run</p>
                       <Badge
-                        variant={lastRun.outcome === "ok" ? "default" : "destructive"}
+                        variant={!lastScannerRun.completedAt ? "secondary" : lastScannerRun.outcome === "ok" ? "default" : "destructive"}
                         className="text-[10px]"
                       >
-                        {lastRun.outcome}
+                        {!lastScannerRun.completedAt ? "running" : lastScannerRun.outcome}
                       </Badge>
                     </div>
                     <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                       <span className="flex items-center gap-1">
                         <Clock className="h-3 w-3" />
-                        {new Date(lastRun.startedAt).toLocaleString()}
+                        {new Date(lastScannerRun.startedAt).toLocaleString()}
                       </span>
-                      <span>({relativeTime(lastRun.startedAt)})</span>
+                      <span>({relativeTime(lastScannerRun.startedAt)})</span>
+                      {lastScannerRun.completedAt ? (
+                        <span>Completed {relativeTime(lastScannerRun.completedAt)}</span>
+                      ) : (
+                        <span className="font-medium text-foreground">Still running</span>
+                      )}
+                      </div>
+                      {lastScannerRun.summary && (
+                        <p className="text-xs text-muted-foreground">{lastScannerRun.summary}</p>
+                      )}
+                      {lastScannerDiscovery ? (
+                        <div className="space-y-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2">
+                          <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+                            <Badge variant="outline" className="text-[10px]">
+                              {lastScannerDiscovery.scanMode}
+                            </Badge>
+                            <span>Discovery {formatDurationMs(lastScannerDiscovery.elapsedMs)}</span>
+                            {lastScannerDiscovery.budgetMs ? (
+                              <span>Budget {formatDurationMs(lastScannerDiscovery.budgetMs)}</span>
+                            ) : null}
+                            {lastScannerConstrainedPhases.length > 0 ? (
+                              <Badge variant="secondary" className="text-[10px]">
+                                {lastScannerConstrainedPhases.length} constrained
+                              </Badge>
+                            ) : null}
+                            {lastScannerDiscovery.failedPhaseCount > 0 ? (
+                              <Badge variant="destructive" className="text-[10px]">
+                                {lastScannerDiscovery.failedPhaseCount} failed
+                              </Badge>
+                            ) : null}
+                          </div>
+                          {lastScannerSlowestPhase ? (
+                            <p className="text-xs text-muted-foreground">
+                              Slowest phase: {lastScannerSlowestPhase.label} ({formatDurationMs(lastScannerSlowestPhase.elapsedMs)})
+                            </p>
+                          ) : null}
+                          <div className="space-y-1">
+                            {lastScannerDiscovery.phases.slice(0, 4).map((phase) => (
+                              <div key={phase.key} className="flex flex-wrap items-center justify-between gap-2 text-[10px]">
+                                <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
+                                  <span className="font-medium text-foreground">{phase.label}</span>
+                                  <span>{formatDurationMs(phase.elapsedMs)}</span>
+                                  {phase.budgetMs ? <span>budget {formatDurationMs(phase.budgetMs)}</span> : null}
+                                </div>
+                                <Badge
+                                  variant={phase.status === "failed" ? "destructive" : phase.status === "timed_out" ? "secondary" : "outline"}
+                                  className="text-[10px]"
+                                >
+                                  {phaseStatusLabel(phase.status)}
+                                </Badge>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                      {lastSuccessfulScannerRun && lastSuccessfulScannerRun.id !== lastScannerRun.id ? (
+                        <p className="text-xs text-muted-foreground">
+                          Last successful completion: {new Date(lastSuccessfulScannerRun.completedAt ?? lastSuccessfulScannerRun.startedAt).toLocaleString()}
+                        </p>
+                      ) : null}
                     </div>
-                    {lastRun.summary && (
-                      <p className="text-xs text-muted-foreground">{lastRun.summary}</p>
-                    )}
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    No agent runs recorded yet.
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      No scanner runs recorded yet.
                   </p>
                 )}
               </div>
 
-              <Button onClick={() => void handleRunCycle()} disabled={running}>
-                {running ? (
+              <div className="rounded-lg border bg-background/50 px-4 py-3">
+                {lastAgentWake ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-medium">Last Agent Wake</p>
+                      <Badge
+                        variant={!lastAgentWake.completedAt ? "secondary" : lastAgentWake.outcome === "ok" ? "default" : "destructive"}
+                        className="text-[10px]"
+                      >
+                        {!lastAgentWake.completedAt ? "running" : lastAgentWake.outcome}
+                      </Badge>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                      <span className="flex items-center gap-1">
+                        <Clock className="h-3 w-3" />
+                        {new Date(lastAgentWake.startedAt).toLocaleString()}
+                      </span>
+                      <span>({relativeTime(lastAgentWake.startedAt)})</span>
+                      {lastAgentWake.completedAt ? (
+                        <span>Completed {relativeTime(lastAgentWake.completedAt)}</span>
+                      ) : (
+                        <span className="font-medium text-foreground">Still running</span>
+                      )}
+                      </div>
+                      {lastAgentWake.summary && (
+                        <p className="text-xs text-muted-foreground">{lastAgentWake.summary}</p>
+                      )}
+                      {lastSuccessfulPeriodicWake ? (
+                        <p className="text-xs text-muted-foreground">
+                          Last periodic review: {new Date(lastSuccessfulPeriodicWake.completedAt ?? lastSuccessfulPeriodicWake.startedAt).toLocaleString()}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      No agent wakes recorded yet.
+                  </p>
+                )}
+              </div>
+
+              <Button onClick={() => void handleRunCycle()} disabled={scannerRunning}>
+                {scannerRunning ? (
                   <>
                     <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                    Running cycle...
+                    Running scanner...
                   </>
                 ) : (
                   <>
                     <Play className="mr-1.5 h-4 w-4" />
-                    Run Agent Cycle
+                    Run Scanner Cycle
                   </>
                 )}
               </Button>
 
               <div className="grid gap-3 md:grid-cols-2">
                 <SettingsNumberField
-                  label="Agent interval (ms)"
-                  value={runtimeDraft.agentIntervalMs}
-                  onChange={(value) => setDraftField("agentIntervalMs", value)}
+                  label="Scanner interval (ms)"
+                  value={runtimeDraft.scannerIntervalMs}
+                  onChange={(value) => setDraftField("scannerIntervalMs", value)}
+                />
+                <SettingsNumberField
+                  label="Agent wake interval (ms)"
+                  value={runtimeDraft.agentWakeIntervalMs}
+                  onChange={(value) => setDraftField("agentWakeIntervalMs", value)}
                 />
               </div>
 
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <RefreshCw className="h-3.5 w-3.5" />
-                <span>
-                  Current cadence: <strong className="text-foreground">{Math.round(runtimeDraft.agentIntervalMs / 1000)}s</strong>
-                </span>
-              </div>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  <span>
+                    Scanner every <strong className="text-foreground">{Math.round(runtimeDraft.scannerIntervalMs / 1000)}s</strong>
+                    {" "}and agent review every{" "}
+                    <strong className="text-foreground">{Math.round(runtimeDraft.agentWakeIntervalMs / 1000)}s</strong>
+                  </span>
+                </div>
 
-              <RuntimeSaveButton
-                saving={savingRuntime}
-                label="Save Agent Settings"
+                <div className="rounded-lg border bg-background/50 px-4 py-3">
+                  {controlPlane ? (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-medium">Control Plane Health</p>
+                          <p className="text-xs text-muted-foreground">
+                            Queue lag, worker leases, and last successful runtime milestones.
+                          </p>
+                        </div>
+                        <Badge variant={controlPlane.summary.longRunningProcessing > 0 ? "destructive" : controlPlane.summary.processing > 0 ? "secondary" : "outline"} className="text-[10px]">
+                          {controlPlane.summary.longRunningProcessing > 0
+                            ? `${controlPlane.summary.longRunningProcessing} long-running job(s)`
+                            : controlPlane.summary.processing > 0
+                              ? `${controlPlane.summary.processing} job(s) active`
+                              : "idle"}
+                        </Badge>
+                      </div>
+
+                      <div className="grid gap-3 md:grid-cols-3">
+                        <div className="rounded-md border bg-card/40 px-3 py-2">
+                          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Pending</p>
+                          <p className="mt-1 text-lg font-semibold">{controlPlane.summary.pending}</p>
+                        </div>
+                        <div className="rounded-md border bg-card/40 px-3 py-2">
+                          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Processing</p>
+                          <p className="mt-1 text-lg font-semibold">{controlPlane.summary.processing}</p>
+                        </div>
+                        <div className="rounded-md border bg-card/40 px-3 py-2">
+                          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Long-running</p>
+                          <p className="mt-1 text-lg font-semibold">{controlPlane.summary.longRunningProcessing}</p>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        {controlPlane.leases.length === 0 ? (
+                          <p className="text-xs text-muted-foreground">No runtime leases recorded yet.</p>
+                        ) : (
+                          controlPlane.leases.map((lease) => (
+                            <div key={lease.name} className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-card/40 px-3 py-2 text-xs">
+                              <div className="space-y-0.5">
+                                <p className="font-medium text-foreground">{lease.name}</p>
+                                <p className="text-muted-foreground">{lease.holder}</p>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
+                                <Badge variant="outline" className="text-[10px]">
+                                  lease
+                                </Badge>
+                                <span>Updated {relativeTime(lease.updatedAt)}</span>
+                                <span>Expires {new Date(lease.expiresAt).toLocaleTimeString()}</span>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+
+                      <div className="space-y-2">
+                        {controlPlane.queue.length === 0 ? (
+                          <p className="text-xs text-muted-foreground">No queued control-plane jobs recorded yet.</p>
+                        ) : (
+                          controlPlane.queue.map((lane) => (
+                            <div key={lane.kind} className="rounded-md border bg-card/40 px-3 py-2 text-xs">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <p className="font-medium text-foreground">{lane.kind}</p>
+                                <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
+                                  <span>pending {lane.pending}</span>
+                                  <span>processing {lane.processing}</span>
+                                  <span>completed {lane.completed}</span>
+                                </div>
+                              </div>
+                              <div className="mt-1 flex flex-wrap items-center gap-3 text-muted-foreground">
+                                {lane.oldestPendingRunAfter ? <span>Oldest due {relativeTime(lane.oldestPendingRunAfter)}</span> : null}
+                                {lane.oldestProcessingUpdatedAt ? <span>Oldest processing update {relativeTime(lane.oldestProcessingUpdatedAt)}</span> : null}
+                                {lane.newestUpdatedAt ? <span>Latest update {relativeTime(lane.newestUpdatedAt)}</span> : null}
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      Control-plane health has not loaded yet.
+                    </p>
+                  )}
+                </div>
+
+                <RuntimeSaveButton
+                  saving={savingRuntime}
+                  label="Save Control Plane Settings"
                 onClick={() => void handleSaveRuntime()}
               />
             </CardContent>

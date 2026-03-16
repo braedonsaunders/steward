@@ -19,5 +19,6 @@ export async function GET(
   }
 
   const findings = stateStore.getDeviceFindings(id);
-  return NextResponse.json({ findings });
+  const occurrences = stateStore.getFindingOccurrences(id, { limit: 40 });
+  return NextResponse.json({ findings, occurrences });
 }

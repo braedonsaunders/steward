@@ -12,6 +12,7 @@ export interface ActiveDiscoveryOptions {
   targetOffset?: number;
   maxTargets?: number;
   maxPortScanHosts?: number;
+  nmapSubnetSweepTimeoutMs?: number;
 }
 
 const COMMON_TCP_SERVICES: Array<{ port: number; name: string; secure: boolean }> = [
@@ -401,6 +402,10 @@ export const collectActiveCandidates = async (
   const maxTargets = options.maxTargets ?? (deepScan ? 256 : 32);
   const maxPortScanHosts = options.maxPortScanHosts ?? (deepScan ? 96 : 16);
   const maxNmapSubnets = deepScan ? 8 : 2;
+  const subnetSweepTimeoutMs = Math.max(
+    15_000,
+    Math.min(120_000, Math.floor(options.nmapSubnetSweepTimeoutMs ?? 120_000)),
+  );
 
   const hasNmap = await runShell(process.platform === "win32" ? "where nmap" : "command -v nmap", 1_500);
 
@@ -413,7 +418,10 @@ export const collectActiveCandidates = async (
 
   if (deepScan && hasNmap.ok && hasNmap.stdout && nmapSubnets.length > 0) {
     const targetArgs = nmapSubnets.join(" ");
-    const scan = await runShell(`nmap -sS -sV --version-light -Pn -T4 -F ${targetArgs} -oG -`, 120_000);
+    const scan = await runShell(
+      `nmap -sS -sV --version-light -Pn -T4 -F ${targetArgs} -oG -`,
+      subnetSweepTimeoutMs,
+    );
 
     if (scan.stdout) {
       const parsed = scan.stdout

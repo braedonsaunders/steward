@@ -15,6 +15,7 @@ import type {
   AuthUser,
   AgentRunRecord,
   AuthSettings,
+  ControlPlaneHealth,
   DailyDigest,
   Device,
   DeviceBaseline,
@@ -28,6 +29,7 @@ import type {
   ProviderConfig,
   Recommendation,
   RuntimeSettings,
+  ScannerRunRecord,
   StewardState,
   SystemSettings,
   UserRole,
@@ -192,7 +194,9 @@ export interface StewardContextValue {
   incidents: Incident[];
   recommendations: Recommendation[];
   actions: ActionLog[];
+  scannerRuns: ScannerRunRecord[];
   agentRuns: AgentRunRecord[];
+  controlPlane: ControlPlaneHealth | null;
   providerConfigs: ProviderConfig[];
   graphNodes: GraphNode[];
   graphEdges: GraphEdge[];
@@ -269,8 +273,13 @@ export interface StewardContextValue {
 
 const StewardContext = createContext<StewardContextValue | null>(null);
 
+type StatePayload = StewardState & {
+  controlPlane?: ControlPlaneHealth | null;
+};
+
 export function StewardProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<StewardState | null>(null);
+  const [controlPlane, setControlPlane] = useState<ControlPlaneHealth | null>(null);
   const [vaultStatus, setVaultStatus] = useState<VaultStatus | null>(null);
   const [pendingApprovals, setPendingApprovals] = useState<PlaybookRun[]>([]);
   const [latestDigest, setLatestDigest] = useState<DailyDigest | null>(null);
@@ -282,6 +291,7 @@ export function StewardProvider({ children }: { children: ReactNode }) {
 
   const clearProtectedState = useCallback(() => {
     setState(null);
+    setControlPlane(null);
     setVaultStatus(null);
     setPendingApprovals([]);
     setLatestDigest(null);
@@ -300,14 +310,15 @@ export function StewardProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      const [s, v, approvals, digest, adapterList] = await Promise.all([
-        fetchJson<StewardState>("/api/state"),
-        fetchJson<VaultStatus>("/api/vault"),
+        const [s, v, approvals, digest, adapterList] = await Promise.all([
+          fetchJson<StatePayload>("/api/state"),
+          fetchJson<VaultStatus>("/api/vault"),
         fetchJson<PlaybookRun[]>("/api/approvals").catch(() => [] as PlaybookRun[]),
         fetchJson<DailyDigest>("/api/digest").catch(() => null),
         fetchJson<AdapterRecordClient[]>("/api/adapters").catch(() => [] as AdapterRecordClient[]),
       ]);
-      setState(s);
+        setState(s);
+        setControlPlane(s.controlPlane ?? null);
       setVaultStatus(v);
       setPendingApprovals(approvals);
       setLatestDigest(digest);
@@ -365,8 +376,9 @@ export function StewardProvider({ children }: { children: ReactNode }) {
 
       const onState = (event: MessageEvent<string>) => {
         try {
-          const next = JSON.parse(event.data) as StewardState;
-          setState(next);
+            const next = JSON.parse(event.data) as StatePayload;
+            setState(next);
+            setControlPlane(next.controlPlane ?? null);
           setPendingApprovals((next.playbookRuns ?? []).filter((run) => run.status === "pending_approval"));
           setLatestDigest(next.dailyDigests?.[0] ?? null);
           setLoading(false);
@@ -714,8 +726,10 @@ export function StewardProvider({ children }: { children: ReactNode }) {
       incidents: state?.incidents ?? [],
       recommendations: state?.recommendations ?? [],
       actions: state?.actions ?? [],
-      agentRuns: state?.agentRuns ?? [],
-      providerConfigs: state?.providerConfigs ?? [],
+        scannerRuns: state?.scannerRuns ?? [],
+        agentRuns: state?.agentRuns ?? [],
+        controlPlane,
+        providerConfigs: state?.providerConfigs ?? [],
       graphNodes: state?.graph?.nodes ?? [],
       graphEdges: state?.graph?.edges ?? [],
       vaultStatus,
@@ -790,8 +804,9 @@ export function StewardProvider({ children }: { children: ReactNode }) {
       setDeviceAdoptionStatus,
     }),
     [
-      state,
-      vaultStatus,
+        state,
+        controlPlane,
+        vaultStatus,
       pendingApprovals,
       latestDigest,
       adapters,

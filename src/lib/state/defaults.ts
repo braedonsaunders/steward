@@ -221,6 +221,7 @@ export const defaultState = (): StewardState => ({
   },
   providerConfigs: defaultProviderConfigs(),
   oauthStates: [],
+  scannerRuns: [],
   agentRuns: [],
   runtimeSettings: defaultRuntimeSettings(),
   systemSettings: defaultSystemSettings(),
@@ -348,7 +349,9 @@ export function ensureDefaults(db: Database.Database): void {
     // Runtime settings in metadata (DB-backed, no env tunables)
     const runtimeDefaults = defaultRuntimeSettings();
     const ensureMeta = db.prepare("INSERT OR IGNORE INTO metadata (key, value) VALUES (?, ?)");
-    ensureMeta.run("runtime.agentIntervalMs", String(runtimeDefaults.agentIntervalMs));
+    ensureMeta.run("runtime.scannerIntervalMs", String(runtimeDefaults.scannerIntervalMs));
+    ensureMeta.run("runtime.agentIntervalMs", String(runtimeDefaults.scannerIntervalMs));
+    ensureMeta.run("runtime.agentWakeIntervalMs", String(runtimeDefaults.agentWakeIntervalMs));
     ensureMeta.run("runtime.deepScanIntervalMs", String(runtimeDefaults.deepScanIntervalMs));
     ensureMeta.run("runtime.incrementalActiveTargets", String(runtimeDefaults.incrementalActiveTargets));
     ensureMeta.run("runtime.deepActiveTargets", String(runtimeDefaults.deepActiveTargets));

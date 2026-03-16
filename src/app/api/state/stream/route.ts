@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { isAuthorized } from "@/lib/auth/guard";
+import { ensureStewardLoop } from "@/lib/agent/loop";
 import { stateStore } from "@/lib/state/store";
 
 export const runtime = "nodejs";
@@ -11,6 +12,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  ensureStewardLoop();
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -24,7 +26,8 @@ export async function GET(request: NextRequest) {
         pumping = true;
         try {
           const state = await stateStore.getState();
-          controller.enqueue(encoder.encode(`event: state\ndata: ${JSON.stringify(state)}\n\n`));
+          const controlPlane = stateStore.getControlPlaneHealth();
+          controller.enqueue(encoder.encode(`event: state\ndata: ${JSON.stringify({ ...state, controlPlane })}\n\n`));
         } catch (error) {
           controller.enqueue(
             encoder.encode(

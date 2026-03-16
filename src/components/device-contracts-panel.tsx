@@ -17,6 +17,7 @@ import type {
   Assurance,
   AssuranceRun,
   DeviceFinding,
+  FindingOccurrence,
   DeviceProfileBinding,
   OnboardingDraft,
   OnboardingDraftAssurance,
@@ -39,6 +40,7 @@ interface AdoptionSnapshot {
 
 interface FindingsPayload {
   findings: DeviceFinding[];
+  occurrences: FindingOccurrence[];
 }
 
 function statusVariant(
@@ -59,9 +61,37 @@ function assuranceRunVariant(
   return "outline";
 }
 
+function findingOccurrenceVariant(
+  occurrence: FindingOccurrence,
+): "default" | "destructive" | "secondary" | "outline" {
+  if (occurrence.status === "resolved") return "outline";
+  if (occurrence.severity === "critical") return "destructive";
+  if (occurrence.severity === "warning") return "secondary";
+  return "default";
+}
+
 function readString(record: Record<string, unknown> | undefined, key: string): string | null {
   const value = record?.[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function relativeTime(dateStr: string): string {
+  const diffMs = Date.now() - new Date(dateStr).getTime();
+  if (!Number.isFinite(diffMs) || diffMs < 0) {
+    return "just now";
+  }
+
+  const seconds = Math.floor(diffMs / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
 }
 
 const WORKLOAD_CATEGORY_OPTIONS: Workload["category"][] = [
@@ -131,6 +161,7 @@ export function DeviceWorkloadsPanel({
 }) {
   const [snapshot, setSnapshot] = useState<AdoptionSnapshot | null>(null);
   const [findings, setFindings] = useState<DeviceFinding[]>([]);
+  const [findingOccurrences, setFindingOccurrences] = useState<FindingOccurrence[]>([]);
   const [hasLoaded, setHasLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -188,8 +219,10 @@ export function DeviceWorkloadsPanel({
   const [draftAssuranceSaving, setDraftAssuranceSaving] = useState(false);
   const [deletingDraftAssuranceKey, setDeletingDraftAssuranceKey] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  const refresh = useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setLoading(true);
+    }
     try {
       const [snapshotRes, findingsRes] = await Promise.all([
         fetch(`/api/devices/${deviceId}/adoption`, withClientApiToken()),
@@ -204,8 +237,10 @@ export function DeviceWorkloadsPanel({
       if (findingsRes.ok) {
         const findingsData = (await findingsRes.json()) as FindingsPayload;
         setFindings(Array.isArray(findingsData.findings) ? findingsData.findings : []);
+        setFindingOccurrences(Array.isArray(findingsData.occurrences) ? findingsData.occurrences : []);
       } else {
         setFindings([]);
+        setFindingOccurrences([]);
       }
 
       setError(null);
@@ -213,13 +248,16 @@ export function DeviceWorkloadsPanel({
       setError(err instanceof Error ? err.message : "Failed to load Steward contract");
     } finally {
       setHasLoaded(true);
-      setLoading(false);
+      if (!options?.silent) {
+        setLoading(false);
+      }
     }
   }, [deviceId]);
 
   useEffect(() => {
     setSnapshot(null);
     setFindings([]);
+    setFindingOccurrences([]);
     setError(null);
     setHasLoaded(false);
     setLoading(true);
@@ -230,6 +268,20 @@ export function DeviceWorkloadsPanel({
       return;
     }
     void refresh();
+  }, [active, hasLoaded, refresh]);
+
+  useEffect(() => {
+    if (!active || !hasLoaded) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void refresh({ silent: true });
+    }, 15_000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
   }, [active, hasLoaded, refresh]);
 
   const resetWorkloadForm = useCallback(() => {
@@ -282,6 +334,21 @@ export function DeviceWorkloadsPanel({
   const runByAssuranceId = useMemo(
     () => new Map((snapshot?.assuranceRuns ?? []).map((run) => [run.assuranceId, run])),
     [snapshot?.assuranceRuns],
+  );
+
+  const latestAssuranceRun = useMemo(() => {
+    let latest: AssuranceRun | null = null;
+    for (const run of snapshot?.assuranceRuns ?? []) {
+      if (!latest || new Date(run.evaluatedAt).getTime() > new Date(latest.evaluatedAt).getTime()) {
+        latest = run;
+      }
+    }
+    return latest;
+  }, [snapshot?.assuranceRuns]);
+
+  const evaluatedAssuranceCount = useMemo(
+    () => (snapshot?.assurances ?? []).filter((assurance) => runByAssuranceId.has(assurance.id)).length,
+    [runByAssuranceId, snapshot?.assurances],
   );
 
   const assurancesByWorkload = useMemo(() => {
@@ -361,6 +428,24 @@ export function DeviceWorkloadsPanel({
       "missing_credentials",
     ].includes(finding.findingType)),
     [findings],
+  );
+
+  const findingTitlesByDedupeKey = useMemo(
+    () => new Map(findings.map((finding) => [finding.dedupeKey, finding.title])),
+    [findings],
+  );
+
+  const recentConcernOccurrences = useMemo(
+    () => findingOccurrences
+      .filter((occurrence) => [
+        "assurance",
+        "assurance_pending",
+        "service_contract",
+        "service_contract_pending",
+        "missing_credentials",
+      ].includes(occurrence.findingType))
+      .slice(0, 5),
+    [findingOccurrences],
   );
 
   const openCreateWorkloadDialog = useCallback(() => {
@@ -949,10 +1034,19 @@ export function DeviceWorkloadsPanel({
         ) : null}
 
         {latestRun ? (
-          <p className="mt-1 text-muted-foreground">
-            Last evaluated: {new Date(latestRun.evaluatedAt).toLocaleString()}
+          <>
+            <p className="mt-1 text-muted-foreground">
+              Last evaluated: {new Date(latestRun.evaluatedAt).toLocaleString()} ({relativeTime(latestRun.evaluatedAt)})
+            </p>
+            <p className="mt-1 text-muted-foreground">
+              Last result: {latestRun.summary}
+            </p>
+          </>
+        ) : (
+          <p className="mt-1 text-amber-700 dark:text-amber-300">
+            Never evaluated yet. Waiting for the scanner to pick this check up.
           </p>
-        ) : null}
+        )}
 
         <div className="mt-2 flex items-center gap-1.5">
           <Button
@@ -1086,6 +1180,51 @@ export function DeviceWorkloadsPanel({
                 <p className="text-lg font-semibold tabular-nums">{openConcerns.length}</p>
               </div>
             </div>
+
+            <div className="rounded-md border bg-background/50 px-3 py-2 text-xs text-muted-foreground">
+              {latestAssuranceRun ? (
+                <>
+                  Assurance scanner last reported <strong className="text-foreground">{latestAssuranceRun.status}</strong>{" "}
+                  at <strong className="text-foreground">{new Date(latestAssuranceRun.evaluatedAt).toLocaleString()}</strong>{" "}
+                  ({relativeTime(latestAssuranceRun.evaluatedAt)}). Evaluated {evaluatedAssuranceCount} of {snapshot?.assurances.length ?? 0} committed checks.
+                </>
+              ) : (
+                <>
+                  No assurance results recorded yet. Committed checks appear here after the scanner evaluates them.
+                </>
+              )}
+            </div>
+
+            {recentConcernOccurrences.length > 0 ? (
+              <div className="space-y-2 rounded-md border bg-background/50 p-3">
+                <div>
+                  <Label className="text-xs">Recent Check Activity</Label>
+                  <p className="text-[11px] text-muted-foreground">
+                    Latest scanner and assurance observations recorded for this device.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  {recentConcernOccurrences.map((occurrence) => (
+                    <div key={occurrence.id} className="rounded-md border bg-background/60 px-3 py-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium">
+                            {findingTitlesByDedupeKey.get(occurrence.dedupeKey) ?? occurrence.findingType.replace(/_/g, " ")}
+                          </p>
+                          <p className="text-[11px] text-muted-foreground">{occurrence.summary}</p>
+                        </div>
+                        <Badge variant={findingOccurrenceVariant(occurrence)}>
+                          {occurrence.status === "resolved" ? "resolved" : occurrence.severity}
+                        </Badge>
+                      </div>
+                      <p className="mt-2 text-[10px] text-muted-foreground">
+                        Observed {new Date(occurrence.observedAt).toLocaleString()} ({relativeTime(occurrence.observedAt)}) via {occurrence.source}.
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             <p className="text-xs text-muted-foreground">
               Steward should end onboarding with a committed contract, including an intentionally empty one for access-only devices. Edit responsibilities and checks here when you want deterministic control; use Chat when you want Steward to refine the model agentically.

@@ -15,6 +15,11 @@ import type {
   WidgetOperationResult,
 } from "@/lib/state/types";
 import type { DeviceWidgetContext } from "@/lib/widgets/context";
+import {
+  extractFirstJsonString,
+  parseWidgetOutputJson,
+  stripWidgetOutputNoise,
+} from "@/lib/widgets/output-json";
 import { cn } from "@/lib/utils";
 
 type WidgetBridgeRequest =
@@ -95,6 +100,9 @@ function buildWidgetDocument(args: {
     `<div id="steward-widget-root"><div id="steward-widget-surface">${args.widget.html}</div></div>`,
     "<script>",
     escapeInlineScript(`
+      ${stripWidgetOutputNoise.toString()}
+      ${extractFirstJsonString.toString()}
+      ${parseWidgetOutputJson.toString()}
       (() => {
         const bootstrap = ${bootstrap};
         const listeners = new Set();
@@ -443,6 +451,18 @@ function buildWidgetDocument(args: {
               return result.details.stdout;
             }
             return "";
+          },
+          extractJsonOutput(value) {
+            return parseWidgetOutputJson(typeof value === "string" ? value : "");
+          },
+          getControlJson(result) {
+            return parseWidgetOutputJson(api.getControlOutput(result));
+          },
+          getOperationJson(result) {
+            const resolved = unwrapWidgetResult(result);
+            return resolved && typeof resolved.output === "string"
+              ? parseWidgetOutputJson(resolved.output)
+              : null;
           },
           getHttpResponse(result) {
             return normalizeHttpResponse(result);

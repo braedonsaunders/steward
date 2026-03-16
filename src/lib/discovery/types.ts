@@ -18,6 +18,35 @@ export interface DiscoveryCandidate {
   metadata: Record<string, unknown>;
 }
 
+export type DiscoveryPhaseStatus = "completed" | "timed_out" | "skipped" | "failed";
+
+export interface DiscoveryPhaseTelemetry {
+  key: string;
+  label: string;
+  status: DiscoveryPhaseStatus;
+  startedAt: string;
+  completedAt: string;
+  elapsedMs: number;
+  budgetMs?: number;
+  desiredBudgetMs?: number;
+  targetCount?: number;
+  note?: string;
+}
+
+export interface DiscoveryDiagnostics {
+  scanMode: "incremental" | "deep";
+  startedAt: string;
+  completedAt: string;
+  elapsedMs: number;
+  budgetMs?: number;
+  phaseCount: number;
+  constrainedPhaseCount: number;
+  timedOutPhaseCount: number;
+  skippedPhaseCount: number;
+  failedPhaseCount: number;
+  phases: DiscoveryPhaseTelemetry[];
+}
+
 export interface DiscoverySnapshot {
   discoveredAt: string;
   scanMode: "incremental" | "deep";
@@ -25,4 +54,5 @@ export interface DiscoverySnapshot {
   passive: DiscoveryCandidate[];
   active: DiscoveryCandidate[];
   merged: DiscoveryCandidate[];
+  diagnostics?: DiscoveryDiagnostics;
 }

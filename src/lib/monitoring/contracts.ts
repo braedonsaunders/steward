@@ -13,7 +13,13 @@ export type MonitorType =
   | "service_presence"
   | "port_open"
   | "http_contains"
+  | "http_reachability"
   | "shell_assertion"
+  | "process_health"
+  | "disk_pressure"
+  | "patch_posture"
+  | "ssh_reachability"
+  | "mqtt_reachability"
   | "desktop_ui_assertion"
   | "semantic_assertion";
 
@@ -172,9 +178,12 @@ function inferRequiredProtocols(
   if (monitorType === "port_open" || monitorType === "service_presence") {
     return [];
   }
-  if (monitorType === "http_contains") {
+  if (monitorType === "http_contains" || monitorType === "http_reachability") {
     if (present.has("http-api")) return ["http-api"];
     return ["http-api"];
+  }
+  if (monitorType === "mqtt_reachability") {
+    return ["mqtt"];
   }
   if (monitorType === "semantic_assertion") {
     if (present.has("http-api")) return ["http-api"];
@@ -192,6 +201,21 @@ function inferRequiredProtocols(
     if (present.has("vnc")) requirements.push("vnc");
     if (requirements.length === 0) requirements.push("rdp");
     return requirements;
+  }
+
+  if (
+    monitorType === "process_health"
+    || monitorType === "disk_pressure"
+    || monitorType === "patch_posture"
+    || monitorType === "ssh_reachability"
+    || monitorType === "shell_assertion"
+  ) {
+    if (present.has("ssh")) return ["ssh"];
+    if (present.has("winrm")) return ["winrm"];
+    if (present.has("powershell-ssh")) return ["powershell-ssh"];
+    if (present.has("wmi")) return ["wmi"];
+    if (present.has("docker")) return ["docker"];
+    return ["ssh"];
   }
 
   if (present.has("ssh")) return ["ssh"];
@@ -222,6 +246,12 @@ function buildServiceCommandTemplate(protocol: string, serviceName: string): str
 }
 
 function buildServiceBrokerRequest(protocol: string, serviceName: string): ProtocolBrokerRequest | undefined {
+  if (protocol === "ssh") {
+    return {
+      protocol: "ssh",
+      command: `systemctl is-active ${serviceName}`,
+    };
+  }
   if (protocol === "winrm") {
     return {
       protocol: "winrm",
@@ -420,28 +450,47 @@ export function buildCustomMonitorContractFromPrompt(
   };
 }
 
-function asMonitorType(value: unknown): MonitorType {
+export function normalizeMonitorType(value: unknown): MonitorType {
   const monitorType = String(value ?? "").trim().toLowerCase();
   if (monitorType === "port_open") return "port_open";
   if (monitorType === "http_contains") return "http_contains";
+  if (monitorType === "http_reachability" || monitorType === "http") return "http_reachability";
   if (monitorType === "shell_assertion") return "shell_assertion";
+  if (
+    monitorType === "process_health"
+    || monitorType === "process"
+    || monitorType === "service"
+    || monitorType === "service_health"
+  ) {
+    return "process_health";
+  }
+  if (monitorType === "disk_pressure" || monitorType === "disk") return "disk_pressure";
+  if (monitorType === "patch_posture" || monitorType === "patch") return "patch_posture";
+  if (monitorType === "ssh_reachability" || monitorType === "ssh") return "ssh_reachability";
+  if (monitorType === "mqtt_reachability" || monitorType === "mqtt") return "mqtt_reachability";
   if (monitorType === "desktop_ui_assertion") return "desktop_ui_assertion";
   if (monitorType === "semantic_assertion") return "semantic_assertion";
   return "service_presence";
 }
 
 export function getMonitorType(contract: ServiceContract): MonitorType {
-  return asMonitorType(contract.policyJson.monitorType);
+  return normalizeMonitorType(contract.monitorType ?? contract.policyJson.monitorType);
 }
 
 export function getRequiredProtocolsForServiceContract(contract: ServiceContract): string[] {
+  const fromModel = toStringArray(contract.requiredProtocols);
+  if (fromModel.length > 0) {
+    return fromModel;
+  }
+
   const fromPolicy = toStringArray(contract.policyJson.requiredProtocols);
   if (fromPolicy.length > 0) {
     return fromPolicy;
   }
 
   const monitorType = getMonitorType(contract);
-  if (monitorType === "http_contains") return ["http-api"];
+  if (monitorType === "http_contains" || monitorType === "http_reachability") return ["http-api"];
+  if (monitorType === "mqtt_reachability") return ["mqtt"];
   if (monitorType === "semantic_assertion") {
     if (typeof contract.policyJson.commandTemplate === "string" && contract.policyJson.commandTemplate.trim().length > 0) {
       return ["ssh"];
@@ -452,7 +501,15 @@ export function getRequiredProtocolsForServiceContract(contract: ServiceContract
     return ["http-api"];
   }
   if (monitorType === "desktop_ui_assertion") return ["winrm"];
-  if (monitorType === "shell_assertion") return ["ssh"];
+  if (
+    monitorType === "shell_assertion"
+    || monitorType === "process_health"
+    || monitorType === "disk_pressure"
+    || monitorType === "patch_posture"
+    || monitorType === "ssh_reachability"
+  ) {
+    return ["ssh"];
+  }
   return [];
 }
 
@@ -519,6 +576,228 @@ function extractJsonObject(raw: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+function readContractString(contract: ServiceContract, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const configValue = contract.configJson[key];
+    if (typeof configValue === "string" && configValue.trim().length > 0) {
+      return configValue.trim();
+    }
+    const policyValue = contract.policyJson[key];
+    if (typeof policyValue === "string" && policyValue.trim().length > 0) {
+      return policyValue.trim();
+    }
+  }
+  return undefined;
+}
+
+function inferServiceName(contract: ServiceContract): string | undefined {
+  const explicit = readContractString(contract, "serviceName", "processName");
+  if (explicit) {
+    return explicit;
+  }
+
+  const phpMatch = contract.displayName.match(/php[- ]?fpm\s*([0-9.]+)/i);
+  if (phpMatch?.[1]) {
+    return `php${phpMatch[1]}-fpm`;
+  }
+
+  const aliases = new Map<string, string>([
+    ["gitlab-runner", "gitlab-runner"],
+    ["mariadb", "mariadb"],
+    ["mysql", "mysql"],
+    ["nginx", "nginx"],
+    ["redis", "redis-server"],
+    ["redis-cache", "redis-server"],
+    ["redis-server", "redis-server"],
+  ]);
+
+  const candidates = [
+    contract.assuranceKey,
+    contract.serviceKey,
+    contract.displayName,
+  ];
+  for (const candidate of candidates) {
+    const normalized = candidate
+      .toLowerCase()
+      .replace(/\b(service|process)\b/g, "")
+      .replace(/\brunning\b/g, "")
+      .replace(/[^a-z0-9.]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    if (!normalized) {
+      continue;
+    }
+    if (aliases.has(normalized)) {
+      return aliases.get(normalized);
+    }
+    if (/^php[-.]?\d/.test(normalized) && normalized.includes("fpm")) {
+      return normalized.replace(/-/g, "").replace("phpfpm", "php-fpm");
+    }
+    return normalized;
+  }
+
+  return undefined;
+}
+
+function inferHttpPort(contract: ServiceContract, device: Device): number | undefined {
+  const configuredPort = Number(contract.policyJson.port ?? contract.configJson.port);
+  if (Number.isFinite(configuredPort) && configuredPort > 0) {
+    return Math.floor(configuredPort);
+  }
+
+  const textCandidates = [
+    contract.displayName,
+    contract.assuranceKey,
+    contract.serviceKey,
+    readContractString(contract, "url"),
+  ].filter((value): value is string => typeof value === "string" && value.length > 0);
+
+  for (const value of textCandidates) {
+    const portMatch = value.match(/\bport\s+(\d{2,5})\b/i) ?? value.match(/:(\d{2,5})(?:\/|$)/);
+    if (!portMatch?.[1]) {
+      continue;
+    }
+    const port = Number(portMatch[1]);
+    if (Number.isFinite(port) && port > 0) {
+      return Math.floor(port);
+    }
+  }
+
+  const httpService = device.services.find((service) => service.port === 443 || service.port === 80 || service.port === 8443 || service.port === 8080)
+    ?? device.services.find((service) => service.name.toLowerCase().includes("http"));
+  return httpService?.port;
+}
+
+function inferHttpUrl(device: Device, contract: ServiceContract): string {
+  const configuredUrl = readContractString(contract, "url");
+  if (configuredUrl) {
+    return configuredUrl;
+  }
+
+  const port = inferHttpPort(contract, device);
+  const secure = port === 443 || port === 8443;
+  const scheme = secure ? "https" : "http";
+  if (!port || (secure && port === 443) || (!secure && port === 80)) {
+    return `${scheme}://${device.ip}/`;
+  }
+  return `${scheme}://${device.ip}:${port}/`;
+}
+
+function preferredProtocolForAssertion(
+  device: Device,
+  contract: ServiceContract,
+): string {
+  const required = getRequiredProtocolsForServiceContract(contract).map((protocol) => normalizeProtocol(protocol));
+  const supported = device.protocols.map((protocol) => normalizeProtocol(protocol));
+  for (const protocol of required) {
+    if (supported.includes(protocol)) {
+      return protocol;
+    }
+  }
+  if (required.length > 0) {
+    return required[0];
+  }
+  if (supported.includes("ssh")) return "ssh";
+  if (supported.includes("winrm")) return "winrm";
+  if (supported.includes("powershell-ssh")) return "powershell-ssh";
+  if (supported.includes("wmi")) return "wmi";
+  if (supported.includes("docker")) return "docker";
+  return "ssh";
+}
+
+async function evaluateShellLikeAssertion(
+  device: Device,
+  contract: ServiceContract,
+  defaultPolicy: Record<string, unknown>,
+  options: {
+    monitorType: MonitorType;
+    commandTemplate: string;
+    expectedText?: string;
+    summaryWhenPassing: string;
+    summaryWhenFailing: string;
+    timeoutMs?: number;
+    brokerRequest?: ProtocolBrokerRequest;
+    evidenceJson?: Record<string, unknown>;
+  },
+): Promise<ServiceContractEvaluation> {
+  const timeoutMs = options.timeoutMs
+    ? Math.min(10 * 60_000, Math.max(1_000, Math.floor(options.timeoutMs)))
+    : 30_000;
+  const command = interpolateHost(options.commandTemplate, device);
+  const brokerRequest = options.brokerRequest ?? brokerRequestFromPolicy(defaultPolicy, command);
+
+  if (brokerRequest) {
+    const operation: OperationSpec = {
+      id: `contract:${contract.id}:${options.monitorType}`,
+      adapterId: adapterIdForBroker(brokerRequest.protocol),
+      kind: "shell.command",
+      mode: "read",
+      timeoutMs,
+      brokerRequest: options.expectedText && "expectRegex" in brokerRequest && !brokerRequest.expectRegex
+        ? {
+          ...brokerRequest,
+          expectRegex: escapeRegex(options.expectedText),
+        }
+        : brokerRequest,
+      expectedSemanticTarget: contract.displayName,
+      safety: {
+        dryRunSupported: false,
+        requiresConfirmedRevert: false,
+        criticality: "low",
+      },
+    };
+    const result = await executeBrokerOperation(operation, device, {}, { actor: "steward" });
+    const matchesExpectation = options.expectedText ? result.output.includes(options.expectedText) : result.ok;
+    const passed = result.ok && matchesExpectation;
+
+    return {
+      status: passed ? "pass" : "fail",
+      summary: passed ? options.summaryWhenPassing : options.summaryWhenFailing,
+      evidenceJson: {
+        monitorType: options.monitorType,
+        brokerProtocol: brokerRequest.protocol,
+        status: result.status,
+        phase: result.phase,
+        proof: result.proof,
+        expectedText: options.expectedText ?? null,
+        matchesExpectation,
+        summary: result.summary,
+        output: result.output.slice(0, 800),
+        details: result.details,
+        ...(options.evidenceJson ?? {}),
+      },
+      updatedPolicyJson: {
+        ...defaultPolicy,
+        lastStatus: passed ? "pass" : "fail",
+      },
+      monitorType: options.monitorType,
+    };
+  }
+
+  const result = await runShell(command, timeoutMs);
+  const output = `${result.stdout}${result.stderr ? `\n${result.stderr}` : ""}`.trim();
+  const matchesExpectation = options.expectedText ? output.includes(options.expectedText) : true;
+  const passed = result.ok && matchesExpectation;
+
+  return {
+    status: passed ? "pass" : "fail",
+    summary: passed ? options.summaryWhenPassing : options.summaryWhenFailing,
+    evidenceJson: {
+      monitorType: options.monitorType,
+      command,
+      exitCode: result.code,
+      expectedText: options.expectedText ?? null,
+      matchesExpectation,
+      output: output.slice(0, 800),
+      ...(options.evidenceJson ?? {}),
+    },
+    updatedPolicyJson: {
+      ...defaultPolicy,
+      lastStatus: passed ? "pass" : "fail",
+    },
+    monitorType: options.monitorType,
+  };
 }
 
 async function gatherSemanticEvidence(
@@ -839,9 +1118,8 @@ export async function evaluateServiceContract(
     };
   }
 
-  if (monitorType === "http_contains") {
-    const rawUrl = typeof policy.url === "string" ? policy.url.trim() : "";
-    const url = rawUrl.length > 0 ? rawUrl : `http://${device.ip}/`;
+  if (monitorType === "http_contains" || monitorType === "http_reachability") {
+    const url = inferHttpUrl(device, contract);
     const expectedText = typeof policy.expectedText === "string" && policy.expectedText.trim().length > 0
       ? policy.expectedText.trim()
       : undefined;
@@ -878,6 +1156,300 @@ export async function evaluateServiceContract(
     return evaluateSemanticAssertion(device, contract, defaultPolicy);
   }
 
+  if (monitorType === "ssh_reachability") {
+    return evaluateShellLikeAssertion(device, contract, defaultPolicy, {
+      monitorType,
+      commandTemplate: "printf steward-ssh-ok",
+      expectedText: "steward-ssh-ok",
+      brokerRequest: {
+        protocol: "ssh",
+        command: "printf steward-ssh-ok",
+      },
+      summaryWhenPassing: `${contract.displayName} check passed (SSH management path is healthy).`,
+      summaryWhenFailing: `${contract.displayName} check failed (SSH management path is unavailable).`,
+    });
+  }
+
+  if (monitorType === "process_health") {
+    const serviceName = inferServiceName(contract);
+    if (!serviceName) {
+      return {
+        status: "pending",
+        summary: `${contract.displayName} monitor could not determine which service/process to evaluate.`,
+        evidenceJson: {
+          monitorType,
+          reason: "missing_service_name",
+        },
+        updatedPolicyJson: {
+          ...defaultPolicy,
+          lastStatus: "pending",
+        },
+        monitorType,
+      };
+    }
+
+    const protocol = preferredProtocolForAssertion(device, contract);
+    const expectedText = protocol === "winrm" || protocol === "powershell-ssh" || protocol === "wmi"
+      ? "Running"
+      : protocol === "docker"
+        ? serviceName
+        : "active";
+    const commandTemplate = buildServiceCommandTemplate(protocol, serviceName);
+    const brokerRequest = buildServiceBrokerRequest(protocol, serviceName);
+    if (!commandTemplate && !brokerRequest) {
+      return {
+        status: "pending",
+        summary: `${contract.displayName} monitor has no supported execution path for ${protocol}.`,
+        evidenceJson: {
+          monitorType,
+          reason: "unsupported_process_protocol",
+          protocol,
+          serviceName,
+        },
+        updatedPolicyJson: {
+          ...defaultPolicy,
+          lastStatus: "pending",
+        },
+        monitorType,
+      };
+    }
+
+    return evaluateShellLikeAssertion(device, contract, defaultPolicy, {
+      monitorType,
+      commandTemplate: commandTemplate ?? `echo ${serviceName}`,
+      expectedText,
+      brokerRequest,
+      summaryWhenPassing: `${contract.displayName} check passed (service is running).`,
+      summaryWhenFailing: `${contract.displayName} check failed (service is not running).`,
+      evidenceJson: {
+        serviceName,
+        protocol,
+      },
+    });
+  }
+
+  if (monitorType === "disk_pressure") {
+    const maxUsagePercent = Number.isFinite(Number(policy.maxUsagePercent))
+      ? Math.max(1, Math.min(99, Math.floor(Number(policy.maxUsagePercent))))
+      : 90;
+    const protocol = preferredProtocolForAssertion(device, contract);
+    if (protocol !== "ssh") {
+      return {
+        status: "pending",
+        summary: `${contract.displayName} monitor currently supports SSH-backed disk checks only.`,
+        evidenceJson: {
+          monitorType,
+          reason: "unsupported_disk_protocol",
+          protocol,
+        },
+        updatedPolicyJson: {
+          ...defaultPolicy,
+          lastStatus: "pending",
+        },
+        monitorType,
+      };
+    }
+
+    const command = "sh -lc \"df -Pk / | tail -1 | awk '{print $5}' | tr -d '%'\"";
+    const operation: OperationSpec = {
+      id: `contract:${contract.id}:${monitorType}`,
+      adapterId: "ssh",
+      kind: "shell.command",
+      mode: "read",
+      timeoutMs: 30_000,
+      brokerRequest: {
+        protocol: "ssh",
+        command,
+      },
+      expectedSemanticTarget: contract.displayName,
+      safety: {
+        dryRunSupported: false,
+        requiresConfirmedRevert: false,
+        criticality: "low",
+      },
+    };
+    const result = await executeBrokerOperation(operation, device, {}, { actor: "steward" });
+    const usagePercent = Number.parseInt(result.output.trim(), 10);
+    const passed = result.ok && Number.isFinite(usagePercent) && usagePercent < maxUsagePercent;
+
+    return {
+      status: passed ? "pass" : "fail",
+      summary: passed
+        ? `${contract.displayName} check passed (${usagePercent}% root filesystem usage).`
+        : Number.isFinite(usagePercent)
+          ? `${contract.displayName} check failed (${usagePercent}% root filesystem usage, threshold ${maxUsagePercent}%).`
+          : `${contract.displayName} check failed (could not determine root filesystem usage).`,
+      evidenceJson: {
+        monitorType,
+        brokerProtocol: "ssh",
+        usagePercent: Number.isFinite(usagePercent) ? usagePercent : null,
+        thresholdPercent: maxUsagePercent,
+        output: result.output.slice(0, 400),
+        status: result.status,
+        phase: result.phase,
+        proof: result.proof,
+      },
+      updatedPolicyJson: {
+        ...defaultPolicy,
+        lastStatus: passed ? "pass" : "fail",
+      },
+      monitorType,
+    };
+  }
+
+  if (monitorType === "patch_posture") {
+    const protocol = preferredProtocolForAssertion(device, contract);
+    if (protocol !== "ssh") {
+      return {
+        status: "pending",
+        summary: `${contract.displayName} monitor currently supports SSH-backed patch posture checks only.`,
+        evidenceJson: {
+          monitorType,
+          reason: "unsupported_patch_protocol",
+          protocol,
+        },
+        updatedPolicyJson: {
+          ...defaultPolicy,
+          lastStatus: "pending",
+        },
+        monitorType,
+      };
+    }
+
+    const maxPendingUpdates = Number.isFinite(Number(policy.maxPendingUpdates))
+      ? Math.max(0, Math.floor(Number(policy.maxPendingUpdates)))
+      : 0;
+    const command = [
+      "sh -lc",
+      "\"if command -v apt >/dev/null 2>&1; then ",
+      "count=$(apt list --upgradable 2>/dev/null | sed '1d' | grep -c . || true); ",
+      "printf '%s' \\\"$count\\\"; ",
+      "elif command -v dnf >/dev/null 2>&1; then ",
+      "dnf -q check-update >/dev/null 2>&1; code=$?; ",
+      "if [ \\\"$code\\\" -eq 100 ]; then printf '1'; elif [ \\\"$code\\\" -eq 0 ]; then printf '0'; else exit $code; fi; ",
+      "elif command -v yum >/dev/null 2>&1; then ",
+      "yum -q check-update >/dev/null 2>&1; code=$?; ",
+      "if [ \\\"$code\\\" -eq 100 ]; then printf '1'; elif [ \\\"$code\\\" -eq 0 ]; then printf '0'; else exit $code; fi; ",
+      "else printf 'unknown'; fi\"",
+    ].join("");
+    const operation: OperationSpec = {
+      id: `contract:${contract.id}:${monitorType}`,
+      adapterId: "ssh",
+      kind: "shell.command",
+      mode: "read",
+      timeoutMs: 60_000,
+      brokerRequest: {
+        protocol: "ssh",
+        command,
+      },
+      expectedSemanticTarget: contract.displayName,
+      safety: {
+        dryRunSupported: false,
+        requiresConfirmedRevert: false,
+        criticality: "low",
+      },
+    };
+    const result = await executeBrokerOperation(operation, device, {}, { actor: "steward" });
+    const rawOutput = result.output.trim();
+    const pendingUpdates = Number.parseInt(rawOutput, 10);
+    if (!result.ok || (!Number.isFinite(pendingUpdates) && rawOutput !== "unknown")) {
+      return {
+        status: "fail",
+        summary: `${contract.displayName} check failed (patch posture command did not complete successfully).`,
+        evidenceJson: {
+          monitorType,
+          brokerProtocol: "ssh",
+          output: rawOutput.slice(0, 400),
+          status: result.status,
+          phase: result.phase,
+          proof: result.proof,
+        },
+        updatedPolicyJson: {
+          ...defaultPolicy,
+          lastStatus: "fail",
+        },
+        monitorType,
+      };
+    }
+
+    if (!Number.isFinite(pendingUpdates)) {
+      return {
+        status: "pending",
+        summary: `${contract.displayName} monitor could not determine pending update count on this platform.`,
+        evidenceJson: {
+          monitorType,
+          brokerProtocol: "ssh",
+          output: rawOutput.slice(0, 400),
+        },
+        updatedPolicyJson: {
+          ...defaultPolicy,
+          lastStatus: "pending",
+        },
+        monitorType,
+      };
+    }
+
+    const passed = pendingUpdates <= maxPendingUpdates;
+    return {
+      status: passed ? "pass" : "fail",
+      summary: passed
+        ? `${contract.displayName} check passed (${pendingUpdates} pending update(s)).`
+        : `${contract.displayName} check failed (${pendingUpdates} pending update(s), threshold ${maxPendingUpdates}).`,
+      evidenceJson: {
+        monitorType,
+        brokerProtocol: "ssh",
+        pendingUpdates,
+        maxPendingUpdates,
+        output: rawOutput.slice(0, 400),
+      },
+      updatedPolicyJson: {
+        ...defaultPolicy,
+        lastStatus: passed ? "pass" : "fail",
+      },
+      monitorType,
+    };
+  }
+
+  if (monitorType === "mqtt_reachability") {
+    const port = Number.isFinite(Number(policy.port))
+      ? Math.floor(Number(policy.port))
+      : device.services.find((service) => service.port === 8883 || service.port === 1883)?.port;
+    if (!port) {
+      return {
+        status: "pending",
+        summary: `${contract.displayName} monitor is missing a discoverable MQTT port.`,
+        evidenceJson: {
+          monitorType,
+          reason: "missing_mqtt_port",
+        },
+        updatedPolicyJson: {
+          ...defaultPolicy,
+          lastStatus: "pending",
+        },
+        monitorType,
+      };
+    }
+
+    const open = device.services.some((service) => service.port === port);
+    const passed = contract.desiredState === "running" ? open : !open;
+    return {
+      status: passed ? "pass" : "fail",
+      summary: passed
+        ? `${contract.displayName} check passed (MQTT port ${port} is reachable).`
+        : `${contract.displayName} check failed (MQTT port ${port} is not in the expected state).`,
+      evidenceJson: {
+        monitorType,
+        port,
+        open,
+      },
+      updatedPolicyJson: {
+        ...defaultPolicy,
+        lastStatus: passed ? "pass" : "fail",
+      },
+      monitorType,
+    };
+  }
+
   if (monitorType === "shell_assertion") {
     const commandTemplate = typeof policy.commandTemplate === "string"
       ? policy.commandTemplate.trim()
@@ -900,88 +1472,19 @@ export async function evaluateServiceContract(
       };
     }
 
-    const timeoutMs = Number.isFinite(Number(policy.timeoutMs))
-      ? Math.min(10 * 60_000, Math.max(1_000, Math.floor(Number(policy.timeoutMs))))
-      : 30_000;
-    const command = interpolateHost(commandTemplate, device);
     const expectedText = typeof policy.expectedText === "string" && policy.expectedText.trim().length > 0
       ? policy.expectedText.trim()
       : undefined;
-    const brokerRequest = brokerRequestFromPolicy(policy, command);
-
-    if (brokerRequest) {
-      const operation: OperationSpec = {
-        id: `contract:${contract.id}`,
-        adapterId: adapterIdForBroker(brokerRequest.protocol),
-        kind: "shell.command",
-        mode: "read",
-        timeoutMs,
-        brokerRequest: expectedText && brokerRequest.protocol === "winrm" && !brokerRequest.expectRegex
-          ? {
-            ...brokerRequest,
-            expectRegex: escapeRegex(expectedText),
-          }
-          : brokerRequest,
-        expectedSemanticTarget: contract.displayName,
-        safety: {
-          dryRunSupported: false,
-          requiresConfirmedRevert: false,
-          criticality: "low",
-        },
-      };
-      const result = await executeBrokerOperation(operation, device, {}, { actor: "steward" });
-      const matchesExpectation = expectedText ? result.output.includes(expectedText) : result.ok;
-      const passed = result.ok && matchesExpectation;
-
-      return {
-        status: passed ? "pass" : "fail",
-        summary: passed
-          ? `${contract.displayName} check passed (remote assertion satisfied).`
-          : `${contract.displayName} check failed (remote assertion did not pass).`,
-        evidenceJson: {
-          monitorType,
-          brokerProtocol: brokerRequest.protocol,
-          status: result.status,
-          phase: result.phase,
-          proof: result.proof,
-          expectedText: expectedText ?? null,
-          matchesExpectation,
-          summary: result.summary,
-          output: result.output.slice(0, 800),
-          details: result.details,
-        },
-        updatedPolicyJson: {
-          ...defaultPolicy,
-          lastStatus: passed ? "pass" : "fail",
-        },
-        monitorType,
-      };
-    }
-
-    const result = await runShell(command, timeoutMs);
-    const output = `${result.stdout}${result.stderr ? `\n${result.stderr}` : ""}`.trim();
-    const matchesExpectation = expectedText ? output.includes(expectedText) : true;
-    const passed = result.ok && matchesExpectation;
-
-    return {
-      status: passed ? "pass" : "fail",
-      summary: passed
-        ? `${contract.displayName} check passed (shell assertion satisfied).`
-        : `${contract.displayName} check failed (shell assertion did not pass).`,
-      evidenceJson: {
-        monitorType,
-        command,
-        exitCode: result.code,
-        expectedText: expectedText ?? null,
-        matchesExpectation,
-        output: output.slice(0, 800),
-      },
-      updatedPolicyJson: {
-        ...defaultPolicy,
-        lastStatus: passed ? "pass" : "fail",
-      },
+    return evaluateShellLikeAssertion(device, contract, defaultPolicy, {
       monitorType,
-    };
+      commandTemplate,
+      expectedText,
+      timeoutMs: Number.isFinite(Number(policy.timeoutMs))
+        ? Math.min(10 * 60_000, Math.max(1_000, Math.floor(Number(policy.timeoutMs))))
+        : 30_000,
+      summaryWhenPassing: `${contract.displayName} check passed (shell assertion satisfied).`,
+      summaryWhenFailing: `${contract.displayName} check failed (shell assertion did not pass).`,
+    });
   }
 
   const probeTemplate = typeof policy.probeCommandTemplate === "string"

@@ -57,6 +57,7 @@ interface ChatRuntimeContextValue {
   sendStartedAt: number | null;
   streamingSessionId: string | null;
   refreshSessions: () => Promise<void>;
+  hydrateSession: (session: ChatSessionRecord, messages?: ChatMessageRecord[]) => void;
   isSessionLoaded: (sessionId: string) => boolean;
   isSessionLoading: (sessionId: string) => boolean;
   getSessionMessages: (sessionId: string | null | undefined) => ChatMessageRecord[];
@@ -197,6 +198,26 @@ export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
     },
     [],
   );
+
+  const hydrateSession = useCallback((session: ChatSessionRecord, messages?: ChatMessageRecord[]) => {
+    freshSessionIdsRef.current.add(session.id);
+    upsertSessionRecord(session);
+    if (messages) {
+      setMessagesBySession((prev) => ({
+        ...prev,
+        [session.id]: messages,
+      }));
+    }
+    setLoadedSessionIds((prev) => ({ ...prev, [session.id]: true }));
+    setLoadingSessionIds((prev) => {
+      if (!prev[session.id]) {
+        return prev;
+      }
+      const next = { ...prev };
+      delete next[session.id];
+      return next;
+    });
+  }, [upsertSessionRecord]);
 
   const refreshSessions = useCallback(async () => {
     const requestId = refreshSessionsRequestIdRef.current + 1;
@@ -738,6 +759,7 @@ export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
     sendStartedAt,
     streamingSessionId,
     refreshSessions,
+    hydrateSession,
     isSessionLoaded: (sessionId: string) => Boolean(loadedSessionIds[sessionId] || freshSessionIdsRef.current.has(sessionId)),
     isSessionLoading: (sessionId: string) => Boolean(loadingSessionIds[sessionId]),
     getSessionMessages: (sessionId: string | null | undefined) => (sessionId ? messagesBySession[sessionId] ?? [] : []),
@@ -750,6 +772,7 @@ export function ChatRuntimeProvider({ children }: { children: ReactNode }) {
   }), [
     createSession,
     deleteSession,
+    hydrateSession,
     loadSessionMessages,
     loadedSessionIds,
     loadingSessionIds,

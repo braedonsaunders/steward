@@ -12,9 +12,11 @@ export async function GET(request: NextRequest) {
 
   ensureStewardLoop();
   const state = await stateStore.getState();
+  const controlPlane = stateStore.getControlPlaneHealth();
 
   return NextResponse.json({
     ...state,
+    controlPlane,
     actions: state.actions.slice(0, 200),
   });
 }

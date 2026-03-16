@@ -927,6 +927,21 @@ export interface DeviceFinding {
   lastSeenAt: string;
 }
 
+export interface FindingOccurrence {
+  id: string;
+  findingId?: string;
+  deviceId: string;
+  dedupeKey: string;
+  findingType: string;
+  severity: IncidentSeverity;
+  status: "open" | "resolved";
+  summary: string;
+  evidenceJson: Record<string, unknown>;
+  source: string;
+  observedAt: string;
+  metadataJson: Record<string, unknown>;
+}
+
 export type DeviceWidgetStatus = "active" | "disabled";
 
 export type DeviceWidgetCapability = "context" | "state" | "device-control";
@@ -1294,11 +1309,52 @@ export interface AgentRunRecord {
   details: Record<string, unknown>;
 }
 
+export interface ScannerRunRecord {
+  id: string;
+  startedAt: string;
+  completedAt?: string;
+  outcome: "ok" | "error";
+  summary: string;
+  details: Record<string, unknown>;
+}
+
+export interface ControlPlaneLeaseRecord {
+  name: string;
+  holder: string;
+  expiresAt: string;
+  updatedAt: string;
+  metadataJson: Record<string, unknown>;
+}
+
+export interface ControlPlaneQueueLane {
+  kind: string;
+  pending: number;
+  processing: number;
+  completed: number;
+  oldestPendingRunAfter?: string;
+  oldestProcessingUpdatedAt?: string;
+  newestUpdatedAt?: string;
+}
+
+export interface ControlPlaneHealth {
+  leases: ControlPlaneLeaseRecord[];
+  queue: ControlPlaneQueueLane[];
+  summary: {
+    pending: number;
+    processing: number;
+    longRunningProcessing: number;
+  };
+  lastSuccessfulScannerRun: ScannerRunRecord | null;
+  lastSuccessfulAgentWake: AgentRunRecord | null;
+  lastPeriodicAgentWake: AgentRunRecord | null;
+}
+
 export type WebResearchProvider = "brave_scrape" | "duckduckgo_scrape" | "brave_api" | "serper" | "serpapi";
 export type WebResearchFallbackStrategy = "prefer_non_key" | "key_only" | "selected_only";
 
 export interface RuntimeSettings {
-  agentIntervalMs: number;
+  scannerIntervalMs: number;
+  agentWakeIntervalMs: number;
   deepScanIntervalMs: number;
   incrementalActiveTargets: number;
   deepActiveTargets: number;
@@ -1670,6 +1726,7 @@ export interface StewardState {
   };
   providerConfigs: ProviderConfig[];
   oauthStates: OAuthState[];
+  scannerRuns: ScannerRunRecord[];
   agentRuns: AgentRunRecord[];
   runtimeSettings: RuntimeSettings;
   policyRules: PolicyRule[];

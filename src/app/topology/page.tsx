@@ -894,7 +894,7 @@ export default function TopologyPage() {
                   No topology data available
                 </p>
                 <p className="text-xs text-muted-foreground/70">
-                  Run an agent cycle to discover devices and build the network graph.
+                  Run a scanner cycle to discover devices and build the network graph.
                 </p>
               </div>
             </CardContent>

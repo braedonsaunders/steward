@@ -35,6 +35,9 @@ import type {
   AuthSettings,
   ChatMessage,
   ChatSession,
+  ControlPlaneHealth,
+  ControlPlaneLeaseRecord,
+  ControlPlaneQueueLane,
   CredentialAccessLog,
   DashboardWidgetInventoryEntry,
   DashboardWidgetPage,
@@ -47,6 +50,7 @@ import type {
   DeviceBaseline,
   DeviceCredential,
   DeviceFinding,
+  FindingOccurrence,
   DeviceProfileBinding,
   DeviceAutomation,
   DeviceAutomationRun,
@@ -72,6 +76,7 @@ import type {
   ProviderConfig,
   Recommendation,
   RuntimeSettings,
+  ScannerRunRecord,
   ServiceContract,
   SettingsHistoryEntry,
   StewardState,
@@ -240,6 +245,71 @@ function agentRunFromRow(row: Record<string, unknown>): AgentRunRecord {
     outcome: row.outcome as AgentRunRecord["outcome"],
     summary: row.summary as string,
     details: JSON.parse(row.details as string) as Record<string, unknown>,
+  };
+}
+
+function scannerRunFromRow(row: Record<string, unknown>): ScannerRunRecord {
+  return {
+    id: row.id as string,
+    startedAt: row.startedAt as string,
+    completedAt: (row.completedAt as string) ?? undefined,
+    outcome: row.outcome as ScannerRunRecord["outcome"],
+    summary: row.summary as string,
+    details: JSON.parse(row.details as string) as Record<string, unknown>,
+  };
+}
+
+function parseJsonObject(value: string | null | undefined): Record<string, unknown> {
+  if (!value) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Fall back to an empty object for malformed persisted JSON.
+  }
+
+  return {};
+}
+
+function processExists(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function leaseHolderPid(holder: unknown): number | null {
+  if (typeof holder !== "string") {
+    return null;
+  }
+
+  const segments = holder.split(":");
+  if (segments.length < 2) {
+    return null;
+  }
+
+  const pid = Number(segments[1]);
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
+function runtimeLeaseFromRow(row: Record<string, unknown>): ControlPlaneLeaseRecord {
+  return {
+    name: String(row.name),
+    holder: String(row.holder),
+    expiresAt: String(row.expiresAt),
+    updatedAt: String(row.updatedAt),
+    metadataJson: parseJsonObject(row.metadataJson as string),
   };
 }
 
@@ -678,6 +748,23 @@ function deviceFindingFromRow(row: Record<string, unknown>): DeviceFinding {
   };
 }
 
+function findingOccurrenceFromRow(row: Record<string, unknown>): FindingOccurrence {
+  return {
+    id: String(row.id),
+    findingId: row.findingId ? String(row.findingId) : undefined,
+    deviceId: String(row.deviceId),
+    dedupeKey: String(row.dedupeKey),
+    findingType: String(row.findingType),
+    severity: row.severity as FindingOccurrence["severity"],
+    status: row.status as FindingOccurrence["status"],
+    summary: String(row.summary),
+    evidenceJson: JSON.parse(String(row.evidenceJson ?? "{}")) as Record<string, unknown>,
+    source: String(row.source),
+    observedAt: String(row.observedAt),
+    metadataJson: JSON.parse(String(row.metadataJson ?? "{}")) as Record<string, unknown>,
+  };
+}
+
 function deviceWidgetFromRow(row: Record<string, unknown>): DeviceWidget {
   return {
     id: String(row.id),
@@ -971,6 +1058,7 @@ class StateStore {
 
   private coerceRuntimeSettings(raw: Partial<Record<keyof RuntimeSettings, unknown>>): RuntimeSettings {
     const defaults = defaultRuntimeSettings();
+    const legacyAgentIntervalMs = (raw as Record<string, unknown>).agentIntervalMs;
     const asPositiveInt = (value: unknown, fallback: number): number => {
       const parsed = Number(value);
       return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
@@ -999,7 +1087,8 @@ class StateStore {
     };
 
     return {
-      agentIntervalMs: asPositiveInt(raw.agentIntervalMs, defaults.agentIntervalMs),
+      scannerIntervalMs: asPositiveInt(raw.scannerIntervalMs ?? legacyAgentIntervalMs, defaults.scannerIntervalMs),
+      agentWakeIntervalMs: asPositiveInt(raw.agentWakeIntervalMs, defaults.agentWakeIntervalMs),
       deepScanIntervalMs: asPositiveInt(raw.deepScanIntervalMs, defaults.deepScanIntervalMs),
       incrementalActiveTargets: asPositiveInt(raw.incrementalActiveTargets, defaults.incrementalActiveTargets),
       deepActiveTargets: asPositiveInt(raw.deepActiveTargets, defaults.deepActiveTargets),
@@ -1349,7 +1438,8 @@ class StateStore {
     const rows = db.prepare("SELECT key, value FROM metadata WHERE key LIKE 'runtime.%'").all() as Array<{ key: string; value: string }>;
     const map = new Map(rows.map((row) => [row.key, row.value]));
     return this.coerceRuntimeSettings({
-      agentIntervalMs: map.get("runtime.agentIntervalMs"),
+      scannerIntervalMs: map.get("runtime.scannerIntervalMs") ?? map.get("runtime.agentIntervalMs"),
+      agentWakeIntervalMs: map.get("runtime.agentWakeIntervalMs"),
       deepScanIntervalMs: map.get("runtime.deepScanIntervalMs"),
       incrementalActiveTargets: map.get("runtime.incrementalActiveTargets"),
       deepActiveTargets: map.get("runtime.deepActiveTargets"),
@@ -1474,6 +1564,7 @@ class StateStore {
       const graphEdges = (db.prepare('SELECT id, "from", "to", type, properties, createdAt, updatedAt FROM graph_edges').all() as Record<string, unknown>[]).map(graphEdgeFromRow);
       const providerConfigs = (db.prepare("SELECT * FROM provider_configs").all() as Record<string, unknown>[]).map(providerConfigFromRow);
       const oauthStates = (db.prepare("SELECT * FROM oauth_states").all() as Record<string, unknown>[]).map(oauthStateFromRow);
+      const scannerRuns = (db.prepare("SELECT * FROM scanner_runs ORDER BY startedAt DESC").all() as Record<string, unknown>[]).map(scannerRunFromRow);
       const agentRuns = (db.prepare("SELECT * FROM agent_runs ORDER BY startedAt DESC").all() as Record<string, unknown>[]).map(agentRunFromRow);
       const runtimeSettings = this.readRuntimeSettings(db);
       const systemSettings = this.readSystemSettings(db);
@@ -1499,6 +1590,7 @@ class StateStore {
         graph: { nodes: graphNodes, edges: graphEdges },
         providerConfigs,
         oauthStates,
+        scannerRuns,
         agentRuns,
         runtimeSettings,
         systemSettings,
@@ -1533,7 +1625,9 @@ class StateStore {
       // Metadata
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('version', ?)").run(String(state.version));
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('initializedAt', ?)").run(state.initializedAt);
-      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.agentIntervalMs', ?)").run(String(state.runtimeSettings.agentIntervalMs));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.scannerIntervalMs', ?)").run(String(state.runtimeSettings.scannerIntervalMs));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.agentIntervalMs', ?)").run(String(state.runtimeSettings.scannerIntervalMs));
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.agentWakeIntervalMs', ?)").run(String(state.runtimeSettings.agentWakeIntervalMs));
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.deepScanIntervalMs', ?)").run(String(state.runtimeSettings.deepScanIntervalMs));
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.incrementalActiveTargets', ?)").run(String(state.runtimeSettings.incrementalActiveTargets));
       db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('runtime.deepActiveTargets', ?)").run(String(state.runtimeSettings.deepActiveTargets));
@@ -1759,6 +1853,19 @@ class StateStore {
       `);
       for (const o of state.oauthStates) {
         insertOAuth.run(o);
+      }
+
+      // Scanner runs
+      db.prepare("DELETE FROM scanner_runs").run();
+      const insertScannerRun = db.prepare(`
+        INSERT INTO scanner_runs (id, startedAt, completedAt, outcome, summary, details)
+        VALUES (@id, @startedAt, @completedAt, @outcome, @summary, @details)
+      `);
+      for (const r of state.scannerRuns) {
+        insertScannerRun.run({
+          id: r.id, startedAt: r.startedAt, completedAt: r.completedAt ?? null,
+          outcome: r.outcome, summary: r.summary, details: JSON.stringify(r.details),
+        });
       }
 
       // Agent runs
@@ -2196,10 +2303,127 @@ class StateStore {
   }
 
   async addAgentRun(run: AgentRunRecord): Promise<void> {
+    await this.upsertAgentRun(run);
+  }
+
+  async addScannerRun(run: ScannerRunRecord): Promise<void> {
+    await this.upsertScannerRun(run);
+  }
+
+  async upsertScannerRun(run: ScannerRunRecord): Promise<void> {
+    this.withDbRecovery("StateStore.upsertScannerRun", (db) => {
+      const tx = db.transaction(() => {
+        db.prepare(`
+          INSERT OR REPLACE INTO scanner_runs (id, startedAt, completedAt, outcome, summary, details)
+          VALUES (@id, @startedAt, @completedAt, @outcome, @summary, @details)
+        `).run({
+          id: run.id,
+          startedAt: run.startedAt,
+          completedAt: run.completedAt ?? null,
+          outcome: run.outcome,
+          summary: run.summary,
+          details: JSON.stringify(run.details),
+        });
+
+        db.prepare(`
+          DELETE FROM scanner_runs WHERE id NOT IN (
+            SELECT id FROM scanner_runs ORDER BY startedAt DESC LIMIT 200
+          )
+        `).run();
+      });
+
+      tx();
+    });
+  }
+
+  getLatestScannerRun(): ScannerRunRecord | null {
+    return this.withDbRecovery("StateStore.getLatestScannerRun", (db) => {
+      const row = db.prepare(`
+        SELECT *
+        FROM scanner_runs
+        ORDER BY startedAt DESC
+        LIMIT 1
+      `).get() as Record<string, unknown> | undefined;
+      return row ? scannerRunFromRow(row) : null;
+    });
+  }
+
+  getLatestSuccessfulScannerRun(): ScannerRunRecord | null {
+    return this.withDbRecovery("StateStore.getLatestSuccessfulScannerRun", (db) => {
+      const row = db.prepare(`
+        SELECT *
+        FROM scanner_runs
+        WHERE outcome = 'ok' AND completedAt IS NOT NULL
+        ORDER BY completedAt DESC, startedAt DESC
+        LIMIT 1
+      `).get() as Record<string, unknown> | undefined;
+      return row ? scannerRunFromRow(row) : null;
+    });
+  }
+
+  markStaleScannerRuns(maxAgeMs: number): number {
+    return this.withDbRecovery("StateStore.markStaleScannerRuns", (db) => {
+      const safeMaxAgeMs = Math.max(60_000, Math.floor(maxAgeMs));
+      const now = new Date().toISOString();
+      const cutoffMs = Date.now() - safeMaxAgeMs;
+      const rows = db.prepare(`
+        SELECT id, startedAt, summary, details
+        FROM scanner_runs
+        WHERE completedAt IS NULL
+      `).all() as Array<Record<string, unknown>>;
+      const update = db.prepare(`
+        UPDATE scanner_runs
+        SET completedAt = @completedAt,
+            outcome = 'error',
+            summary = @summary,
+            details = @details
+        WHERE id = @id
+      `);
+
+      let changes = 0;
+      for (const row of rows) {
+        const details = parseJsonObject(row.details as string);
+        const holderPid = Number(details.pid ?? leaseHolderPid(details.holder));
+        const holderAlive = !Number.isFinite(holderPid) || processExists(holderPid);
+        const startedAtMs = Date.parse(String(row.startedAt ?? ""));
+        const staleByAge = !Number.isFinite(startedAtMs) || startedAtMs <= cutoffMs;
+        if (!staleByAge && holderAlive) {
+          continue;
+        }
+
+        const nextSummary = (() => {
+          const current = String(row.summary ?? "").trim();
+          if (!current) {
+            return "Scanner cycle interrupted before completion.";
+          }
+          if (current.includes("interrupted before completion")) {
+            return current;
+          }
+          return `${current} (interrupted before completion)`;
+        })();
+
+        update.run({
+          id: String(row.id),
+          completedAt: now,
+          summary: nextSummary,
+          details: JSON.stringify({
+            ...details,
+            interrupted: true,
+            interruptedAt: now,
+          }),
+        });
+        changes += 1;
+      }
+
+      return changes;
+    });
+  }
+
+  async upsertAgentRun(run: AgentRunRecord): Promise<void> {
     this.withDbRecovery("StateStore.addAgentRun", (db) => {
       const tx = db.transaction(() => {
         db.prepare(`
-          INSERT INTO agent_runs (id, startedAt, completedAt, outcome, summary, details)
+          INSERT OR REPLACE INTO agent_runs (id, startedAt, completedAt, outcome, summary, details)
           VALUES (@id, @startedAt, @completedAt, @outcome, @summary, @details)
         `).run({
           id: run.id, startedAt: run.startedAt, completedAt: run.completedAt ?? null,
@@ -2216,6 +2440,295 @@ class StateStore {
 
       tx();
     });
+  }
+
+  getLatestAgentRun(): AgentRunRecord | null {
+    return this.withDbRecovery("StateStore.getLatestAgentRun", (db) => {
+      const row = db.prepare(`
+        SELECT *
+        FROM agent_runs
+        ORDER BY startedAt DESC
+        LIMIT 1
+      `).get() as Record<string, unknown> | undefined;
+      return row ? agentRunFromRow(row) : null;
+    });
+  }
+
+  getLatestSuccessfulAgentRun(): AgentRunRecord | null {
+    return this.withDbRecovery("StateStore.getLatestSuccessfulAgentRun", (db) => {
+      const row = db.prepare(`
+        SELECT *
+        FROM agent_runs
+        WHERE outcome = 'ok' AND completedAt IS NOT NULL
+        ORDER BY completedAt DESC, startedAt DESC
+        LIMIT 1
+      `).get() as Record<string, unknown> | undefined;
+      return row ? agentRunFromRow(row) : null;
+    });
+  }
+
+  getLatestAgentRunByWakeReason(wakeReason: string): AgentRunRecord | null {
+    return this.withDbRecovery("StateStore.getLatestAgentRunByWakeReason", (db) => {
+      const row = db.prepare(`
+        SELECT *
+        FROM agent_runs
+        WHERE json_extract(details, '$.wakeReason') = ?
+        ORDER BY startedAt DESC
+        LIMIT 1
+      `).get(wakeReason) as Record<string, unknown> | undefined;
+      return row ? agentRunFromRow(row) : null;
+    });
+  }
+
+  getLatestSuccessfulAgentRunByWakeReason(wakeReason: string): AgentRunRecord | null {
+    return this.withDbRecovery("StateStore.getLatestSuccessfulAgentRunByWakeReason", (db) => {
+      const row = db.prepare(`
+        SELECT *
+        FROM agent_runs
+        WHERE outcome = 'ok'
+          AND completedAt IS NOT NULL
+          AND json_extract(details, '$.wakeReason') = ?
+        ORDER BY completedAt DESC, startedAt DESC
+        LIMIT 1
+      `).get(wakeReason) as Record<string, unknown> | undefined;
+      return row ? agentRunFromRow(row) : null;
+    });
+  }
+
+  markStaleAgentRuns(maxAgeMs: number): number {
+    return this.withDbRecovery("StateStore.markStaleAgentRuns", (db) => {
+      const safeMaxAgeMs = Math.max(60_000, Math.floor(maxAgeMs));
+      const now = new Date().toISOString();
+      const cutoffMs = Date.now() - safeMaxAgeMs;
+      const rows = db.prepare(`
+        SELECT id, startedAt, summary, details
+        FROM agent_runs
+        WHERE completedAt IS NULL
+      `).all() as Array<Record<string, unknown>>;
+      const update = db.prepare(`
+        UPDATE agent_runs
+        SET completedAt = @completedAt,
+            outcome = 'error',
+            summary = @summary,
+            details = @details
+        WHERE id = @id
+      `);
+
+      let changes = 0;
+      for (const row of rows) {
+        const details = parseJsonObject(row.details as string);
+        const holderPid = Number(details.pid ?? leaseHolderPid(details.holder));
+        const holderAlive = !Number.isFinite(holderPid) || processExists(holderPid);
+        const startedAtMs = Date.parse(String(row.startedAt ?? ""));
+        const staleByAge = !Number.isFinite(startedAtMs) || startedAtMs <= cutoffMs;
+        if (!staleByAge && holderAlive) {
+          continue;
+        }
+
+        const nextSummary = (() => {
+          const current = String(row.summary ?? "").trim();
+          if (!current) {
+            return "Scanner cycle interrupted before completion.";
+          }
+          if (current.includes("interrupted before completion")) {
+            return current;
+          }
+          return `${current} (interrupted before completion)`;
+        })();
+
+        const nextDetails = {
+          ...details,
+          interrupted: 1,
+          interruptedAt: now,
+          ...(holderAlive ? {} : { interruptedReason: "holder_process_missing" }),
+        };
+        update.run({
+          id: String(row.id),
+          completedAt: now,
+          summary: nextSummary,
+          details: JSON.stringify(nextDetails),
+        });
+        changes += 1;
+      }
+
+      return changes;
+    });
+  }
+
+  getRuntimeLeases(): ControlPlaneLeaseRecord[] {
+    return this.withDbRecovery("StateStore.getRuntimeLeases", (db) => {
+      const rows = db.prepare(`
+        SELECT *
+        FROM runtime_leases
+        ORDER BY name ASC
+      `).all() as Record<string, unknown>[];
+      return rows.map(runtimeLeaseFromRow);
+    });
+  }
+
+  getRuntimeLease(name: string): ControlPlaneLeaseRecord | null {
+    return this.withDbRecovery("StateStore.getRuntimeLease", (db) => {
+      const row = db.prepare(`
+        SELECT *
+        FROM runtime_leases
+        WHERE name = ?
+        LIMIT 1
+      `).get(name) as Record<string, unknown> | undefined;
+      return row ? runtimeLeaseFromRow(row) : null;
+    });
+  }
+
+  tryAcquireRuntimeLease(
+    name: string,
+    holder: string,
+    ttlMs: number,
+    metadataJson?: Record<string, unknown>,
+  ): { acquired: boolean; lease: ControlPlaneLeaseRecord | null } {
+    return this.withDbRecovery("StateStore.tryAcquireRuntimeLease", (db) => {
+      const safeTtlMs = Math.max(5_000, Math.floor(ttlMs));
+      let acquired = false;
+      let lease: ControlPlaneLeaseRecord | null = null;
+
+      const tx = db.transaction(() => {
+        const row = db.prepare(`
+          SELECT *
+          FROM runtime_leases
+          WHERE name = ?
+          LIMIT 1
+        `).get(name) as Record<string, unknown> | undefined;
+          const existing = row ? runtimeLeaseFromRow(row) : null;
+          const nowMs = Date.now();
+          const existingPidRaw = Number(existing?.metadataJson.pid);
+        const existingHolderAlive = !Number.isFinite(existingPidRaw) || processExists(existingPidRaw);
+        const expired = !existing || Number.isNaN(Date.parse(existing.expiresAt))
+          || Date.parse(existing.expiresAt) <= nowMs
+          || !existingHolderAlive;
+
+        if (!existing || existing.holder === holder || expired) {
+          const updatedAt = new Date(nowMs).toISOString();
+            const nextLease: ControlPlaneLeaseRecord = {
+              name,
+              holder,
+              expiresAt: new Date(nowMs + safeTtlMs).toISOString(),
+            updatedAt,
+            metadataJson: metadataJson ?? existing?.metadataJson ?? {},
+          };
+          db.prepare(`
+            INSERT OR REPLACE INTO runtime_leases (name, holder, expiresAt, updatedAt, metadataJson)
+            VALUES (@name, @holder, @expiresAt, @updatedAt, @metadataJson)
+          `).run({
+            name: nextLease.name,
+            holder: nextLease.holder,
+            expiresAt: nextLease.expiresAt,
+            updatedAt: nextLease.updatedAt,
+            metadataJson: JSON.stringify(nextLease.metadataJson),
+          });
+          acquired = true;
+          lease = nextLease;
+          return;
+        }
+
+        lease = existing;
+      });
+
+      tx();
+      return { acquired, lease };
+    });
+  }
+
+  releaseRuntimeLease(name: string, holder: string): boolean {
+    return this.withDbRecovery("StateStore.releaseRuntimeLease", (db) => {
+      const result = db.prepare(`
+        DELETE FROM runtime_leases
+        WHERE name = ?
+          AND holder = ?
+      `).run(name, holder);
+      return Number(result.changes ?? 0) > 0;
+    });
+  }
+
+  cleanupExpiredRuntimeLeases(): number {
+    return this.withDbRecovery("StateStore.cleanupExpiredRuntimeLeases", (db) => {
+      const result = db.prepare(`
+        DELETE FROM runtime_leases
+        WHERE expiresAt <= ?
+      `).run(new Date().toISOString());
+      return Number(result.changes ?? 0);
+    });
+  }
+
+  getControlPlaneHealth(): ControlPlaneHealth {
+    this.cleanupExpiredRuntimeLeases();
+    const leases = this.getRuntimeLeases();
+    const longRunningThresholdMs = 5 * 60_000;
+    const queueSnapshot = this.withAuditDbRecovery("StateStore.getControlPlaneHealth.queue", (auditDb) => {
+      const rows = auditDb.prepare(`
+        SELECT kind, status, runAfter, updatedAt
+        FROM durable_jobs
+        WHERE kind <> 'action_log'
+      `).all() as Array<Record<string, unknown>>;
+      const lanes = new Map<string, ControlPlaneQueueLane>();
+      let longRunningProcessing = 0;
+
+      for (const row of rows) {
+        const kind = String(row.kind);
+        const status = String(row.status);
+        const lane = lanes.get(kind) ?? {
+          kind,
+          pending: 0,
+          processing: 0,
+          completed: 0,
+        };
+
+        if (status === "pending") {
+          lane.pending += 1;
+          const runAfter = row.runAfter ? String(row.runAfter) : undefined;
+          if (runAfter && (!lane.oldestPendingRunAfter || runAfter < lane.oldestPendingRunAfter)) {
+            lane.oldestPendingRunAfter = runAfter;
+          }
+        } else if (status === "processing") {
+          lane.processing += 1;
+          const updatedAt = row.updatedAt ? String(row.updatedAt) : undefined;
+          if (updatedAt && (!lane.oldestProcessingUpdatedAt || updatedAt < lane.oldestProcessingUpdatedAt)) {
+            lane.oldestProcessingUpdatedAt = updatedAt;
+          }
+          const updatedAtMs = updatedAt ? Date.parse(updatedAt) : Number.NaN;
+          if (Number.isFinite(updatedAtMs) && (Date.now() - updatedAtMs) > longRunningThresholdMs) {
+            longRunningProcessing += 1;
+          }
+        } else if (status === "completed") {
+          lane.completed += 1;
+        }
+
+        const updatedAt = row.updatedAt ? String(row.updatedAt) : undefined;
+        if (updatedAt && (!lane.newestUpdatedAt || updatedAt > lane.newestUpdatedAt)) {
+          lane.newestUpdatedAt = updatedAt;
+        }
+
+        lanes.set(kind, lane);
+      }
+
+      return {
+        queue: Array.from(lanes.values()).sort((a, b) => a.kind.localeCompare(b.kind)),
+        longRunningProcessing,
+      };
+    });
+
+    const queue = queueSnapshot.queue;
+    const summary = {
+      pending: queue.reduce((total, lane) => total + lane.pending, 0),
+      processing: queue.reduce((total, lane) => total + lane.processing, 0),
+      longRunningProcessing: queueSnapshot.longRunningProcessing,
+    };
+
+    return {
+      leases,
+      queue,
+      summary,
+      lastSuccessfulScannerRun: this.getLatestSuccessfulScannerRun(),
+      lastSuccessfulAgentWake: this.getLatestSuccessfulAgentRun(),
+      lastPeriodicAgentWake: this.getLatestSuccessfulAgentRunByWakeReason("periodic_review"),
+    };
   }
 
   getRuntimeSettings(asOf?: string): RuntimeSettings {
@@ -2261,7 +2774,9 @@ class StateStore {
       const write = db.transaction(() => {
         const normalized = this.coerceRuntimeSettings(settings);
         const put = db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)");
-        put.run("runtime.agentIntervalMs", String(normalized.agentIntervalMs));
+        put.run("runtime.scannerIntervalMs", String(normalized.scannerIntervalMs));
+        put.run("runtime.agentIntervalMs", String(normalized.scannerIntervalMs));
+        put.run("runtime.agentWakeIntervalMs", String(normalized.agentWakeIntervalMs));
         put.run("runtime.deepScanIntervalMs", String(normalized.deepScanIntervalMs));
         put.run("runtime.incrementalActiveTargets", String(normalized.incrementalActiveTargets));
         put.run("runtime.deepActiveTargets", String(normalized.deepActiveTargets));
@@ -2668,6 +3183,52 @@ class StateStore {
     });
   }
 
+  requeueStaleDurableJobs(maxAgeMs: number, options?: { kinds?: string[] }): number {
+    return this.withAuditDbRecovery("StateStore.requeueStaleDurableJobs", (auditDb) => {
+      const safeMaxAgeMs = Math.max(10_000, Math.floor(maxAgeMs));
+      const cutoffIso = new Date(Date.now() - safeMaxAgeMs).toISOString();
+      const nowIso = new Date().toISOString();
+      const kinds = Array.from(new Set((options?.kinds ?? []).map((kind) => kind.trim()).filter(Boolean)));
+      if (kinds.length === 0) {
+        const result = auditDb.prepare(`
+          UPDATE durable_jobs
+          SET status = 'pending', updatedAt = ?
+          WHERE status = 'processing' AND updatedAt <= ?
+        `).run(nowIso, cutoffIso);
+        return result.changes;
+      }
+
+      const result = auditDb.prepare(`
+        UPDATE durable_jobs
+        SET status = 'pending', updatedAt = ?
+        WHERE status = 'processing' AND updatedAt <= ? AND kind IN (${kinds.map(() => "?").join(", ")})
+      `).run(nowIso, cutoffIso, ...kinds);
+      return result.changes;
+    });
+  }
+
+  requeueProcessingDurableJobs(options?: { kinds?: string[] }): number {
+    return this.withAuditDbRecovery("StateStore.requeueProcessingDurableJobs", (auditDb) => {
+      const nowIso = new Date().toISOString();
+      const kinds = Array.from(new Set((options?.kinds ?? []).map((kind) => kind.trim()).filter(Boolean)));
+      if (kinds.length === 0) {
+        const result = auditDb.prepare(`
+          UPDATE durable_jobs
+          SET status = 'pending', updatedAt = ?
+          WHERE status = 'processing'
+        `).run(nowIso);
+        return Number(result.changes ?? 0);
+      }
+
+      const result = auditDb.prepare(`
+        UPDATE durable_jobs
+        SET status = 'pending', updatedAt = ?
+        WHERE status = 'processing' AND kind IN (${kinds.map(() => "?").join(", ")})
+      `).run(nowIso, ...kinds);
+      return Number(result.changes ?? 0);
+    });
+  }
+
   completeDurableJob(id: string): void {
     this.withAuditDbRecovery("StateStore.completeDurableJob", (auditDb) => {
       auditDb.prepare(`
@@ -2691,6 +3252,23 @@ class StateStore {
         new Date(now).toISOString(),
         id,
       );
+    });
+  }
+
+  hasDurableJobsInFlight(kinds: string[]): boolean {
+    const normalizedKinds = Array.from(new Set(kinds.map((kind) => kind.trim()).filter(Boolean)));
+    if (normalizedKinds.length === 0) {
+      return false;
+    }
+
+    return this.withAuditDbRecovery("StateStore.hasDurableJobsInFlight", (auditDb) => {
+      const row = auditDb.prepare(`
+        SELECT COUNT(*) AS total
+        FROM durable_jobs
+        WHERE status IN ('pending', 'processing')
+          AND kind IN (${normalizedKinds.map(() => "?").join(", ")})
+      `).get(...normalizedKinds) as { total?: number } | undefined;
+      return Number(row?.total ?? 0) > 0;
     });
   }
 
@@ -4296,6 +4874,68 @@ class StateStore {
       });
 
       return next;
+    });
+  }
+
+  getFindingOccurrences(
+    deviceId: string,
+    options?: {
+      dedupeKey?: string;
+      limit?: number;
+    },
+  ): FindingOccurrence[] {
+    return this.withDbRecovery("StateStore.getFindingOccurrences", (db) => {
+      const params: Array<string | number> = [deviceId];
+      let query = `
+        SELECT *
+        FROM finding_occurrences
+        WHERE deviceId = ?
+      `;
+      if (options?.dedupeKey) {
+        query += " AND dedupeKey = ?";
+        params.push(options.dedupeKey);
+      }
+      query += " ORDER BY observedAt DESC LIMIT ?";
+      params.push(Math.max(1, Math.min(500, options?.limit ?? 100)));
+      const rows = db.prepare(query).all(...params) as Record<string, unknown>[];
+      return rows.map(findingOccurrenceFromRow);
+    });
+  }
+
+  appendFindingOccurrence(occurrence: FindingOccurrence): FindingOccurrence {
+    return this.withDbRecovery("StateStore.appendFindingOccurrence", (db) => {
+      db.prepare(`
+        INSERT INTO finding_occurrences (
+          id, findingId, deviceId, dedupeKey, findingType, severity, status, summary, evidenceJson, source, observedAt, metadataJson
+        )
+        VALUES (
+          @id, @findingId, @deviceId, @dedupeKey, @findingType, @severity, @status, @summary, @evidenceJson, @source, @observedAt, @metadataJson
+        )
+      `).run({
+        id: occurrence.id,
+        findingId: occurrence.findingId ?? null,
+        deviceId: occurrence.deviceId,
+        dedupeKey: occurrence.dedupeKey,
+        findingType: occurrence.findingType,
+        severity: occurrence.severity,
+        status: occurrence.status,
+        summary: occurrence.summary,
+        evidenceJson: JSON.stringify(occurrence.evidenceJson ?? {}),
+        source: occurrence.source,
+        observedAt: occurrence.observedAt,
+        metadataJson: JSON.stringify(occurrence.metadataJson ?? {}),
+      });
+
+      db.prepare(`
+        DELETE FROM finding_occurrences
+        WHERE id NOT IN (
+          SELECT id FROM finding_occurrences
+          ORDER BY observedAt DESC
+          LIMIT 5000
+        )
+      `).run();
+
+      return occurrence;
     });
   }
 

@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { isAuthorized } from "@/lib/auth/guard";
-import { ensureStewardLoop, isStewardCycleRunning, runStewardCycle } from "@/lib/agent/loop";
+import { ensureStewardLoop, isStewardCycleRunning, requestScannerCycle } from "@/lib/agent/loop";
 
 export const runtime = "nodejs";
 
@@ -13,14 +13,12 @@ export async function POST(request: NextRequest) {
 
   if (isStewardCycleRunning()) {
     return NextResponse.json(
-      { ok: false, error: "Agent cycle already running. Wait for the current cycle to finish." },
+      { ok: false, error: "Scanner cycle already running. Wait for the current cycle to finish." },
       { status: 409 },
     );
   }
 
-  void runStewardCycle("manual").catch((error) => {
-    console.error("Manual agent cycle failed", error);
-  });
+  requestScannerCycle("manual");
 
   return NextResponse.json({ ok: true, started: true });
 }

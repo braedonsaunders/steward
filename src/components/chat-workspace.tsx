@@ -668,7 +668,8 @@ function normalizeToolAnchor(content: string, anchorOffset: number | undefined):
   }
 
   if (/:\s*$/.test(leading)) {
-    return content.length;
+    const remaining = content.slice(clamped);
+    return /\S/.test(remaining) ? clamped : content.length;
   }
 
   const lastParagraphBreak = Math.max(leading.lastIndexOf("\n\n"), leading.lastIndexOf("\n"));
@@ -782,24 +783,24 @@ function buildAssistantBlocks(content: string, toolEvents: ChatToolEvent[]): Ass
 }
 
 const markdownComponents = {
-  p: ({ children }: { children?: ReactNode }) => <p className="mb-2 last:mb-0">{children}</p>,
+  p: ({ children }: { children?: ReactNode }) => <p className="mb-2 break-words [overflow-wrap:anywhere] last:mb-0">{children}</p>,
   ul: ({ children }: { children?: ReactNode }) => <ul className="mb-2 list-disc pl-5 last:mb-0">{children}</ul>,
   ol: ({ children }: { children?: ReactNode }) => <ol className="mb-2 list-decimal pl-5 last:mb-0">{children}</ol>,
   code: ({ children }: { children?: ReactNode }) => <code className="rounded bg-muted/50 px-1 py-0.5 text-xs">{children}</code>,
-  pre: ({ children }: { children?: ReactNode }) => <pre className="mb-2 overflow-x-auto rounded bg-muted/50 p-2 text-xs">{children}</pre>,
+  pre: ({ children }: { children?: ReactNode }) => <pre className="mb-2 max-w-full overflow-x-auto rounded bg-muted/50 p-2 text-xs">{children}</pre>,
   table: ({ children }: { children?: ReactNode }) => (
-    <div className="mb-2 w-full overflow-x-auto rounded-md border border-border/70">
-      <table className="w-full border-collapse text-xs">{children}</table>
+    <div className="mb-2 w-full max-w-full overflow-x-auto rounded-md border border-border/70">
+      <table className="w-full table-fixed border-collapse text-xs">{children}</table>
     </div>
   ),
   thead: ({ children }: { children?: ReactNode }) => <thead className="bg-muted/40">{children}</thead>,
   tbody: ({ children }: { children?: ReactNode }) => <tbody>{children}</tbody>,
   tr: ({ children }: { children?: ReactNode }) => <tr className="border-b border-border/60">{children}</tr>,
   th: ({ children }: { children?: ReactNode }) => (
-    <th className="border-r border-border/60 px-3 py-2 text-left font-semibold last:border-r-0">{children}</th>
+    <th className="border-r border-border/60 px-2 py-2 text-left font-semibold break-words whitespace-normal last:border-r-0 sm:px-3">{children}</th>
   ),
   td: ({ children }: { children?: ReactNode }) => (
-    <td className="border-r border-border/60 px-3 py-2 align-top last:border-r-0">{children}</td>
+    <td className="border-r border-border/60 px-2 py-2 align-top break-words whitespace-normal last:border-r-0 sm:px-3">{children}</td>
   ),
 };
 
@@ -914,9 +915,9 @@ const ChatToolEventCard = memo(function ChatToolEventCard({
         </>
       )}
 
-      <div className="relative flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
+      <div className="relative flex min-w-0 flex-wrap items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-background/80 shadow-inner">
               <ToolKindIcon kind={event.kind} className="h-4 w-4" />
             </div>
@@ -950,7 +951,7 @@ const ChatToolEventCard = memo(function ChatToolEventCard({
           )}
         </div>
 
-        <div className="flex shrink-0 flex-col items-end gap-1.5 sm:flex-row sm:items-center">
+        <div className="ml-auto flex w-full shrink-0 flex-wrap items-center justify-end gap-1.5 sm:w-auto sm:flex-col sm:items-end">
           <div
             className={cn(
               "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em]",
@@ -1020,12 +1021,12 @@ const ChatToolEventCard = memo(function ChatToolEventCard({
                   {browserPreview.stepResults.length > 0 ? (
                     <div className="space-y-1.5">
                       {browserPreview.stepResults.map((step, index) => (
-                        <div key={`${step.action}-${index}`} className="flex items-start justify-between gap-2 rounded-md border border-border/60 bg-background/80 px-2 py-1.5 text-[11px]">
-                          <div className="min-w-0">
+                        <div key={`${step.action}-${index}`} className="flex min-w-0 flex-wrap items-start justify-between gap-2 rounded-md border border-border/60 bg-background/80 px-2 py-1.5 text-[11px]">
+                          <div className="min-w-0 flex-1">
                             <p className="truncate font-medium">{step.label ?? step.action}</p>
                             <p className="truncate text-muted-foreground">{step.selector ?? step.url ?? step.text ?? step.result ?? ""}</p>
                           </div>
-                          <Badge variant={step.ok ? "secondary" : "outline"}>{step.ok ? "ok" : "failed"}</Badge>
+                          <Badge className="shrink-0" variant={step.ok ? "secondary" : "outline"}>{step.ok ? "ok" : "failed"}</Badge>
                         </div>
                       ))}
                     </div>
@@ -1080,12 +1081,12 @@ const ChatToolEventCard = memo(function ChatToolEventCard({
                   {remoteDesktopPreview.stepResults.length > 0 ? (
                     <div className="space-y-1.5">
                       {remoteDesktopPreview.stepResults.map((step, index) => (
-                        <div key={`${step.action}-${index}`} className="flex items-start justify-between gap-2 rounded-md border border-border/60 bg-background/80 px-2 py-1.5 text-[11px]">
-                          <div className="min-w-0">
+                        <div key={`${step.action}-${index}`} className="flex min-w-0 flex-wrap items-start justify-between gap-2 rounded-md border border-border/60 bg-background/80 px-2 py-1.5 text-[11px]">
+                          <div className="min-w-0 flex-1">
                             <p className="truncate font-medium">{step.label ?? step.action}</p>
                             <p className="truncate text-muted-foreground">{summarizeRemoteDesktopStep(step)}</p>
                           </div>
-                          <Badge variant={step.ok ? "secondary" : "outline"}>{step.ok ? "ok" : "failed"}</Badge>
+                          <Badge className="shrink-0" variant={step.ok ? "secondary" : "outline"}>{step.ok ? "ok" : "failed"}</Badge>
                         </div>
                       ))}
                     </div>
@@ -1105,7 +1106,7 @@ const ChatToolEventCard = memo(function ChatToolEventCard({
                   {(deviceSettingsPreview.previousName || deviceSettingsPreview.nextName) && (
                     <div className="rounded-md border border-border/60 bg-background/80 px-2 py-1.5">
                       <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Name</p>
-                      <p className="font-medium text-foreground">
+                      <p className="break-words font-medium text-foreground">
                         {deviceSettingsPreview.previousName ?? "-"} -&gt; {deviceSettingsPreview.nextName ?? "-"}
                       </p>
                       {deviceSettingsPreview.inferredName ? (
@@ -1116,7 +1117,7 @@ const ChatToolEventCard = memo(function ChatToolEventCard({
                   {(deviceSettingsPreview.previousType || deviceSettingsPreview.nextType) && (
                     <div className="rounded-md border border-border/60 bg-background/80 px-2 py-1.5">
                       <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Category</p>
-                      <p className="font-medium text-foreground">
+                      <p className="break-words font-medium text-foreground">
                         {deviceSettingsPreview.previousType ?? "-"} -&gt; {deviceSettingsPreview.nextType ?? "-"}
                       </p>
                       {deviceSettingsPreview.inferredType ? (
@@ -1164,7 +1165,13 @@ const ChatToolEventStrip = memo(function ChatToolEventStrip({
   );
 });
 
-const ChatMessageBubble = memo(function ChatMessageBubble({ msg }: { msg: ChatMessage }) {
+const ChatMessageBubble = memo(function ChatMessageBubble({
+  msg,
+  narrow = false,
+}: {
+  msg: ChatMessage;
+  narrow?: boolean;
+}) {
   const rawToolEvents = msg.metadata?.toolEvents;
   const toolEvents = useMemo(() => rawToolEvents ?? [], [rawToolEvents]);
   const showWidgets = msg.role === "assistant" && toolEvents.length > 0;
@@ -1177,24 +1184,31 @@ const ChatMessageBubble = memo(function ChatMessageBubble({ msg }: { msg: ChatMe
   return (
     <div
       className={cn(
-        "flex gap-3",
+        "flex min-w-0 gap-3",
+        narrow && "gap-0",
         msg.role === "user" ? "flex-row-reverse" : "flex-row",
       )}
     >
-      <div
-        className={cn(
-          "flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
-          msg.role === "user"
-            ? "bg-primary text-primary-foreground"
-            : "bg-muted text-muted-foreground",
-        )}
-      >
-        {msg.role === "user" ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
-      </div>
+      {!narrow && (
+        <div
+          className={cn(
+            "flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
+            msg.role === "user"
+              ? "bg-primary text-primary-foreground"
+              : "bg-muted text-muted-foreground",
+          )}
+        >
+          {msg.role === "user" ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
+        </div>
+      )}
 
       <div
         className={cn(
-          "max-w-[85%] rounded-2xl px-4 py-2.5",
+          "min-w-0 rounded-2xl px-4 py-2.5",
+          narrow && "px-3 py-2",
+          msg.role === "user"
+            ? "max-w-[85%]"
+            : "flex-1 max-w-[min(100%,46rem)]",
           msg.role === "user"
             ? "bg-primary text-primary-foreground"
             : msg.error
@@ -1211,7 +1225,7 @@ const ChatMessageBubble = memo(function ChatMessageBubble({ msg }: { msg: ChatMe
           <p className="mb-1 text-[10px] font-medium uppercase tracking-wider">Error</p>
         )}
 
-        <div className="space-y-3 text-sm leading-relaxed">
+        <div className="min-w-0 space-y-3 text-sm leading-relaxed [overflow-wrap:anywhere]">
           {showWidgets
             ? orderedBlocks.map((block) => (
               block.type === "text" ? (
@@ -1296,10 +1310,12 @@ export function ChatWorkspace({
 
   // UI
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [workspaceWidth, setWorkspaceWidth] = useState(0);
   const [newChatDeviceId, setNewChatDeviceId] = useState<string>(sessionScope === "device" && initialDeviceId ? initialDeviceId : "__none__");
   const [groupBy, setGroupBy] = useState<"recent" | "device">("recent");
   const [showDeviceChats, setShowDeviceChats] = useState(sessionScope === "device");
 
+  const workspaceRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const deepLinkAppliedRef = useRef(false);
@@ -1379,6 +1395,8 @@ export function ChatWorkspace({
     ? (isOnboardingChatSession(activeSession) ? null : activeSessionBlockReason)
     : selectedDeviceBlockReason;
   const blockedDevice = activeSessionDevice ?? selectedDevice;
+  const sidebarDocked = deviceScoped || workspaceWidth >= (compact ? 960 : 768);
+  const narrowDeviceSidebar = compact && deviceScoped;
 
   const groupedSessions = useMemo(() => {
     if (deviceScoped) {
@@ -1445,12 +1463,30 @@ export function ChatWorkspace({
   }, []);
 
   useEffect(() => {
-    const query = window.matchMedia("(max-width: 767px)");
-    const syncSidebarMode = () => setSidebarOpen(!query.matches);
-    syncSidebarMode();
-    query.addEventListener("change", syncSidebarMode);
-    return () => query.removeEventListener("change", syncSidebarMode);
+    const target = workspaceRef.current;
+    if (!target) {
+      return;
+    }
+
+    const updateWidth = () => {
+      setWorkspaceWidth(Math.round(target.getBoundingClientRect().width));
+    };
+
+    updateWidth();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateWidth);
+      return () => window.removeEventListener("resize", updateWidth);
+    }
+
+    const observer = new ResizeObserver(() => updateWidth());
+    observer.observe(target);
+    return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    setSidebarOpen(sidebarDocked);
+  }, [sidebarDocked]);
 
   useEffect(() => {
     if (sessionRefreshToken === undefined) return;
@@ -1789,17 +1825,24 @@ export function ChatWorkspace({
   };
 
   return (
-    <div className="relative flex h-full min-h-0 min-w-0 w-full flex-1 overflow-hidden">
+    <div ref={workspaceRef} className="relative flex h-full min-h-0 min-w-0 w-full flex-1 overflow-hidden">
       {/* Sidebar */}
       <div
         className={cn(
           "z-30 flex h-full min-w-0 shrink-0 flex-col overflow-x-hidden border-r bg-card/40 transition-all duration-200",
           sidebarOpen
             ? cn(
-                "absolute inset-y-0 left-0 md:relative",
-                compact ? "w-[min(82vw,300px)] md:w-[248px]" : "w-[min(86vw,320px)] md:w-[268px]",
+                sidebarDocked
+                  ? compact
+                    ? deviceScoped
+                      ? "relative w-[172px] min-w-[152px] max-w-[31%]"
+                      : "relative w-[248px]"
+                    : "relative w-[268px]"
+                  : compact
+                    ? "absolute inset-y-0 left-0 w-[min(82vw,300px)]"
+                    : "absolute inset-y-0 left-0 w-[min(86vw,320px)]",
               )
-            : "w-0 -translate-x-full overflow-hidden border-r-0 md:translate-x-0",
+            : "w-0 -translate-x-full overflow-hidden border-r-0",
         )}
       >
         {/* Sidebar header */}
@@ -1951,19 +1994,20 @@ export function ChatWorkspace({
                         <p className="text-[10px] text-muted-foreground">
                           {relativeDate(session.updatedAt)}
                         </p>
-                        {attachedDevice && (
+                        {attachedDevice && !narrowDeviceSidebar && (
                           <p className="mt-0.5 flex items-center gap-1 truncate text-[10px] text-muted-foreground">
                             <Server className="h-2.5 w-2.5 shrink-0" />
                             <span className="truncate">{attachedDevice.name}</span>
                           </p>
                         )}
                       </button>
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 px-1.5 text-[10px] font-medium text-muted-foreground hover:text-foreground"
-                          onClick={() => promptRenameSession(session)}
+                      {!narrowDeviceSidebar && (
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-1.5 text-[10px] font-medium text-muted-foreground hover:text-foreground"
+                            onClick={() => promptRenameSession(session)}
                         >
                           Rename
                         </Button>
@@ -1972,10 +2016,11 @@ export function ChatWorkspace({
                           size="sm"
                           className="h-6 px-1.5 text-[10px] font-medium text-muted-foreground hover:text-destructive"
                           onClick={() => confirmDeleteSession(session)}
-                        >
-                          Delete
-                        </Button>
-                      </div>
+                          >
+                            Delete
+                          </Button>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -1985,10 +2030,10 @@ export function ChatWorkspace({
         </ScrollArea>
       </div>
 
-      {sidebarOpen && (
+      {sidebarOpen && !sidebarDocked && (
         <button
           type="button"
-          className="absolute inset-0 z-20 bg-background/45 backdrop-blur-[1px] md:hidden"
+          className="absolute inset-0 z-20 bg-background/45 backdrop-blur-[1px]"
           aria-label="Close chat sidebar"
           onClick={() => setSidebarOpen(false)}
         />
@@ -2000,7 +2045,7 @@ export function ChatWorkspace({
         <div
           className={cn(
             "flex shrink-0 items-center gap-3 border-b bg-card/60 px-4 py-3 backdrop-blur md:px-6",
-            compact && "gap-2 px-3 py-2 md:px-4",
+            compact && "flex-wrap items-start gap-2 px-3 py-2 md:px-4",
           )}
         >
           {!sidebarOpen && (
@@ -2037,7 +2082,7 @@ export function ChatWorkspace({
             )}
           </div>
 
-          <div className={cn("ml-auto flex items-center gap-3", compact && "gap-2")}>
+          <div className={cn("ml-auto flex min-w-0 items-center gap-3", compact && "flex-wrap justify-end gap-2")}>
             {activeSession && (
               deviceScoped ? (
                 <>
@@ -2096,7 +2141,7 @@ export function ChatWorkspace({
               onValueChange={(v) => setSelectedProvider(v as LLMProvider)}
               disabled={enabledProviders.length === 0}
             >
-              <SelectTrigger className={cn("w-[150px]", compact && "h-8 w-[128px] text-xs")}>
+              <SelectTrigger className={cn("w-[150px] max-w-full", compact && "h-8 w-[112px] text-xs")}>
                 <SelectValue placeholder="Provider" />
               </SelectTrigger>
               <SelectContent>
@@ -2111,9 +2156,11 @@ export function ChatWorkspace({
               </SelectContent>
             </Select>
 
-            <Badge variant="outline" className={cn("hidden text-xs sm:inline-flex", compact && "text-[10px]")}>
-              {activeModel}
-            </Badge>
+            {!compact && (
+              <Badge variant="outline" className="hidden text-xs sm:inline-flex">
+                {activeModel}
+              </Badge>
+            )}
           </div>
         </div>
 
@@ -2123,7 +2170,7 @@ export function ChatWorkspace({
             ref={scrollRef}
             className={cn(
               "h-full overflow-y-auto px-4 py-4 md:px-6",
-              compact && "px-3 py-3 md:px-4",
+              compact && "px-2 py-3 md:px-4",
             )}
             onScroll={(event) => {
               const el = event.currentTarget;
@@ -2185,7 +2232,7 @@ export function ChatWorkspace({
                 )}
 
                 {messages.map((msg) => (
-                  <ChatMessageBubble key={msg.id} msg={msg} />
+                  <ChatMessageBubble key={msg.id} msg={msg} narrow={compact && deviceScoped} />
                 ))}
               </div>
             )}

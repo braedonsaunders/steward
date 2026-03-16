@@ -132,6 +132,7 @@ export function DeviceAccessPanel({
   const [password, setPassword] = useState("");
   const [saving, setSaving] = useState(false);
   const [deletingCredentialId, setDeletingCredentialId] = useState<string | null>(null);
+  const visibleProfiles = (snapshot?.profiles ?? []).filter((profile) => profile.status !== "rejected");
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -178,7 +179,7 @@ export function DeviceAccessPanel({
       if (!res.ok || !Array.isArray(data)) {
         throw new Error((data as { error?: string }).error ?? "Failed to load adapters");
       }
-      const boundAdapterIds = new Set((snapshot?.profiles ?? []).map((profile) => profile.adapterId).filter((value): value is string => Boolean(value)));
+      const boundAdapterIds = new Set(visibleProfiles.map((profile) => profile.adapterId).filter((value): value is string => Boolean(value)));
       const nextCatalog = data
         .filter((adapter) => Array.isArray(adapter.provides) && adapter.provides.some((capability) => ["profile", "protocol", "enrichment"].includes(capability)))
         .filter((adapter) => !boundAdapterIds.has(adapter.id))
@@ -196,7 +197,7 @@ export function DeviceAccessPanel({
     } finally {
       setAdapterCatalogLoading(false);
     }
-  }, [snapshot?.profiles]);
+  }, [visibleProfiles]);
 
   const openAdapterDialog = async () => {
     await loadAdapterCatalog();
@@ -376,9 +377,9 @@ export function DeviceAccessPanel({
           <Puzzle className="size-4 text-muted-foreground" />
           <CardTitle className="text-base">Adapters</CardTitle>
           <div className="ml-auto flex items-center gap-2">
-            {(snapshot?.profiles.length ?? 0) > 0 ? (
+            {visibleProfiles.length > 0 ? (
               <Badge variant="secondary" className="tabular-nums">
-                {snapshot?.profiles.length}
+                {visibleProfiles.length}
               </Badge>
             ) : null}
             <Button size="sm" variant="outline" onClick={() => void openAdapterDialog()} disabled={adapterCatalogLoading || loading}>
@@ -393,14 +394,14 @@ export function DeviceAccessPanel({
         <CardDescription>Recommended, attached, and manually managed adapters for this device</CardDescription>
       </CardHeader>
       <CardContent className="min-h-0 flex-1">
-        {(snapshot?.profiles.length ?? 0) === 0 ? (
+        {visibleProfiles.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 py-8 text-center">
             <Puzzle className="size-8 text-muted-foreground/40" />
             <p className="text-sm text-muted-foreground">No adapters matched this device yet</p>
           </div>
         ) : (
           <ul className="h-full space-y-2 overflow-auto pr-1">
-            {snapshot!.profiles.map((profile) => {
+            {visibleProfiles.map((profile) => {
               const selected = ["selected", "verified", "active"].includes(profile.status);
               const manual = profile.draftJson?.manualBinding === true;
               return (

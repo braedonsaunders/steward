@@ -489,7 +489,7 @@ export default function IncidentsPage() {
             incidents={pagedIncidents}
             emptyMessage={
               incidents.length === 0
-                ? "No incidents have been detected yet. Run an agent cycle to scan for issues."
+                ? "No incidents have been detected yet. Run a scanner cycle to scan for issues."
                 : "Try adjusting your search or filter criteria."
             }
             actionBusy={actionBusy}

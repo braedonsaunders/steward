@@ -27,7 +27,14 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs";
-import type { ActionLog, AgentRunRecord } from "@/lib/state/types";
+import {
+  constrainedDiscoveryPhases,
+  formatDurationMs,
+  parseDiscoveryDiagnostics,
+  phaseStatusLabel,
+  slowestDiscoveryPhase,
+} from "@/lib/discovery/diagnostics";
+import type { ActionLog, AgentRunRecord, ScannerRunRecord } from "@/lib/state/types";
 
 // ---------------------------------------------------------------------------
 // Relative time helper
@@ -169,13 +176,25 @@ function ActionEntry({ action }: { action: ActionLog }) {
 }
 
 // ---------------------------------------------------------------------------
-// Agent Run Entry
+// Run Entry
 // ---------------------------------------------------------------------------
 
-function AgentRunEntry({ run }: { run: AgentRunRecord }) {
+function RunEntry({
+  run,
+  kind,
+  fallbackLabel,
+}: {
+  run: AgentRunRecord | ScannerRunRecord;
+  kind: "agent" | "scanner";
+  fallbackLabel: string;
+}) {
   const [expanded, setExpanded] = useState(false);
   const hasDetails = Object.keys(run.details).length > 0;
   const isRunning = !run.completedAt;
+  const wakeReason = typeof run.details.wakeReason === "string" ? run.details.wakeReason : null;
+  const discovery = kind === "scanner" ? parseDiscoveryDiagnostics(run.details) : null;
+  const constrainedPhases = constrainedDiscoveryPhases(discovery);
+  const slowestPhase = slowestDiscoveryPhase(discovery);
 
   return (
     <div className="group rounded-lg border bg-card/60 transition-colors hover:bg-card/90">
@@ -205,10 +224,15 @@ function AgentRunEntry({ run }: { run: AgentRunRecord }) {
         {/* Content */}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <p className="text-sm font-medium leading-snug">{run.summary || "Agent cycle"}</p>
+            <p className="text-sm font-medium leading-snug">{run.summary || fallbackLabel}</p>
             <Badge variant={run.outcome === "ok" ? "default" : "destructive"} className="text-[10px]">
               {run.outcome}
             </Badge>
+            {wakeReason ? (
+              <Badge variant="outline" className="text-[10px]">
+                {wakeReason.replace(/_/g, " ")}
+              </Badge>
+            ) : null}
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-3 text-[10px] text-muted-foreground">
             <span className="flex items-center gap-1">
@@ -223,12 +247,76 @@ function AgentRunEntry({ run }: { run: AgentRunRecord }) {
               <span className="font-medium text-primary">Running...</span>
             )}
           </div>
+          {discovery ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+              <Badge variant="outline" className="text-[10px]">
+                {discovery.scanMode}
+              </Badge>
+              <span>Discovery {formatDurationMs(discovery.elapsedMs)}</span>
+              {discovery.budgetMs ? <span>Budget {formatDurationMs(discovery.budgetMs)}</span> : null}
+              {constrainedPhases.length > 0 ? (
+                <Badge variant="secondary" className="text-[10px]">
+                  {constrainedPhases.length} limited
+                </Badge>
+              ) : null}
+              {discovery.failedPhaseCount > 0 ? (
+                <Badge variant="destructive" className="text-[10px]">
+                  {discovery.failedPhaseCount} failed
+                </Badge>
+              ) : null}
+              {slowestPhase ? (
+                <span>
+                  Slowest {slowestPhase.label} {formatDurationMs(slowestPhase.elapsedMs)}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </button>
 
       {/* Expandable details */}
       {expanded && hasDetails && (
         <div className="border-t px-4 py-3">
+          {discovery ? (
+            <div className="mb-3 space-y-2">
+              <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+                <Badge variant="outline" className="text-[10px]">
+                  {discovery.phaseCount} phase{discovery.phaseCount === 1 ? "" : "s"}
+                </Badge>
+                {constrainedPhases.length > 0 ? (
+                  <Badge variant="secondary" className="text-[10px]">
+                    {constrainedPhases.length} constrained
+                  </Badge>
+                ) : null}
+                {discovery.failedPhaseCount > 0 ? (
+                  <Badge variant="destructive" className="text-[10px]">
+                    {discovery.failedPhaseCount} failed
+                  </Badge>
+                ) : null}
+              </div>
+              <div className="space-y-2">
+                {discovery.phases.map((phase) => (
+                  <div key={phase.key} className="rounded-md border bg-muted/20 px-3 py-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-xs font-medium text-foreground">{phase.label}</p>
+                      <Badge
+                        variant={phase.status === "failed" ? "destructive" : phase.status === "timed_out" ? "secondary" : "outline"}
+                        className="text-[10px]"
+                      >
+                        {phaseStatusLabel(phase.status)}
+                      </Badge>
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-3 text-[10px] text-muted-foreground">
+                      <span>{formatDurationMs(phase.elapsedMs)}</span>
+                      {phase.budgetMs ? <span>budget {formatDurationMs(phase.budgetMs)}</span> : null}
+                      {typeof phase.targetCount === "number" ? <span>targets {phase.targetCount}</span> : null}
+                    </div>
+                    {phase.note ? <p className="mt-1 text-[10px] text-muted-foreground">{phase.note}</p> : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
           <pre className="overflow-x-auto rounded-md bg-muted/50 p-3 font-mono text-xs leading-relaxed text-muted-foreground">
             {JSON.stringify(run.details, null, 2)}
           </pre>
@@ -263,12 +351,13 @@ const KIND_OPTIONS = [
 ];
 
 export default function ActivityPage() {
-  const { actions, agentRuns, loading } = useSteward();
+  const { actions, scannerRuns, agentRuns, controlPlane, loading } = useSteward();
 
   const [actorFilter, setActorFilter] = useState("all");
   const [kindFilter, setKindFilter] = useState("all");
   const [actionsPage, setActionsPage] = useState(1);
-  const [runsPage, setRunsPage] = useState(1);
+  const [scannerRunsPage, setScannerRunsPage] = useState(1);
+  const [agentRunsPage, setAgentRunsPage] = useState(1);
   const pageSize = 20;
 
   // Filter and limit actions
@@ -288,19 +377,33 @@ export default function ActivityPage() {
     return result;
   }, [actions, actorFilter, kindFilter]);
 
-  // Sort agent runs newest first
-  const sortedRuns = useMemo(() => {
+  const sortedScannerRuns = useMemo(() => {
+    return [...scannerRuns].sort(
+      (a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime(),
+    );
+  }, [scannerRuns]);
+
+  const sortedAgentRuns = useMemo(() => {
     return [...agentRuns].sort(
       (a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime(),
     );
   }, [agentRuns]);
 
   const actionsTotalPages = Math.max(1, Math.ceil(filteredActions.length / pageSize));
-  const runsTotalPages = Math.max(1, Math.ceil(sortedRuns.length / pageSize));
+  const scannerRunsTotalPages = Math.max(1, Math.ceil(sortedScannerRuns.length / pageSize));
+  const agentRunsTotalPages = Math.max(1, Math.ceil(sortedAgentRuns.length / pageSize));
   const currentActionsPage = Math.min(actionsPage, actionsTotalPages);
-  const currentRunsPage = Math.min(runsPage, runsTotalPages);
+  const currentScannerRunsPage = Math.min(scannerRunsPage, scannerRunsTotalPages);
+  const currentAgentRunsPage = Math.min(agentRunsPage, agentRunsTotalPages);
   const pagedActions = filteredActions.slice((currentActionsPage - 1) * pageSize, currentActionsPage * pageSize);
-  const pagedRuns = sortedRuns.slice((currentRunsPage - 1) * pageSize, currentRunsPage * pageSize);
+  const pagedScannerRuns = sortedScannerRuns.slice(
+    (currentScannerRunsPage - 1) * pageSize,
+    currentScannerRunsPage * pageSize,
+  );
+  const pagedAgentRuns = sortedAgentRuns.slice(
+    (currentAgentRunsPage - 1) * pageSize,
+    currentAgentRunsPage * pageSize,
+  );
 
   if (loading) {
     return (
@@ -324,7 +427,7 @@ export default function ActivityPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight steward-heading-font">Activity</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Audit trail of actions and agent cycle history.
+          Audit trail of actions, scanner cycles, and operator-triggered assistant work.
         </p>
       </div>
 
@@ -339,13 +442,29 @@ export default function ActivityPage() {
               </span>
             )}
           </TabsTrigger>
-          <TabsTrigger value="runs">
+          <TabsTrigger value="scanner-runs">
+            Scanner Runs
+            {scannerRuns.length > 0 && (
+              <span className="ml-1.5 text-[10px] text-muted-foreground">
+                ({scannerRuns.length})
+              </span>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="agent-runs">
             Agent Runs
             {agentRuns.length > 0 && (
               <span className="ml-1.5 text-[10px] text-muted-foreground">
                 ({agentRuns.length})
               </span>
             )}
+          </TabsTrigger>
+          <TabsTrigger value="queue-health">
+            Queue Health
+            {controlPlane ? (
+              <span className="ml-1.5 text-[10px] text-muted-foreground">
+                ({controlPlane.summary.pending + controlPlane.summary.processing})
+              </span>
+            ) : null}
           </TabsTrigger>
         </TabsList>
 
@@ -411,7 +530,7 @@ export default function ActivityPage() {
             <Card className="bg-card/60">
               <CardContent className="py-12 text-center text-sm text-muted-foreground">
                 {actions.length === 0
-                  ? "No actions recorded yet. Run an agent cycle to generate activity."
+                  ? "No actions recorded yet. Run a scanner cycle to generate activity."
                   : "No actions match the current filters."}
               </CardContent>
             </Card>
@@ -432,29 +551,142 @@ export default function ActivityPage() {
           </div>
         </TabsContent>
 
-        {/* Agent Runs Tab */}
-        <TabsContent value="runs" className="mt-4 min-h-0 flex-1 overflow-auto">
-          {sortedRuns.length === 0 ? (
+        <TabsContent value="scanner-runs" className="mt-4 min-h-0 flex-1 overflow-auto">
+          {sortedScannerRuns.length === 0 ? (
             <Card className="bg-card/60">
               <CardContent className="py-12 text-center text-sm text-muted-foreground">
-                No agent runs recorded yet. Trigger a cycle from the dashboard or settings.
+                No scanner runs recorded yet. Trigger a cycle from the dashboard or settings.
               </CardContent>
             </Card>
           ) : (
             <div className="space-y-4">
               <div className="space-y-2">
-              {pagedRuns.map((run) => (
-                <AgentRunEntry key={run.id} run={run} />
+              {pagedScannerRuns.map((run) => (
+                <RunEntry key={run.id} run={run} kind="scanner" fallbackLabel="Scanner cycle" />
               ))}
               </div>
-              {sortedRuns.length > pageSize && (
+              {sortedScannerRuns.length > pageSize && (
                 <div className="flex items-center justify-end gap-2">
-                  <button type="button" className="rounded-md border px-3 py-1 text-xs disabled:opacity-50" onClick={() => setRunsPage((p) => Math.max(1, p - 1))} disabled={currentRunsPage === 1}>Prev</button>
-                  <span className="text-xs text-muted-foreground tabular-nums">Page {currentRunsPage} / {runsTotalPages}</span>
-                  <button type="button" className="rounded-md border px-3 py-1 text-xs disabled:opacity-50" onClick={() => setRunsPage((p) => Math.min(runsTotalPages, p + 1))} disabled={currentRunsPage >= runsTotalPages}>Next</button>
+                  <button type="button" className="rounded-md border px-3 py-1 text-xs disabled:opacity-50" onClick={() => setScannerRunsPage((p) => Math.max(1, p - 1))} disabled={currentScannerRunsPage === 1}>Prev</button>
+                  <span className="text-xs text-muted-foreground tabular-nums">Page {currentScannerRunsPage} / {scannerRunsTotalPages}</span>
+                  <button type="button" className="rounded-md border px-3 py-1 text-xs disabled:opacity-50" onClick={() => setScannerRunsPage((p) => Math.min(scannerRunsTotalPages, p + 1))} disabled={currentScannerRunsPage >= scannerRunsTotalPages}>Next</button>
                 </div>
               )}
             </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="agent-runs" className="mt-4 min-h-0 flex-1 overflow-auto">
+          {sortedAgentRuns.length === 0 ? (
+            <Card className="bg-card/60">
+              <CardContent className="py-12 text-center text-sm text-muted-foreground">
+                No agent wakes recorded yet. Agent runs now represent semantic, review, and diagnosis wakes.
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-4">
+              <div className="space-y-2">
+              {pagedAgentRuns.map((run) => (
+                <RunEntry key={run.id} run={run} kind="agent" fallbackLabel="Agent wake" />
+              ))}
+              </div>
+              {sortedAgentRuns.length > pageSize && (
+                <div className="flex items-center justify-end gap-2">
+                  <button type="button" className="rounded-md border px-3 py-1 text-xs disabled:opacity-50" onClick={() => setAgentRunsPage((p) => Math.max(1, p - 1))} disabled={currentAgentRunsPage === 1}>Prev</button>
+                  <span className="text-xs text-muted-foreground tabular-nums">Page {currentAgentRunsPage} / {agentRunsTotalPages}</span>
+                  <button type="button" className="rounded-md border px-3 py-1 text-xs disabled:opacity-50" onClick={() => setAgentRunsPage((p) => Math.min(agentRunsTotalPages, p + 1))} disabled={currentAgentRunsPage >= agentRunsTotalPages}>Next</button>
+                </div>
+              )}
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="queue-health" className="mt-4 min-h-0 flex-1 overflow-auto">
+          {controlPlane ? (
+            <div className="space-y-4">
+              <Card className="bg-card/60">
+                <CardContent className="grid gap-3 p-4 md:grid-cols-3">
+                  <div className="rounded-md border bg-background/60 px-3 py-2">
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Pending Jobs</p>
+                    <p className="mt-1 text-lg font-semibold">{controlPlane.summary.pending}</p>
+                  </div>
+                  <div className="rounded-md border bg-background/60 px-3 py-2">
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Processing Jobs</p>
+                    <p className="mt-1 text-lg font-semibold">{controlPlane.summary.processing}</p>
+                  </div>
+                  <div className="rounded-md border bg-background/60 px-3 py-2">
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Long-running Jobs</p>
+                    <p className="mt-1 text-lg font-semibold">{controlPlane.summary.longRunningProcessing}</p>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-card/60">
+                <CardContent className="space-y-3 p-4">
+                  <div>
+                    <p className="text-sm font-medium">Worker Leases</p>
+                    <p className="text-xs text-muted-foreground">Current ownership and expiry for active control-plane workers.</p>
+                  </div>
+                  {controlPlane.leases.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No runtime leases recorded yet.</p>
+                  ) : (
+                    controlPlane.leases.map((lease) => {
+                      return (
+                        <div key={lease.name} className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-background/60 px-3 py-2 text-xs">
+                          <div className="space-y-0.5">
+                            <p className="font-medium text-foreground">{lease.name}</p>
+                            <p className="text-muted-foreground">{lease.holder}</p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
+                            <Badge variant="outline" className="text-[10px]">
+                              lease
+                            </Badge>
+                            <span>Updated {relativeTime(lease.updatedAt)}</span>
+                            <span>Expires {formatTimestamp(lease.expiresAt)}</span>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="bg-card/60">
+                <CardContent className="space-y-3 p-4">
+                  <div>
+                    <p className="text-sm font-medium">Queue Lanes</p>
+                    <p className="text-xs text-muted-foreground">Per-kind backlog and processing state for the control plane.</p>
+                  </div>
+                  {controlPlane.queue.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No queued control-plane jobs recorded yet.</p>
+                  ) : (
+                    controlPlane.queue.map((lane) => (
+                      <div key={lane.kind} className="rounded-md border bg-background/60 px-3 py-2 text-xs">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="font-medium text-foreground">{lane.kind}</p>
+                          <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
+                            <span>pending {lane.pending}</span>
+                            <span>processing {lane.processing}</span>
+                            <span>completed {lane.completed}</span>
+                          </div>
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center gap-3 text-muted-foreground">
+                          {lane.oldestPendingRunAfter ? <span>Oldest due {relativeTime(lane.oldestPendingRunAfter)}</span> : null}
+                          {lane.oldestProcessingUpdatedAt ? <span>Oldest processing update {relativeTime(lane.oldestProcessingUpdatedAt)}</span> : null}
+                          {lane.newestUpdatedAt ? <span>Latest update {relativeTime(lane.newestUpdatedAt)}</span> : null}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          ) : (
+            <Card className="bg-card/60">
+              <CardContent className="py-12 text-center text-sm text-muted-foreground">
+                Control-plane health has not loaded yet.
+              </CardContent>
+            </Card>
           )}
         </TabsContent>
       </Tabs>

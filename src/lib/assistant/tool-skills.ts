@@ -622,6 +622,7 @@ function inferAdapterForKind(kind: OperationKind, device: Device): string {
 }
 
 const HTTP_PORT_PREFERENCE = [80, 8080, 8000, 9000, 5000, 443, 8443, 7443, 9443, 5001];
+const HTTPS_PORT_PREFERENCE = [443, 8443, 7443, 9443, 5001];
 const HTTPS_PORT_HINTS = new Set([443, 8443, 7443, 9443, 5001, 5986, 8883, 2376]);
 const HTTP_PORT_HINTS = new Set([80, 8080, 8000, 9000, 5000, 5985, 1883, 2375]);
 const SSH_PORT_PREFERENCE = [22, 2222, 2200];
@@ -1681,27 +1682,114 @@ function buildAdapterPackagePayload(
   };
 }
 
-function preferredWebAccessMethod(device: Device): AccessMethod | null {
+function rankWebAccessMethodStatus(value: AccessMethod["status"]): number {
+  return value === "validated"
+    ? 0
+    : value === "credentialed"
+      ? 1
+      : value === "observed"
+        ? 2
+        : 3;
+}
+
+function webSurfacePortRank(port: number | undefined, secure: boolean): number {
+  const value = port ?? -1;
+  const preferredPorts = secure ? HTTPS_PORT_PREFERENCE : HTTP_PORT_PREFERENCE;
+  const preferredIdx = preferredPorts.indexOf(value);
+  if (preferredIdx !== -1) {
+    return preferredIdx;
+  }
+  const fallbackIdx = HTTP_PORT_PREFERENCE.indexOf(value);
+  return fallbackIdx === -1 ? 999 : fallbackIdx + 100;
+}
+
+function compareWebAccessMethods(
+  left: AccessMethod,
+  right: AccessMethod,
+  securePreference?: boolean,
+): number {
+  const leftSecure = Boolean(left.secure);
+  const rightSecure = Boolean(right.secure);
+  if (leftSecure !== rightSecure) {
+    if (securePreference === false) {
+      return leftSecure ? 1 : -1;
+    }
+    return leftSecure ? -1 : 1;
+  }
+  if (rankWebAccessMethodStatus(left.status) !== rankWebAccessMethodStatus(right.status)) {
+    return rankWebAccessMethodStatus(left.status) - rankWebAccessMethodStatus(right.status);
+  }
+  const leftRank = webSurfacePortRank(left.port, leftSecure);
+  const rightRank = webSurfacePortRank(right.port, rightSecure);
+  if (leftRank !== rightRank) {
+    return leftRank - rightRank;
+  }
+  return (left.port ?? 0) - (right.port ?? 0);
+}
+
+function preferredWebAccessMethod(device: Device, securePreference?: boolean): AccessMethod | null {
   return stateStore.getAccessMethods(device.id)
     .filter((method) => method.kind === "web-session" || method.kind === "http-api")
-    .sort((left, right) => {
-      const statusRank = (value: AccessMethod["status"]) => value === "validated"
-        ? 0
-        : value === "credentialed"
-          ? 1
-          : value === "observed"
-            ? 2
-            : 3;
-      if (statusRank(left.status) !== statusRank(right.status)) {
-        return statusRank(left.status) - statusRank(right.status);
-      }
-      if (left.secure !== right.secure) {
-        return left.secure ? -1 : 1;
-      }
-      const leftIdx = HTTP_PORT_PREFERENCE.indexOf(left.port ?? -1);
-      const rightIdx = HTTP_PORT_PREFERENCE.indexOf(right.port ?? -1);
-      return (leftIdx === -1 ? 999 : leftIdx) - (rightIdx === -1 ? 999 : rightIdx);
-    })[0] ?? null;
+    .sort((left, right) => compareWebAccessMethods(left, right, securePreference))[0] ?? null;
+}
+
+function webServiceAppearsSecure(service: ServiceFingerprint): boolean {
+  return Boolean(service.secure) || HTTPS_PORT_HINTS.has(service.port);
+}
+
+function compareWebServices(
+  left: ServiceFingerprint,
+  right: ServiceFingerprint,
+  securePreference?: boolean,
+): number {
+  const leftSecure = webServiceAppearsSecure(left);
+  const rightSecure = webServiceAppearsSecure(right);
+  if (leftSecure !== rightSecure) {
+    if (securePreference === false) {
+      return leftSecure ? 1 : -1;
+    }
+    return leftSecure ? -1 : 1;
+  }
+  const leftRank = webSurfacePortRank(left.port, leftSecure);
+  const rightRank = webSurfacePortRank(right.port, rightSecure);
+  if (leftRank !== rightRank) {
+    return leftRank - rightRank;
+  }
+  return left.port - right.port;
+}
+
+function resolvePreferredHttpTarget(
+  device: Device | undefined,
+  securePreference?: boolean,
+): { port: number; secure: boolean } | null {
+  if (!device) {
+    return null;
+  }
+
+  const accessMethod = preferredWebAccessMethod(device, securePreference);
+  if (accessMethod?.port) {
+    return {
+      port: accessMethod.port,
+      secure: Boolean(accessMethod.secure),
+    };
+  }
+
+  const service = device.services
+    .filter((candidate) =>
+      candidate.transport === "tcp"
+      && (
+        WEB_PORT_HINTS.has(candidate.port)
+        || /http|https|web|api/i.test(candidate.name)
+      ))
+    .sort((left, right) => compareWebServices(left, right, securePreference))[0];
+  if (!service) {
+    return null;
+  }
+
+  return {
+    port: service.port,
+    secure: webServiceAppearsSecure(service),
+  };
 }
 
 function buildDeviceWebUrl(device: Device, method?: AccessMethod | null, pathName = "/"): string {
@@ -1783,31 +1871,12 @@ function defaultCommandTemplate(
     let secure = secureFromInput;
     let safePort = explicitPort;
 
-    if (safePort === undefined && device) {
-      const webServices = device.services
-        .filter((service) =>
-          service.transport === "tcp"
-          && (
-            HTTP_PORT_HINTS.has(service.port)
-            || HTTPS_PORT_HINTS.has(service.port)
-            || /http|https|web|api/i.test(service.name)
-          ))
-        .sort((a, b) => {
-          const ai = HTTP_PORT_PREFERENCE.indexOf(a.port);
-          const bi = HTTP_PORT_PREFERENCE.indexOf(b.port);
-          const aRank = ai === -1 ? 999 : ai;
-          const bRank = bi === -1 ? 999 : bi;
-          if (aRank !== bRank) {
-            return aRank - bRank;
-          }
-          return a.port - b.port;
-        });
-
-      const preferred = webServices[0];
+    if (safePort === undefined) {
+      const preferred = resolvePreferredHttpTarget(device, secure);
       if (preferred) {
         safePort = preferred.port;
         if (secure === undefined) {
-          secure = preferred.secure || HTTPS_PORT_HINTS.has(preferred.port);
+          secure = preferred.secure;
         }
       }
     }
@@ -2041,21 +2110,12 @@ function defaultBrokerRequest(
     let secure = secureFromInput;
     let safePort = explicitPort;
 
-    if (safePort === undefined && device) {
-      const webServices = device.services
-        .filter((service) =>
-          service.transport === "tcp"
-          && (
-            HTTP_PORT_HINTS.has(service.port)
-            || HTTPS_PORT_HINTS.has(service.port)
-            || /http|https|web|api/i.test(service.name)
-          ))
-        .sort((a, b) => a.port - b.port);
-      const preferred = webServices[0];
+    if (safePort === undefined) {
+      const preferred = resolvePreferredHttpTarget(device, secure);
       if (preferred) {
         safePort = preferred.port;
         if (secure === undefined) {
-          secure = preferred.secure || HTTPS_PORT_HINTS.has(preferred.port);
+          secure = preferred.secure;
         }
       }
     }

@@ -261,7 +261,7 @@ Reference: `docs/world-class-system-program.md`
 ## 22) Continuous Monitoring Architecture Program (2026-03-08)
 
 - [ ] CM-001: Split deterministic signal collection and finding evaluation from agentic diagnosis/remediation
-- [ ] CM-002: Add a wake coordinator backed by durable jobs for both schedule-driven and event-driven execution
+- [x] CM-002: Add a wake coordinator backed by durable jobs for both schedule-driven and event-driven execution
 - [ ] CM-003: Add a finding router that dedupes, correlates, suppresses noise, and promotes incidents
 - [ ] CM-004: Add an outbound notification outbox and channel adapters (Telegram first, then webhooks/email/Slack/Teams)
 - [ ] CM-005: Move assurances and scanners onto typed monitor jobs with per-check cadence/SLOs instead of one monolithic `act` phase
@@ -270,6 +270,7 @@ Reference: `docs/world-class-system-program.md`
 - [ ] CM-008: Reserve the LLM agent for ambiguous diagnosis, monitor synthesis, and Lane B remediation planning
 
 Reference: `docs/continuous-monitoring-architecture-analysis.md`, `docs/continuous-monitoring-cutover-task-register.md`
+Additional plan: `docs/scanner-agent-control-plane-plan.md`
 ## 23) Remote Desktop Browser Program (2026-03-10)
 
 - [ ] RDS-001: Add first-class `vnc` protocol support across discovery, credentials, access methods, and management surfaces
@@ -287,3 +288,15 @@ Reference: `docs/continuous-monitoring-architecture-analysis.md`, `docs/continuo
 - [ ] RDS-013: Validate end-to-end build/lint and one-click launch flows with remote desktop prerequisites
 
 Reference: `docs/remote-desktop-browser-cutover-plan.md`
+
+## 24) Scanner and Agent Control Plane Cutover (2026-03-13)
+
+- [x] SACP-001: Formalize scanner/agent control-plane architecture and task register
+- [x] SACP-002: Split DB-backed scanner cadence from periodic agent wake cadence
+- [x] SACP-003: Separate `scanner_runs` from real `agent_runs`
+- [x] SACP-004: Move scanner, monitor, and agent wake execution onto durable jobs
+- [x] SACP-005: Add stale lease / stale durable job recovery for the control plane
+- [x] SACP-006: Update Activity and Settings to show scanner vs agent runtime state
+- [x] SACP-007: Run the production app and verify several clean live cycles
+
+Reference: `docs/scanner-agent-control-plane-plan.md`, `docs/scanner-agent-control-plane-task-register.md`

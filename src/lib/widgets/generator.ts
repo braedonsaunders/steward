@@ -8,6 +8,7 @@ import type { DeviceWidget, DeviceWidgetOperationRun, LLMProvider } from "@/lib/
 import { buildDeviceWidgetContext } from "@/lib/widgets/context";
 import { DeviceWidgetControlListSchema } from "@/lib/widgets/controls";
 import { previewWidgetOperation, WidgetOperationSchema } from "@/lib/widgets/operations";
+import { parseWidgetOutputJson } from "@/lib/widgets/output-json";
 import { MAX_WIDGET_DESCRIPTION_LENGTH } from "@/lib/widgets/description";
 
 const WIDGET_GENERATOR_MAX_OUTPUT_TOKENS = 7_000;
@@ -781,6 +782,19 @@ async function validateGeneratedWidgetStartupJs(args: {
         const resolved = unwrapVerificationResult(result);
         return resolved && typeof resolved.output === "string" ? resolved.output : "";
       },
+      extractJsonOutput: (value: unknown) => parseWidgetOutputJson(typeof value === "string" ? value : ""),
+      getControlJson: (result: unknown) => {
+        const resolved = unwrapVerificationResult(result);
+        return resolved && typeof resolved.output === "string"
+          ? parseWidgetOutputJson(resolved.output)
+          : null;
+      },
+      getOperationJson: (result: unknown) => {
+        const resolved = unwrapVerificationResult(result);
+        return resolved && typeof resolved.output === "string"
+          ? parseWidgetOutputJson(resolved.output)
+          : null;
+      },
       getMqttMessages: (result: unknown) => normalizeVerificationMqttMessages(result),
       getHttpResponse: (result: unknown) => normalizeVerificationHttpResponse(result),
       getHttpJson: (result: unknown) => normalizeVerificationHttpResponse(result).json,
@@ -1193,11 +1207,14 @@ export async function generateAndStoreDeviceWidget(
       "- await window.StewardWidget.invokeControlDetailed(controlId, input?): execute a control and always resolve with the structured result.",
       "- window.StewardWidget.getControlOperationResult(result): extract the nested operation result returned by invokeControlDetailed() for operation-backed controls.",
       "- window.StewardWidget.getControlOutput(result): extract the raw command/output text from invokeControlDetailed() for operation-backed controls.",
+      "- window.StewardWidget.extractJsonOutput(text): parse shell or command output containing Steward preflight lines or CLIXML-wrapped JSON and return the parsed JSON value or null.",
+      "- window.StewardWidget.getControlJson(result): parse JSON emitted by an operation-backed control.",
       "- await window.StewardWidget.getOperations({ scope: 'widget' | 'device', limit }): fetch recent widget operation history.",
       "- await window.StewardWidget.getState(): load persisted JSON widget state.",
       "- await window.StewardWidget.setState(nextState): persist JSON widget state.",
       "- await window.StewardWidget.runOperation(operation): execute a generic device operation through Steward. This throws when Steward cannot prove success or when approval is denied. Failed throws include error.result.",
       "- await window.StewardWidget.runOperationDetailed(operation): same as runOperation but always resolves with a structured result object, including failures and inconclusive results.",
+      "- window.StewardWidget.getOperationJson(result): parse JSON emitted by runOperationDetailed() output.",
       "- window.StewardWidget.buildMqttOperation(request): build a generic Steward MQTT operation from a concise request object.",
       "- await window.StewardWidget.runMqtt(request): execute an MQTT or MQTTS exchange through Steward and return the structured result.",
       "- window.StewardWidget.getMqttMessages(result): extract structured MQTT messages from result.details.messages and attach json when payload parses as JSON.",
@@ -1209,6 +1226,7 @@ export async function generateAndStoreDeviceWidget(
       "runOperation(operation) supports the existing Steward operation model.",
       "Structured operation results include: ok, status, phase, proof, summary, output, details, policyDecision, policyReason, approvalRequired.",
       "invokeControlDetailed() returns a DeviceWidgetControlResult. For operation-backed controls, raw command output lives under result.operationResult.output, not result.output. Prefer getControlOutput()/getControlOperationResult() instead of guessing.",
+      "For shell, SSH, and WinRM operations that emit JSON, prefer getControlJson()/getOperationJson()/extractJsonOutput() instead of hand-written regex parsing.",
       "For HTTP operations, details.responseBody contains the raw response body and details.responseJson contains parsed JSON when the body is valid JSON. Prefer getHttpResponse()/getHttpJson() instead of parsing result.output.",
       "MQTT operation results include details.messages when responses are collected. Prefer window.StewardWidget.getMqttMessages(result) instead of parsing output text.",
       "For PowerShell/WinRM commands that emit JSON, set $ProgressPreference='SilentlyContinue' before writing output so progress CLIXML does not corrupt JSON parsing.",

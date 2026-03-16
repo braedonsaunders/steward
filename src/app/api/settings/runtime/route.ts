@@ -6,7 +6,8 @@ import { stateStore } from "@/lib/state/store";
 export const runtime = "nodejs";
 
 const schema = z.object({
-  agentIntervalMs: z.number().int().min(15_000).max(15 * 60 * 1000),
+  scannerIntervalMs: z.number().int().min(15_000).max(15 * 60 * 1000),
+  agentWakeIntervalMs: z.number().int().min(30_000).max(24 * 60 * 60 * 1000),
   deepScanIntervalMs: z.number().int().min(5 * 60 * 1000).max(24 * 60 * 60 * 1000),
   incrementalActiveTargets: z.number().int().min(8).max(512),
   deepActiveTargets: z.number().int().min(16).max(1024),
@@ -92,6 +93,12 @@ export async function POST(request: NextRequest) {
   }
 
   const data = parsed.data;
+  if (data.agentWakeIntervalMs < data.scannerIntervalMs) {
+    return NextResponse.json(
+      { error: "agentWakeIntervalMs must be greater than or equal to scannerIntervalMs" },
+      { status: 400 },
+    );
+  }
   if (data.deepActiveTargets < data.incrementalActiveTargets) {
     return NextResponse.json(
       { error: "deepActiveTargets must be greater than or equal to incrementalActiveTargets" },
