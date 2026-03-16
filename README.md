@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="./docs/screenshots/hero-overview-placeholder.svg" alt="Steward overview placeholder" width="100%" />
+  <img src="steward.png" alt="Steward" width="100%" />
   <h1>Steward</h1>
   <p><strong>Your network's first employee.</strong></p>
   <p>
