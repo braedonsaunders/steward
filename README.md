@@ -19,7 +19,7 @@
   </p>
 </div>
 
-Steward is a self-hosted IT operations control plane for small networks. This repo already ships a working local-first system with discovery, persistent state, graph-backed inventory, chat over live infrastructure context, policy-gated remediation, secure credential storage, device onboarding, widgets, automations, and operator access control.
+Steward is a self-hosted IT operations control plane for small network - local-first system with discovery, persistent state, graph-backed inventory, chat over live infrastructure context, policy-gated remediation, secure credential storage, device onboarding, widgets, automations, and operator access control.
 
 > Status: this repository already implements a substantial control plane. The implementation checklist lives in [tasks.md](./tasks.md).
 
