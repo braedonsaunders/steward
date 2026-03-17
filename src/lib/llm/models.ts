@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import { getProviderConfig } from "@/lib/llm/config";
 import {
+  type AnthropicOAuthSession,
   ensureFreshAnthropicOAuthSession,
   refreshStoredAnthropicAccessToken,
 } from "@/lib/llm/anthropic-oauth";
@@ -10,11 +12,30 @@ import type { LLMProvider } from "@/lib/state/types";
 
 const MODEL_LIST_TIMEOUT_MS = 10_000;
 const MODEL_LIST_CACHE_TTL_MS = 60_000;
+const ANTHROPIC_MODEL_SMOKE_TIMEOUT_MS = 12_000;
+const ANTHROPIC_CALLABLE_MODEL_CACHE_TTL_MS = 10 * 60_000;
 
 const modelCache = new Map<string, { fetchedAt: number; models: string[] }>();
+const anthropicCallableModelCache = new Map<string, { fetchedAt: number; model: string }>();
 
 function uniqueSorted(values: string[]): string[] {
   return Array.from(new Set(values.map((v) => v.trim()).filter(Boolean))).sort();
+}
+
+function uniqueStable(values: Array<string | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    result.push(trimmed);
+  }
+
+  return result;
 }
 
 function parseModelIds(payload: unknown): string[] {
@@ -211,10 +232,29 @@ async function fetchGoogleModels(options?: {
   return uniqueSorted(models);
 }
 
-async function fetchAnthropicModels(apiKeyOverride?: string): Promise<string[]> {
-  const apiKey = apiKeyOverride ?? await vault.getSecret("llm.api.anthropic.key");
-  let oauthSession = apiKeyOverride ? undefined : await ensureFreshAnthropicOAuthSession();
-  let oauthToken = oauthSession?.accessToken;
+async function fetchAnthropicModels(options?: {
+  apiKeyOverride?: string;
+  oauthTokenOverride?: string;
+}): Promise<string[]> {
+  const config = await getProviderConfig("anthropic");
+  let apiKey: string | undefined;
+  let oauthSession: AnthropicOAuthSession | undefined;
+  let oauthToken = options?.oauthTokenOverride;
+
+  if (oauthToken) {
+    apiKey = undefined;
+  } else if (options?.apiKeyOverride) {
+    apiKey = options.apiKeyOverride;
+  } else if (config?.oauthTokenSecret) {
+    oauthSession = await ensureFreshAnthropicOAuthSession();
+    oauthToken = oauthSession.accessToken;
+  } else {
+    apiKey = await vault.getSecret("llm.api.anthropic.key");
+    if (!apiKey) {
+      oauthSession = await ensureFreshAnthropicOAuthSession();
+      oauthToken = oauthSession.accessToken;
+    }
+  }
 
   if (!apiKey && !oauthToken) {
     throw new Error("Anthropic credentials are required to retrieve models.");
@@ -256,6 +296,138 @@ async function fetchAnthropicModels(apiKeyOverride?: string): Promise<string[]> 
 
   const payload = await response.json() as Record<string, unknown>;
   return parseModelIds(payload);
+}
+
+export interface AnthropicOAuthModelResolution {
+  model: string;
+  fallbackFrom?: string;
+}
+
+function anthropicFallbackRank(model: string): number {
+  if (/^claude-3-/i.test(model)) return 1;
+  return 0;
+}
+
+function sortAnthropicFallbackModels(models: string[]): string[] {
+  return [...models].sort((a, b) => {
+    const rankDiff = anthropicFallbackRank(a) - anthropicFallbackRank(b);
+    if (rankDiff !== 0) {
+      return rankDiff;
+    }
+    return b.localeCompare(a);
+  });
+}
+
+function anthropicCallableModelCacheKey(accessToken: string, preferredModel?: string): string {
+  const accessTokenHash = createHash("sha256").update(accessToken).digest("hex");
+  return `${accessTokenHash}:${preferredModel ?? ""}`;
+}
+
+async function probeAnthropicOAuthModel(
+  model: string,
+  accessToken: string,
+): Promise<Response> {
+  return fetch("https://api.anthropic.com/v1/messages?beta=true", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      "anthropic-beta": "oauth-2025-04-20",
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+      "user-agent": "claude-cli/2.1.2 (external, cli)",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 1,
+      messages: [{ role: "user", content: "Reply with OK only." }],
+    }),
+    signal: AbortSignal.timeout(ANTHROPIC_MODEL_SMOKE_TIMEOUT_MS),
+  });
+}
+
+export async function resolveCallableAnthropicOAuthModel(
+  preferredModel?: string,
+  options?: { models?: string[]; oauthTokenOverride?: string },
+): Promise<AnthropicOAuthModelResolution> {
+  const normalizedPreferred = normalizeProviderModel("anthropic", preferredModel) ?? preferredModel?.trim();
+  const session = options?.oauthTokenOverride
+    ? { accessToken: options.oauthTokenOverride, refreshToken: undefined, expiresAt: 0 }
+    : await ensureFreshAnthropicOAuthSession();
+  let accessToken = session.accessToken;
+  let refreshToken = session.refreshToken;
+
+  if (!accessToken) {
+    throw new Error("Anthropic OAuth credentials are required to validate callable models.");
+  }
+
+  const cacheKey = anthropicCallableModelCacheKey(accessToken, normalizedPreferred);
+  const cached = anthropicCallableModelCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < ANTHROPIC_CALLABLE_MODEL_CACHE_TTL_MS) {
+    return {
+      model: cached.model,
+      ...(normalizedPreferred && cached.model !== normalizedPreferred
+        ? { fallbackFrom: normalizedPreferred }
+        : {}),
+    };
+  }
+
+  const probeCandidate = async (model: string): Promise<boolean> => {
+    const currentAccessToken = accessToken;
+    if (!currentAccessToken) {
+      throw new Error("Anthropic OAuth access token is unavailable during model validation.");
+    }
+
+    let response = await probeAnthropicOAuthModel(model, currentAccessToken);
+
+    if (!options?.oauthTokenOverride && response.status === 401 && refreshToken) {
+      const refreshed = await refreshStoredAnthropicAccessToken(refreshToken);
+      accessToken = refreshed.accessToken;
+      refreshToken = refreshed.refreshToken;
+      if (accessToken) {
+        response = await probeAnthropicOAuthModel(model, accessToken);
+      }
+    }
+
+    if (response.ok) {
+      return true;
+    }
+
+    if (response.status === 429 || response.status >= 500) {
+      const body = await response.text().catch(() => "");
+      throw new Error(
+        `Anthropic model validation failed (${response.status} ${response.statusText}) for ${model}${body ? `: ${body}` : ""}`,
+      );
+    }
+
+    return false;
+  };
+
+  const availableModels = options?.models
+    ? uniqueStable(options.models.map((model) => normalizeProviderModel("anthropic", model) ?? model))
+    : await fetchAnthropicModels({ oauthTokenOverride: accessToken });
+  const fallbackCandidates = sortAnthropicFallbackModels(
+    availableModels.filter((model) => model !== normalizedPreferred),
+  );
+  const candidates = uniqueStable([normalizedPreferred, ...fallbackCandidates]);
+
+  for (const candidate of candidates) {
+    if (await probeCandidate(candidate)) {
+      anthropicCallableModelCache.set(cacheKey, {
+        fetchedAt: Date.now(),
+        model: candidate,
+      });
+      return {
+        model: candidate,
+        ...(normalizedPreferred && candidate !== normalizedPreferred
+          ? { fallbackFrom: normalizedPreferred }
+          : {}),
+      };
+    }
+  }
+
+  throw new Error(
+    `Anthropic OAuth session could list models but none accepted a minimal /v1/messages request. Tried: ${candidates.join(", ")}`,
+  );
 }
 
 async function fetchCohereModels(token: string): Promise<string[]> {
@@ -303,7 +475,12 @@ export function modelSupportsTemperature(provider: LLMProvider, model?: string):
 
 export async function listProviderModelsFromApi(
   provider: LLMProvider,
-  options?: { forceRefresh?: boolean; tokenOverride?: string; baseUrlOverride?: string },
+  options?: {
+    forceRefresh?: boolean;
+    tokenOverride?: string;
+    oauthTokenOverride?: string;
+    baseUrlOverride?: string;
+  },
 ): Promise<string[]> {
   const config = await getProviderConfig(provider);
   const meta = getProviderMeta(provider);
@@ -329,7 +506,10 @@ export async function listProviderModelsFromApi(
 
   switch (provider) {
     case "anthropic": {
-      models = await fetchAnthropicModels(options?.tokenOverride);
+      models = await fetchAnthropicModels({
+        apiKeyOverride: options?.tokenOverride,
+        oauthTokenOverride: options?.oauthTokenOverride,
+      });
       break;
     }
     case "google": {

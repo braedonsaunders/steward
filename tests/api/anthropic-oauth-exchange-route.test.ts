@@ -4,13 +4,12 @@ const mocks = vi.hoisted(() => ({
   isAuthorized: vi.fn(),
   ensureVaultReadyForProviders: vi.fn(),
   exchangeAnthropicCode: vi.fn(),
-  createAnthropicApiKey: vi.fn(),
   getProviderConfig: vi.fn(),
   persistAnthropicOAuthTokens: vi.fn(),
   listProviderModelsFromApi: vi.fn(),
   normalizeProviderModel: vi.fn(),
+  resolveCallableAnthropicOAuthModel: vi.fn(),
   getProviderMeta: vi.fn(),
-  setSecret: vi.fn(),
   setProviderConfig: vi.fn(),
   addAction: vi.fn(),
 }));
@@ -25,7 +24,6 @@ vi.mock("@/lib/security/vault-gate", () => ({
 
 vi.mock("@/lib/auth/oauth", () => ({
   exchangeAnthropicCode: mocks.exchangeAnthropicCode,
-  createAnthropicApiKey: mocks.createAnthropicApiKey,
 }));
 
 vi.mock("@/lib/llm/config", () => ({
@@ -39,16 +37,11 @@ vi.mock("@/lib/llm/anthropic-oauth", () => ({
 vi.mock("@/lib/llm/models", () => ({
   listProviderModelsFromApi: mocks.listProviderModelsFromApi,
   normalizeProviderModel: mocks.normalizeProviderModel,
+  resolveCallableAnthropicOAuthModel: mocks.resolveCallableAnthropicOAuthModel,
 }));
 
 vi.mock("@/lib/llm/registry", () => ({
   getProviderMeta: mocks.getProviderMeta,
-}));
-
-vi.mock("@/lib/security/vault", () => ({
-  vault: {
-    setSecret: mocks.setSecret,
-  },
 }));
 
 vi.mock("@/lib/state/store", () => ({
@@ -83,18 +76,12 @@ describe("anthropic oauth exchange route", () => {
     });
     mocks.normalizeProviderModel.mockImplementation((_provider: string, model?: string) => model);
     mocks.listProviderModelsFromApi.mockResolvedValue(["claude-opus-4-6"]);
+    mocks.resolveCallableAnthropicOAuthModel.mockResolvedValue({ model: "claude-opus-4-6" });
     mocks.setProviderConfig.mockResolvedValue(undefined);
     mocks.addAction.mockResolvedValue(undefined);
-    mocks.setSecret.mockResolvedValue(undefined);
   });
 
-  it("falls back to OAuth-only connection when api-key minting lacks org:create_api_key", async () => {
-    mocks.createAnthropicApiKey.mockRejectedValue(
-      new Error(
-        'Anthropic API key creation failed (403): {"type":"error","error":{"type":"permission_error","message":"OAuth token does not meet scope requirement org:create_api_key"}}',
-      ),
-    );
-
+  it("stores the OAuth session and validates Anthropic models with the exchanged OAuth token", async () => {
     const response = await anthropicOAuthExchange(
       new Request("http://localhost/api/providers/oauth/anthropic/exchange", {
         method: "POST",
@@ -109,9 +96,18 @@ describe("anthropic oauth exchange route", () => {
 
     expect(response.status).toBe(200);
     expect(body.ok).toBe(true);
-    expect(body.warning).toContain("org:create_api_key");
     expect(mocks.persistAnthropicOAuthTokens).toHaveBeenCalled();
-    expect(mocks.setSecret).not.toHaveBeenCalled();
+    expect(mocks.listProviderModelsFromApi).toHaveBeenCalledWith("anthropic", {
+      forceRefresh: true,
+      oauthTokenOverride: "oauth-access-token",
+    });
+    expect(mocks.resolveCallableAnthropicOAuthModel).toHaveBeenCalledWith(
+      "claude-opus-4-6",
+      {
+        models: ["claude-opus-4-6"],
+        oauthTokenOverride: "oauth-access-token",
+      },
+    );
     expect(mocks.setProviderConfig).toHaveBeenCalledWith({
       provider: "anthropic",
       enabled: true,
@@ -120,11 +116,13 @@ describe("anthropic oauth exchange route", () => {
     });
     expect(mocks.addAction).toHaveBeenCalledWith(
       expect.objectContaining({
-        context: expect.objectContaining({
+        context: {
+          fallbackFrom: undefined,
           provider: "anthropic",
-          apiKeyMinted: false,
-        }),
+          selectedModel: "claude-opus-4-6",
+        },
       }),
     );
+    expect(body.model).toBe("claude-opus-4-6");
   });
 });

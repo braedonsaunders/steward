@@ -357,10 +357,21 @@ export const extractOpenAIAccountIdFromTokens = (tokens: {
 
 const ANTHROPIC_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const ANTHROPIC_AUTH_URL = "https://claude.ai/oauth/authorize";
-const ANTHROPIC_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token";
-const ANTHROPIC_REDIRECT_URI = "https://console.anthropic.com/oauth/code/callback";
-const ANTHROPIC_SCOPES = "org:create_api_key user:profile user:inference";
+const ANTHROPIC_TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
+const ANTHROPIC_REDIRECT_URI = "https://platform.claude.com/oauth/code/callback";
+const ANTHROPIC_CLAUDE_AI_SCOPES = [
+  "user:profile",
+  "user:inference",
+  "user:sessions:claude_code",
+  "user:mcp_servers",
+  "user:file_upload",
+];
+const ANTHROPIC_SCOPES = [
+  "org:create_api_key",
+  ...ANTHROPIC_CLAUDE_AI_SCOPES,
+].join(" ");
 const ANTHROPIC_API_KEY_URL = "https://api.anthropic.com/api/oauth/claude_cli/create_api_key";
+const ANTHROPIC_LOGIN_METHOD = "claudeai";
 
 export const buildAnthropicAuthorizeUrl = (
   challenge: string,
@@ -375,6 +386,7 @@ export const buildAnthropicAuthorizeUrl = (
     code_challenge: challenge,
     code_challenge_method: "S256",
     state: verifier,
+    login_method: ANTHROPIC_LOGIN_METHOD,
   });
   return `${ANTHROPIC_AUTH_URL}?${params.toString()}`;
 };
@@ -422,6 +434,7 @@ export const refreshAnthropicToken = async (
       grant_type: "refresh_token",
       refresh_token: refreshToken,
       client_id: ANTHROPIC_CLIENT_ID,
+      scope: ANTHROPIC_CLAUDE_AI_SCOPES.join(" "),
     }),
   });
 

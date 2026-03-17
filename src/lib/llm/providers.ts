@@ -20,13 +20,18 @@ import {
   refreshStoredAnthropicAccessToken,
 } from "@/lib/llm/anthropic-oauth";
 import { getProviderConfig } from "@/lib/llm/config";
-import { modelSupportsTemperature, normalizeProviderModel } from "@/lib/llm/models";
+import {
+  modelSupportsTemperature,
+  normalizeProviderModel,
+  resolveCallableAnthropicOAuthModel,
+} from "@/lib/llm/models";
 import {
   DEFAULT_OPENAI_OAUTH_MODEL,
   OPENAI_OAUTH_CODEX_MODEL_SET,
 } from "@/lib/llm/openai-oauth-models";
 import { getProviderMeta } from "@/lib/llm/registry";
 import { vault } from "@/lib/security/vault";
+import { stateStore } from "@/lib/state/store";
 import type { LLMProvider } from "@/lib/state/types";
 
 // ---------------------------------------------------------------------------
@@ -647,19 +652,39 @@ export const buildLanguageModel = async (
     }
     case "anthropic": {
       const anthropicModel = normalizeProviderModel("anthropic", model) ?? model;
+      const anthropicOauthTokenSecret = config?.oauthTokenSecret;
 
-      // Priority 1: Real API key (from manual entry)
+      // If Anthropic OAuth is configured, keep requests on that Bearer-token path.
+      const anthropicOAuthToken = await vault.getSecret(
+        anthropicOauthTokenSecret ?? "llm.oauth.anthropic.access_token",
+      );
+      if (anthropicOAuthToken) {
+        const resolvedModel = await resolveCallableAnthropicOAuthModel(anthropicModel);
+        if (!modelOverride && resolvedModel.fallbackFrom && config?.model !== resolvedModel.model) {
+          await stateStore.setProviderConfig({
+            ...(config ?? {
+              provider: "anthropic",
+              enabled: true,
+              model: resolvedModel.model,
+            }),
+            provider: "anthropic",
+            model: resolvedModel.model,
+            oauthTokenSecret: anthropicOauthTokenSecret ?? "llm.oauth.anthropic.access_token",
+            updatedAt: new Date().toISOString(),
+          });
+        }
+        return withModelCapabilityGuards(
+          "anthropic",
+          resolvedModel.model,
+          await buildAnthropicOAuth(resolvedModel.model),
+        );
+      }
+
+      // Priority 2: Real API key (from manual entry)
       const apiKey = await vault.getSecret("llm.api.anthropic.key");
       if (apiKey) {
         const client = createAnthropic({ apiKey });
         return withModelCapabilityGuards("anthropic", anthropicModel, client(anthropicModel));
-      }
-
-      // Priority 2: OAuth access token → custom fetch with Bearer + anthropic-beta
-      // (exact same pattern as oneshot's opencode-anthropic-auth plugin)
-      const anthropicOAuthToken = await vault.getSecret("llm.oauth.anthropic.access_token");
-      if (anthropicOAuthToken) {
-        return withModelCapabilityGuards("anthropic", anthropicModel, await buildAnthropicOAuth(anthropicModel));
       }
 
       throw new Error(
