@@ -19,7 +19,16 @@
   </p>
 </div>
 
-Steward is a self-hosted IT operations control plane for small network - local-first system with discovery, persistent state, graph-backed inventory, chat over live infrastructure context, policy-gated remediation, secure credential storage, device onboarding, widgets, automations, and operator access control.
+Steward is a self-hosted IT operations control plane for small networks: a local-first system with discovery, persistent state, graph-backed inventory, chat over live infrastructure context, policy-gated remediation, secure credential storage, device onboarding, widgets, automations, and operator access control.
+
+The current repo also includes a first-class autonomy layer:
+
+- `missions` for durable goals Steward owns over time
+- `subagents` for domain-specific operational ownership
+- `investigations` for persistent follow-up instead of one-shot alerts
+- `packs` for installable operational knowledge
+- a Telegram-first `gateway` for briefings, approvals, and operator presence
+- mission-thread chat sessions that bind Telegram threads, chat history, and mission ownership together
 
 > Status: this repository already implements a substantial control plane. The implementation checklist lives in [tasks.md](./tasks.md).
 
@@ -27,21 +36,21 @@ Steward is a self-hosted IT operations control plane for small network - local-f
 <table>
   <tr>
     <td width="50%">
-      <img src="./docs/screenshots/inbox-placeholder.svg" alt="Steward inbox placeholder" />
+      <img src="./docs/screenshots/inbox-overview.png" alt="Steward dashboard and inbox overview" />
       <p><strong>Inbox and morning briefing</strong><br />Critical issues, approvals, recommendations, and operator context in one surface.</p>
     </td>
     <td width="50%">
-      <img src="./docs/screenshots/chat-placeholder.svg" alt="Steward chat placeholder" />
+      <img src="./docs/screenshots/chat-workspace.png" alt="Steward chat workspace" />
       <p><strong>Conversation as the interface</strong><br />Ask why the NAS was slow yesterday and get an answer backed by live state.</p>
     </td>
   </tr>
   <tr>
     <td width="50%">
-      <img src="./docs/screenshots/device-placeholder.svg" alt="Steward device detail placeholder" />
+      <img src="./docs/screenshots/device-detail.png" alt="Steward device detail and management surface" />
       <p><strong>Device detail and management surface</strong><br />Per-device health, credentials, capabilities, autonomy tier, and recent actions.</p>
     </td>
     <td width="50%">
-      <img src="./docs/screenshots/topology-placeholder.svg" alt="Steward topology placeholder" />
+      <img src="./docs/screenshots/topology-map.png" alt="Steward topology and dependency map" />
       <p><strong>Topology and dependencies</strong><br />Understand blast radius, upstream dependencies, and the shape of the network at a glance.</p>
     </td>
   </tr>
@@ -61,6 +70,7 @@ Steward is a self-hosted IT operations control plane for small network - local-f
 - A broker-first execution layer for SSH, HTTP, WebSocket, MQTT, WinRM, PowerShell over SSH, WMI, SMB, RDP, VNC-backed remote desktop, and local-tool operations
 - Device-scoped chat with live context, graph queries, onboarding flows, browser-backed web sessions, remote terminal access, and widget generation
 - Adapter management with file-backed and managed adapter packages, manifests, tool skills, runtime config, and adapter-contributed playbooks
+- A mission-control layer with DB-backed missions, subagents, investigations, briefings, Telegram gateway bindings, and pack inventory
 - Device widgets, widget controls, per-device automations, and dashboard widget pages
 - RBAC, local auth bootstrap, session auth, API token auth, OIDC SSO, and LDAP login
 - DB-backed runtime, system, auth-token, and auth settings with mutation history and as-of reads
@@ -78,6 +88,10 @@ Each device record carries services, protocols, evidence, metadata, timestamps, 
 The app already exposes real operator surfaces for:
 
 - Dashboard
+- Missions
+- Subagents
+- Packs
+- Gateway
 - Digest
 - Devices
 - Discovery
@@ -92,6 +106,21 @@ The app already exposes real operator surfaces for:
 - Settings
 
 Per-device pages go beyond inventory. They include access methods, stored credentials, adapter/profile binding, workloads, assurances, findings, chat, widgets, automations, remote desktop, and remote terminal access.
+
+### Durable autonomy
+
+Steward now separates long-lived agency from one-shot chat turns.
+
+- `Workloads` and `assurances` remain the concrete device-scoped contracts and checks.
+- `Missions` sit above them and represent durable goals such as availability watch, certificate watch, backup hygiene, storage health, WAN guardian, and daily briefing.
+- `Subagents` now carry typed scope and autonomy policy: domain, allowed mission kinds, approval mode, channel voice, escalation windows, and autonomy budgets.
+- `Subagents` also persist mission-run memory, standing orders, cross-mission delegations, and mission plans so ownership survives across turns and across days.
+- `Investigations` persist follow-up across restarts and across days, with stage-based state (`detect -> correlate -> hypothesize -> probe -> decide -> act -> verify -> explain`), evidence, recommended actions, unresolved questions, and step history.
+- `Briefings` are stored artifacts, not transient UI strings, and are compiled separately from durable channel delivery jobs.
+- `Missions` support `shadowMode` so a domain can stage ownership and briefing behavior before operator-facing delivery or action.
+- Chat sessions can now be formally bound to `missionId`, `subagentId`, and `gatewayThreadId`, so Telegram threads and in-app conversations share the same durable mission context.
+
+This cutover is DB-backed and additive. It does not move product behavior into environment variables.
 
 ### Safe automation and remediation
 
@@ -121,6 +150,29 @@ The current codebase also includes:
 ### Extensibility
 
 Steward is already designed to be extended in-repo. Adapters can contribute discovery, enrichment, capability mapping, deterministic profile matching, tool skills, and playbooks. The app includes adapter package CRUD, config editing, tool-skill configuration, and built-in starter adapters for HTTP surfaces, Docker operations, and SNMP-derived network intelligence.
+
+The new pack system broadens that model. Packs can now carry:
+
+- subagents
+- mission templates
+- workload and assurance templates
+- finding templates
+- investigation heuristics
+- playbooks
+- report templates
+- briefing templates
+- gateway templates
+- adapters and tools
+- lab fixtures
+
+Managed pack lifecycle is now a first-class API surface:
+
+- manifest validation
+- Steward compatibility checks
+- signer registry and Ed25519 signature verification for verified packs
+- materialized pack resources
+- install and upgrade history
+- enable / disable / remove flows without touching product env vars
 
 ## LLM and Provider Support
 
@@ -163,6 +215,7 @@ First-time flow:
 4. Review discovered devices.
 5. Add credentials only where Steward should actually manage a device.
 6. Tune runtime and system settings from the UI.
+7. Configure a Telegram gateway binding if you want chat-native briefings and approvals.
 
 ### Docker compose
 
@@ -193,6 +246,26 @@ Windows PowerShell:
 ./scripts/run-prod.ps1
 ```
 
+## Validation
+
+Before merging or cutting a build, run:
+
+```bash
+npm run lint
+npm run test
+npm run build
+```
+
+The repository now includes a GitHub Actions workflow that runs the same `lint -> test -> build` sequence on pushes and pull requests.
+
+Autonomy-specific validation now includes:
+
+- pack signer and verified-pack API coverage
+- Telegram gateway threading and inbound dedupe coverage
+- mission replay fixtures for WAN, backup, and certificate guardians
+- schema migration coverage for chat-thread and pack-signing cutover
+- restore-drill coverage for the autonomy schema backup path
+
 ## Host tooling
 
 The repo expects real network tooling. The install scripts and postinstall hooks ensure or attempt to install:
@@ -214,6 +287,33 @@ Steward stores local data under `.steward/`:
 - `vault.key`
 
 Runtime and product settings are persisted in SQLite. Provider secrets and device credentials are stored in the encrypted vault. API access can be gated by a DB-backed auth token, and operator access can be managed through local users, OIDC, or LDAP.
+
+## Notification MVP
+
+The current public-beta outbound notification surface is intentionally narrow:
+
+- Telegram
+- Generic outgoing webhooks
+
+Email, Slack, Teams, SMS, and push delivery are deliberately deferred until after the first public-beta release.
+
+Telegram is now more than a notification sink. Steward includes a Telegram-first gateway with:
+
+- DB-backed gateway bindings
+- inbound webhook processing
+- inbound update dedupe
+- durable thread-to-chat-session binding
+- mission, subagent, investigation, and status commands
+- natural-language prompts such as "what are you watching", "show open missions", and "why was <device> slow"
+- briefing compilation plus durable `channel.delivery` jobs
+- durable `approval.followup` reminders when approvals are aging in the queue
+- approval and deny commands for pending playbook actions
+
+The dashboard and device contract surface are now mission-aware as well:
+
+- `/` surfaces active missions, active investigations, pending approvals, and recent briefings before lower-level widgets
+- device contract pages show mission ownership over committed workloads and assurances
+- `/api/autonomy/metrics` and the home dashboard surface queue lag, worker health, mission latency, briefing latency, and channel delivery latency
 
 ## API Surface
 
@@ -245,6 +345,30 @@ Inventory and operations:
 - `GET /api/audit-events`
 - `GET/POST /api/digest`
 
+Autonomy:
+
+- `GET /api/autonomy/metrics`
+- `GET/POST /api/missions`
+- `GET/PATCH /api/missions/:id`
+- `GET /api/missions/:id/delegations`
+- `GET /api/missions/:id/plan`
+- `POST /api/missions/:id/run`
+- `GET /api/subagents`
+- `GET/PATCH /api/subagents/:id`
+- `GET/POST /api/subagents/:id/orders`
+- `GET /api/investigations`
+- `GET/PATCH /api/investigations/:id`
+- `GET/POST /api/packs`
+- `GET/POST /api/packs/signers`
+- `GET/PATCH/DELETE /api/packs/signers/:id`
+- `GET/PATCH/DELETE /api/packs/:id`
+- `POST /api/packs/:id/toggle`
+- `GET /api/devices/:id/autonomy`
+- `GET/POST /api/gateway/bindings`
+- `GET/PATCH/DELETE /api/gateway/bindings/:id`
+- `POST /api/gateway/telegram/:bindingId/webhook`
+- `GET/POST /api/briefings`
+
 Identity and providers:
 
 - `GET /api/auth/me`
@@ -270,14 +394,6 @@ If you are contributing:
 - Prefer deterministic execution paths and auditable state transitions
 - Read [tasks.md](./tasks.md) before picking a major change
 
-## Replace the screenshot placeholders
-
-The README visuals are wired to files in `docs/screenshots/`.
-
-- Keep the same filenames and swap the SVGs for real PNG, JPG, or GIF captures later
-- Best results: 1600px wide images with a 16:10 or 16:9 aspect ratio
-- Prefer crisp captures of the inbox, chat workspace, device detail, and topology views
-
 ## License
 
-This repository does not currently declare a license in `README.md`. Add one before broad distribution.
+Steward is available under the [MIT License](./LICENSE).

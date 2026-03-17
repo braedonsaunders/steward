@@ -1,0 +1,77 @@
+{
+  "id": "certificate-guardian-replay",
+  "title": "Certificate Guardian replay",
+  "mission": {
+    "id": "mission.certificate-guardian.test",
+    "kind": "certificate-guardian",
+    "title": "Certificate Watch",
+    "summary": "Own certificate expiry and renewal readiness.",
+    "objective": "Keep TLS coverage healthy.",
+    "subagentId": "subagent.certificate-operator",
+    "priority": "high",
+    "cadenceMinutes": 30,
+    "shadowMode": false,
+    "targetJson": {
+      "selector": {
+        "allDevices": true
+      }
+    }
+  },
+  "state": {
+    "devices": [
+      {
+        "id": "device.web-1",
+        "name": "web-gateway-01",
+        "ip": "192.168.1.30",
+        "type": "server",
+        "status": "online",
+        "autonomyTier": 2,
+        "tags": [],
+        "protocols": [],
+        "services": [],
+        "firstSeenAt": "2026-03-17T11:00:00.000Z",
+        "lastSeenAt": "2026-03-17T12:00:00.000Z",
+        "lastChangedAt": "2026-03-17T12:00:00.000Z",
+        "metadata": {}
+      }
+    ],
+    "incidents": [],
+    "recommendations": [
+      {
+        "id": "recommendation.cert-1",
+        "title": "Renew expiring certificate",
+        "rationale": "TLS lifecycle drift is active.",
+        "impact": "User-facing trust failures are likely.",
+        "priority": "high",
+        "relatedDeviceIds": ["device.web-1"],
+        "createdAt": "2026-03-17T12:00:00.000Z",
+        "dismissed": false
+      }
+    ],
+    "findingsByDevice": {
+      "device.web-1": [
+        {
+          "id": "finding.cert-1",
+          "deviceId": "device.web-1",
+          "dedupeKey": "tls.cert.expiring",
+          "findingType": "tls.expiry",
+          "severity": "warning",
+          "title": "Certificate expires soon",
+          "summary": "The public TLS certificate expires in 9 days.",
+          "evidenceJson": {
+            "daysRemaining": 9
+          },
+          "status": "open",
+          "firstSeenAt": "2026-03-17T10:00:00.000Z",
+          "lastSeenAt": "2026-03-17T12:00:00.000Z"
+        }
+      ]
+    },
+    "workloadsByDevice": {},
+    "assurancesByDevice": {}
+  },
+  "expectations": {
+    "summaryIncludes": "tracking 1 open finding",
+    "openInvestigations": 1
+  }
+}

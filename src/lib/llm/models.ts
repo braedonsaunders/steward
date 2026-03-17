@@ -1,4 +1,8 @@
 import { getProviderConfig } from "@/lib/llm/config";
+import {
+  ensureFreshAnthropicOAuthSession,
+  refreshStoredAnthropicAccessToken,
+} from "@/lib/llm/anthropic-oauth";
 import { listOpenAIOAuthModels } from "@/lib/llm/openai-oauth-models";
 import { getProviderMeta } from "@/lib/llm/registry";
 import { vault } from "@/lib/security/vault";
@@ -209,26 +213,48 @@ async function fetchGoogleModels(options?: {
 
 async function fetchAnthropicModels(apiKeyOverride?: string): Promise<string[]> {
   const apiKey = apiKeyOverride ?? await vault.getSecret("llm.api.anthropic.key");
-  const oauthToken = apiKeyOverride
-    ? undefined
-    : await vault.getSecret("llm.oauth.anthropic.access_token");
+  let oauthSession = apiKeyOverride ? undefined : await ensureFreshAnthropicOAuthSession();
+  let oauthToken = oauthSession?.accessToken;
 
   if (!apiKey && !oauthToken) {
     throw new Error("Anthropic credentials are required to retrieve models.");
   }
 
-  const headers: Record<string, string> = {
-    "anthropic-version": "2023-06-01",
+  const sendRequest = async (token?: string): Promise<Response> => {
+    const headers: Record<string, string> = {
+      "anthropic-version": "2023-06-01",
+    };
+
+    if (apiKey) {
+      headers["x-api-key"] = apiKey;
+    } else if (token) {
+      headers.authorization = `Bearer ${token}`;
+      headers["anthropic-beta"] = "oauth-2025-04-20";
+    }
+
+    return fetch("https://api.anthropic.com/v1/models", {
+      headers,
+      signal: AbortSignal.timeout(MODEL_LIST_TIMEOUT_MS),
+    });
   };
 
-  if (apiKey) {
-    headers["x-api-key"] = apiKey;
-  } else if (oauthToken) {
-    headers.authorization = `Bearer ${oauthToken}`;
-    headers["anthropic-beta"] = "oauth-2025-04-20";
+  let response = await sendRequest(oauthToken);
+  if (!response.ok && response.status === 401 && oauthSession?.refreshToken) {
+    oauthSession = await refreshStoredAnthropicAccessToken(oauthSession.refreshToken);
+    oauthToken = oauthSession.accessToken;
+    if (oauthToken) {
+      response = await sendRequest(oauthToken);
+    }
   }
 
-  const payload = await fetchJson("https://api.anthropic.com/v1/models", { headers });
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(
+      `Model list request failed (${response.status} ${response.statusText}) for https://api.anthropic.com/v1/models${body ? `: ${body}` : ""}`,
+    );
+  }
+
+  const payload = await response.json() as Record<string, unknown>;
   return parseModelIds(payload);
 }
 

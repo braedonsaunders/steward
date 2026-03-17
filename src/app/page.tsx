@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Server,
   Wifi,
@@ -10,7 +10,11 @@ import {
   ArrowRight,
   CheckSquare,
   Zap,
+  Bot,
+  Target,
+  Newspaper,
 } from "lucide-react";
+import { fetchClientJson } from "@/lib/autonomy/client";
 import { useSteward } from "@/lib/hooks/use-steward";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -36,6 +40,18 @@ function relativeTime(iso: string): string {
   return `${days}d ago`;
 }
 
+function formatWhen(value?: string): string {
+  if (!value) return "Unscheduled";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return value;
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 const severityVariant = (s: string) => {
   if (s === "critical") return "destructive" as const;
   if (s === "warning") return "secondary" as const;
@@ -48,9 +64,63 @@ const priorityVariant = (p: string) => {
   return "outline" as const;
 };
 
+interface DashboardMissionItem {
+  id: string;
+  title: string;
+  status: "active" | "paused" | "completed" | "archived";
+  priority: "low" | "medium" | "high";
+  nextRunAt?: string;
+  lastSummary?: string;
+  subagent?: {
+    name: string;
+  };
+  openInvestigations: Array<{ id: string }>;
+}
+
+interface DashboardInvestigationItem {
+  id: string;
+  title: string;
+  status: "open" | "monitoring" | "resolved" | "closed";
+  severity: "critical" | "warning" | "info";
+  stage: string;
+  updatedAt: string;
+}
+
+interface DashboardBriefingItem {
+  id: string;
+  title: string;
+  delivered: boolean;
+  createdAt: string;
+}
+
+interface DashboardAutonomyMetrics {
+  workerHealth: {
+    status: "healthy" | "degraded" | "offline";
+    controlPlaneLeaderActive: boolean;
+    pendingJobs: number;
+    processingJobs: number;
+    staleProcessingJobs: number;
+    queueLagMs: number;
+  };
+  missionLatency: {
+    averageMs: number;
+  };
+  briefingLatency: {
+    averageMs: number;
+  };
+  channelDeliveryLatency: {
+    averageMs: number;
+  };
+}
+
 export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState("overview");
   const [widgetToolbarSlot, setWidgetToolbarSlot] = useState<HTMLDivElement | null>(null);
+  const [missions, setMissions] = useState<DashboardMissionItem[]>([]);
+  const [investigations, setInvestigations] = useState<DashboardInvestigationItem[]>([]);
+  const [briefings, setBriefings] = useState<DashboardBriefingItem[]>([]);
+  const [metrics, setMetrics] = useState<DashboardAutonomyMetrics | null>(null);
+  const [autonomyLoading, setAutonomyLoading] = useState(true);
   const {
     overview,
     incidents,
@@ -74,8 +144,53 @@ export default function DashboardPage() {
     .slice(0, 3);
   const healthyShare = overview.devices > 0 ? Math.round((overview.online / overview.devices) * 100) : 0;
   const topIncident = openIncidents[0];
+  const todaysBriefings = briefings.filter((briefing) => {
+    const date = new Date(briefing.createdAt);
+    const today = new Date();
+    return date.getFullYear() === today.getFullYear()
+      && date.getMonth() === today.getMonth()
+      && date.getDate() === today.getDate();
+  });
 
-  if (loading) {
+  useEffect(() => {
+    let cancelled = false;
+    const loadAutonomy = async () => {
+      setAutonomyLoading(true);
+      try {
+        const [missionResponse, investigationResponse, briefingResponse, metricsResponse] = await Promise.all([
+          fetchClientJson<{ missions: DashboardMissionItem[] }>("/api/missions"),
+          fetchClientJson<{ investigations: DashboardInvestigationItem[] }>("/api/investigations?status=open,monitoring"),
+          fetchClientJson<{ briefings: DashboardBriefingItem[] }>("/api/briefings"),
+          fetchClientJson<DashboardAutonomyMetrics>("/api/autonomy/metrics"),
+        ]);
+        if (cancelled) {
+          return;
+        }
+        setMissions(missionResponse.missions);
+        setInvestigations(investigationResponse.investigations);
+        setBriefings(briefingResponse.briefings);
+        setMetrics(metricsResponse);
+      } catch {
+        if (!cancelled) {
+          setMissions([]);
+          setInvestigations([]);
+          setBriefings([]);
+          setMetrics(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setAutonomyLoading(false);
+        }
+      }
+    };
+
+    void loadAutonomy();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (loading && autonomyLoading) {
     return (
       <div className="space-y-4">
         <div className="h-8 w-48 animate-pulse rounded bg-muted" />
@@ -102,7 +217,7 @@ export default function DashboardPage() {
             Dashboard
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Network operations overview across discovery, health, and approvals.
+            Mission control for Steward as your always-on IT operator.
           </p>
         </div>
         <div className="grid gap-2 sm:grid-cols-3 xl:w-[34rem]">
@@ -134,6 +249,180 @@ export default function DashboardPage() {
 
         <TabsContent value="overview" className="mt-4 min-h-0 flex-1 overflow-auto">
           <div className="flex flex-col gap-4">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Card>
+                <CardContent className="flex items-center gap-3 p-4">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                    <Target className="h-5 w-5 text-primary" />
+                  </div>
+                  <div>
+                    <p className="steward-kicker">Active Missions</p>
+                    <p className="mt-1 text-2xl font-semibold">{missions.filter((mission) => mission.status === "active").length}</p>
+                    <p className="text-xs text-muted-foreground">Durable responsibilities</p>
+                  </div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="flex items-center gap-3 p-4">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-500/10">
+                    <Bot className="h-5 w-5 text-orange-600 dark:text-orange-400" />
+                  </div>
+                  <div>
+                    <p className="steward-kicker">Investigations</p>
+                    <p className="mt-1 text-2xl font-semibold">{investigations.length}</p>
+                    <p className="text-xs text-muted-foreground">Open or monitoring</p>
+                  </div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="flex items-center gap-3 p-4">
+                  <div className={cn(
+                    "flex h-10 w-10 items-center justify-center rounded-lg",
+                    overview.pendingApprovals > 0 ? "bg-orange-500/10" : "bg-muted",
+                  )}>
+                    <CheckSquare className={cn(
+                      "h-5 w-5",
+                      overview.pendingApprovals > 0 ? "text-orange-600 dark:text-orange-400" : "text-muted-foreground",
+                    )} />
+                  </div>
+                  <div>
+                    <p className="steward-kicker">Pending Approvals</p>
+                    <p className="mt-1 text-2xl font-semibold">{overview.pendingApprovals}</p>
+                    <p className="text-xs text-muted-foreground">Human decisions waiting</p>
+                  </div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="flex items-center gap-3 p-4">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-cyan-500/10">
+                    <Newspaper className="h-5 w-5 text-cyan-600 dark:text-cyan-400" />
+                  </div>
+                  <div>
+                    <p className="steward-kicker">Today&apos;s Briefings</p>
+                    <p className="mt-1 text-2xl font-semibold">{todaysBriefings.length}</p>
+                    <p className="text-xs text-muted-foreground">Operator updates delivered or staged</p>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {metrics ? (
+              <div className="grid gap-3 lg:grid-cols-4">
+                <div className="rounded-lg border border-border bg-card px-3 py-3">
+                  <p className="steward-kicker">Autonomy Worker</p>
+                  <p className="mt-1 text-sm font-semibold capitalize text-foreground">{metrics.workerHealth.status}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {metrics.workerHealth.controlPlaneLeaderActive ? "Leader active" : "Leader offline"}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-border bg-card px-3 py-3">
+                  <p className="steward-kicker">Queue Lag</p>
+                  <p className="mt-1 text-sm font-semibold text-foreground">{Math.round(metrics.workerHealth.queueLagMs / 1000)}s</p>
+                  <p className="text-xs text-muted-foreground">
+                    {metrics.workerHealth.pendingJobs} pending, {metrics.workerHealth.processingJobs} processing
+                  </p>
+                </div>
+                <div className="rounded-lg border border-border bg-card px-3 py-3">
+                  <p className="steward-kicker">Mission Latency</p>
+                  <p className="mt-1 text-sm font-semibold text-foreground">{Math.round(metrics.missionLatency.averageMs / 1000)}s avg</p>
+                  <p className="text-xs text-muted-foreground">Runtime completion over last 24h</p>
+                </div>
+                <div className="rounded-lg border border-border bg-card px-3 py-3">
+                  <p className="steward-kicker">Delivery Latency</p>
+                  <p className="mt-1 text-sm font-semibold text-foreground">{Math.round(metrics.channelDeliveryLatency.averageMs / 1000)}s avg</p>
+                  <p className="text-xs text-muted-foreground">Gateway delivery timing over last 24h</p>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="grid gap-4 lg:grid-cols-3">
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between pb-3">
+                  <div>
+                    <CardTitle className="text-base">Mission Control</CardTitle>
+                    <CardDescription>What Steward currently owns</CardDescription>
+                  </div>
+                  <Button variant="ghost" size="sm" asChild>
+                    <Link href="/missions">
+                      View all <ArrowRight className="ml-1 h-3.5 w-3.5" />
+                    </Link>
+                  </Button>
+                </CardHeader>
+                <CardContent>
+                  {missions.length === 0 ? <p className="py-8 text-center text-sm text-muted-foreground">No missions in scope.</p> : <div className="space-y-3">{missions.slice(0, 5).map((mission) => (
+                    <Link key={mission.id} href="/missions" className="block rounded-lg border p-3 transition-colors hover:bg-muted/50">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium">{mission.title}</p>
+                          <p className="mt-0.5 text-xs text-muted-foreground line-clamp-1">
+                            {mission.subagent?.name ?? "Unassigned"} · {mission.openInvestigations.length} open investigation(s)
+                          </p>
+                        </div>
+                        <Badge variant={priorityVariant(mission.priority)} className="shrink-0">{mission.priority}</Badge>
+                      </div>
+                      <p className="mt-2 text-[11px] text-muted-foreground">{mission.lastSummary ?? `Next run ${formatWhen(mission.nextRunAt)}`}</p>
+                    </Link>
+                  ))}</div>}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between pb-3">
+                  <div>
+                    <CardTitle className="text-base">Active Investigations</CardTitle>
+                    <CardDescription>Ambiguous work that remains in flight</CardDescription>
+                  </div>
+                  <Button variant="ghost" size="sm" asChild>
+                    <Link href="/missions">
+                      Open missions <ArrowRight className="ml-1 h-3.5 w-3.5" />
+                    </Link>
+                  </Button>
+                </CardHeader>
+                <CardContent>
+                  {investigations.length === 0 ? <p className="py-8 text-center text-sm text-muted-foreground">No active investigations.</p> : <div className="space-y-3">{investigations.slice(0, 5).map((investigation) => (
+                    <div key={investigation.id} className="rounded-lg border p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium">{investigation.title}</p>
+                          <p className="mt-0.5 text-xs text-muted-foreground">Stage {investigation.stage} · {relativeTime(investigation.updatedAt)}</p>
+                        </div>
+                        <Badge variant={severityVariant(investigation.severity)} className="shrink-0">{investigation.severity}</Badge>
+                      </div>
+                    </div>
+                  ))}</div>}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between pb-3">
+                  <div>
+                    <CardTitle className="text-base">Recent Briefings</CardTitle>
+                    <CardDescription>Telegram-first operator updates</CardDescription>
+                  </div>
+                  <Button variant="ghost" size="sm" asChild>
+                    <Link href="/gateway">
+                      Gateway <ArrowRight className="ml-1 h-3.5 w-3.5" />
+                    </Link>
+                  </Button>
+                </CardHeader>
+                <CardContent>
+                  {briefings.length === 0 ? <p className="py-8 text-center text-sm text-muted-foreground">No briefings yet.</p> : <div className="space-y-3">{briefings.slice(0, 5).map((briefing) => (
+                    <div key={briefing.id} className="rounded-lg border p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium">{briefing.title}</p>
+                          <p className="mt-0.5 text-xs text-muted-foreground">{relativeTime(briefing.createdAt)}</p>
+                        </div>
+                        <Badge variant={briefing.delivered ? "default" : "outline"} className="shrink-0">
+                          {briefing.delivered ? "Delivered" : "Stored"}
+                        </Badge>
+                      </div>
+                    </div>
+                  ))}</div>}
+                </CardContent>
+              </Card>
+            </div>
+
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
               <Card>
                 <CardContent className="flex items-center gap-3 p-4">

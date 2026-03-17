@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useSearchParams } from "next/navigation";
@@ -1021,9 +1022,12 @@ const ChatToolEventCard = memo(function ChatToolEventCard({
 
                   {browserScreenshotSrc ? (
                     <div className="overflow-hidden rounded-xl border border-border/70 bg-muted/20">
-                      <img
+                      <Image
                         src={browserScreenshotSrc}
                         alt="Browser snapshot"
+                        width={1600}
+                        height={900}
+                        unoptimized
                         className="mx-auto h-auto max-h-[34rem] w-full object-contain"
                       />
                     </div>
@@ -1085,9 +1089,12 @@ const ChatToolEventCard = memo(function ChatToolEventCard({
 
                   {remoteDesktopFrameSrc ? (
                     <div className="overflow-hidden rounded-xl border border-border/70 bg-muted/20">
-                      <img
+                      <Image
                         src={remoteDesktopFrameSrc}
                         alt="Remote desktop snapshot"
+                        width={1600}
+                        height={900}
+                        unoptimized
                         className="mx-auto h-auto max-h-[34rem] w-full object-contain"
                       />
                     </div>

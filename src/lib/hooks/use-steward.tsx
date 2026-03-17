@@ -270,6 +270,19 @@ export interface StewardContextValue {
   saveSystemSettings: (settings: SystemSettings) => Promise<void>;
   setApiToken: (token: string | null) => Promise<void>;
   setDeviceAdoptionStatus: (id: string, status: DeviceAdoptionStatus) => Promise<void>;
+  createPolicyRule: (
+    input: Omit<PolicyRule, "id" | "createdAt" | "updatedAt">,
+  ) => Promise<void>;
+  updatePolicyRule: (id: string, input: Partial<Omit<PolicyRule, "id" | "createdAt" | "updatedAt">>) => Promise<void>;
+  deletePolicyRule: (id: string) => Promise<void>;
+  createMaintenanceWindow: (
+    input: Omit<MaintenanceWindow, "id" | "createdAt">,
+  ) => Promise<void>;
+  updateMaintenanceWindow: (
+    id: string,
+    input: Partial<Omit<MaintenanceWindow, "id" | "createdAt">>,
+  ) => Promise<void>;
+  deleteMaintenanceWindow: (id: string) => Promise<void>;
 }
 
 const StewardContext = createContext<StewardContextValue | null>(null);
@@ -720,6 +733,77 @@ export function StewardProvider({ children }: { children: ReactNode }) {
     await loadState();
   }, [loadState]);
 
+  const createPolicyRule = useCallback(
+    async (input: Omit<PolicyRule, "id" | "createdAt" | "updatedAt">) => {
+      await fetchJson("/api/policies", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      await loadState();
+    },
+    [loadState],
+  );
+
+  const updatePolicyRule = useCallback(
+    async (
+      id: string,
+      input: Partial<Omit<PolicyRule, "id" | "createdAt" | "updatedAt">>,
+    ) => {
+      await fetchJson(`/api/policies/${id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      await loadState();
+    },
+    [loadState],
+  );
+
+  const deletePolicyRule = useCallback(
+    async (id: string) => {
+      await fetchJson(`/api/policies/${id}`, {
+        method: "DELETE",
+      });
+      await loadState();
+    },
+    [loadState],
+  );
+
+  const createMaintenanceWindow = useCallback(
+    async (input: Omit<MaintenanceWindow, "id" | "createdAt">) => {
+      await fetchJson("/api/maintenance-windows", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      await loadState();
+    },
+    [loadState],
+  );
+
+  const updateMaintenanceWindow = useCallback(
+    async (id: string, input: Partial<Omit<MaintenanceWindow, "id" | "createdAt">>) => {
+      await fetchJson(`/api/maintenance-windows/${id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      await loadState();
+    },
+    [loadState],
+  );
+
+  const deleteMaintenanceWindow = useCallback(
+    async (id: string) => {
+      await fetchJson(`/api/maintenance-windows/${id}`, {
+        method: "DELETE",
+      });
+      await loadState();
+    },
+    [loadState],
+  );
+
   const value = useMemo<StewardContextValue>(
     () => ({
       devices: state?.devices ?? [],
@@ -803,6 +887,12 @@ export function StewardProvider({ children }: { children: ReactNode }) {
       saveSystemSettings,
       setApiToken,
       setDeviceAdoptionStatus,
+      createPolicyRule,
+      updatePolicyRule,
+      deletePolicyRule,
+      createMaintenanceWindow,
+      updateMaintenanceWindow,
+      deleteMaintenanceWindow,
     }),
     [
         state,
@@ -840,6 +930,12 @@ export function StewardProvider({ children }: { children: ReactNode }) {
       saveSystemSettings,
       setApiToken,
       setDeviceAdoptionStatus,
+      createPolicyRule,
+      updatePolicyRule,
+      deletePolicyRule,
+      createMaintenanceWindow,
+      updateMaintenanceWindow,
+      deleteMaintenanceWindow,
     ],
   );
 

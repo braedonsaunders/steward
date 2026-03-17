@@ -4,6 +4,14 @@ import { candidateToDevice } from "@/lib/discovery/classify";
 import { dedupeObservations, evaluateDiscoveryEvidence } from "@/lib/discovery/evidence";
 import { generateDiscoveryAdvice } from "@/lib/discovery/advisor";
 import type { DiscoveryDiagnostics } from "@/lib/discovery/types";
+import {
+  AUTONOMY_JOB_KINDS,
+} from "@/lib/autonomy/runtime";
+import {
+  ensureMissionBootstrap,
+  processMissionAutonomyJobs,
+  queueDueMissionAutonomyJobs,
+} from "@/lib/missions/worker";
 import { buildManagementSurface } from "@/lib/protocols/negotiator";
 import { evaluatePolicy } from "@/lib/policy/engine";
 import { matchPlaybooksForIncident } from "@/lib/playbooks/registry";
@@ -36,6 +44,7 @@ import { routeFinding } from "@/lib/findings/router";
 import { localToolRuntime } from "@/lib/local-tools/runtime";
 import { getAdoptionRecord, getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
 import { processNotificationJobs } from "@/lib/notifications/manager";
+import { pollGatewayBindings } from "@/lib/gateway/worker";
 import {
   evaluateServiceContract,
   getMonitorType,
@@ -50,6 +59,7 @@ import { runShell } from "@/lib/utils/shell";
 import { ensureDeviceAutomationScheduler, stopDeviceAutomationScheduler } from "@/lib/widgets/automations";
 import type {
   AgentRunRecord,
+  AssuranceRun,
   Device,
   DeviceBaseline,
   Incident,
@@ -81,8 +91,44 @@ const AVAILABILITY_OFFLINE_INCIDENT_TYPE = "availability.offline";
 const SECURITY_TELNET_INCIDENT_TYPE = "security.telnet-exposure";
 const ASSURANCE_FAILURE_INCIDENT_TYPE = "assurance.failure";
 const LEGACY_SERVICE_CONTRACT_FAILURE_INCIDENT_TYPE = "service-contract.failure";
+const DISK_PRESSURE_FINDING_TYPE = "disk_pressure";
+const FAILED_SERVICE_FINDING_TYPE = "service_failure";
+const STALE_BACKUP_FINDING_TYPE = "backup_staleness";
+const OPEN_PORT_DRIFT_FINDING_TYPE = "open_port_policy_drift";
 const TLS_CERT_WARNING_WINDOW_DAYS = 30;
 const TLS_CERT_CRITICAL_WINDOW_DAYS = 7;
+
+const PORT_DRIFT_RULES = new Map<number, { reason: string; severity: Incident["severity"] }>([
+  [21, { reason: "FTP exposure does not match Steward's default management policy.", severity: "warning" }],
+  [69, { reason: "TFTP exposure does not match Steward's default management policy.", severity: "warning" }],
+  [111, { reason: "RPC bind exposure is broader than Steward's default policy expects.", severity: "warning" }],
+  [445, { reason: "SMB exposure is unexpected for this device role.", severity: "warning" }],
+  [5900, { reason: "VNC exposure is outside Steward's default access policy.", severity: "warning" }],
+  [5985, { reason: "Unencrypted WinRM exposure is outside Steward's default access policy.", severity: "warning" }],
+  [2375, { reason: "Unencrypted Docker API exposure is outside Steward's default access policy.", severity: "critical" }],
+]);
+
+const PORT_DRIFT_SENSITIVE_TYPES = new Set([
+  "router",
+  "firewall",
+  "switch",
+  "access-point",
+  "camera",
+  "printer",
+  "scanner",
+  "iot",
+  "sensor",
+  "controller",
+  "smart-tv",
+  "media-streamer",
+  "badge-reader",
+  "door-controller",
+  "conference-system",
+  "voip-phone",
+  "ups",
+  "pdu",
+  "modem",
+]);
 
 const daysUntilIso = (value: string): number | null => {
   const at = new Date(value).getTime();
@@ -250,6 +296,32 @@ const criticalityToRecommendationPriority = (
   if (criticality === "high") return "high";
   if (criticality === "medium") return "medium";
   return "low";
+};
+
+const assuranceText = (contract: ServiceContract, run?: AssuranceRun): string =>
+  `${contract.displayName} ${contract.assuranceKey} ${contract.serviceKey}`.concat(
+    run ? ` ${run.summary}` : "",
+  ).toLowerCase();
+
+const isBackupContract = (contract: ServiceContract, run?: AssuranceRun): boolean =>
+  /\b(backup|snapshot|replication|replica|restore|archive|rsync|veeam|borg|restic|sync)\b/.test(
+    assuranceText(contract, run),
+  );
+
+const isServiceHealthContract = (contract: ServiceContract): boolean => {
+  const monitorType = getMonitorType(contract);
+  if (monitorType === "process_health" || monitorType === "service_presence") {
+    return true;
+  }
+  return /\b(service|daemon|systemd|worker|process)\b/.test(assuranceText(contract));
+};
+
+const highestSeverity = (
+  values: Incident["severity"][],
+): Incident["severity"] => {
+  if (values.includes("critical")) return "critical";
+  if (values.includes("warning")) return "warning";
+  return "info";
 };
 
 const normalizedIgnoredIncidentTypes = (settings: RuntimeSettings): Set<string> =>
@@ -547,6 +619,257 @@ const evaluateAssurancesForDevice = async (
     incidents: nextIncidents,
     recommendations: nextRecommendations,
     incidentsOpened,
+    recommendationsAdded,
+  };
+};
+
+export const applyOperationalFindingPacks = async (
+  device: Device,
+  incidents: Incident[],
+  recommendations: Recommendation[],
+): Promise<{
+  incidents: Incident[];
+  recommendations: Recommendation[];
+  recommendationsAdded: number;
+}> => {
+  let nextIncidents = incidents;
+  let nextRecommendations = recommendations;
+  let recommendationsAdded = 0;
+
+  const contracts = stateStore.getServiceContracts(device.id);
+  const latestRuns = new Map(
+    stateStore.getLatestAssuranceRuns(device.id).map((run) => [run.assuranceId, run]),
+  );
+
+  for (const contract of contracts) {
+    const run = latestRuns.get(contract.id);
+    const monitorType = getMonitorType(contract);
+
+    if (monitorType === "disk_pressure") {
+      if (run) {
+        const usagePercent = typeof run.evidenceJson.usagePercent === "number"
+          ? run.evidenceJson.usagePercent
+          : null;
+        const thresholdPercent = typeof run.evidenceJson.thresholdPercent === "number"
+          ? run.evidenceJson.thresholdPercent
+          : null;
+        const severity: Incident["severity"] = usagePercent !== null && usagePercent >= 97
+          ? "critical"
+          : criticalityToIncidentSeverity(contract.criticality);
+        const routed = await routeFinding({
+          incidents: nextIncidents,
+          source: "monitor.disk-pressure",
+          finding: {
+            deviceId: device.id,
+            dedupeKey: `disk-pressure:${device.id}:${contract.id}`,
+            findingType: DISK_PRESSURE_FINDING_TYPE,
+            severity,
+            title: `Disk pressure on ${device.name}`,
+            summary: run.status === "fail"
+              ? run.summary
+              : `${contract.displayName} is within its disk threshold${usagePercent !== null ? ` (${usagePercent}%)` : ""}.`,
+            evidenceJson: {
+              assuranceId: contract.id,
+              displayName: contract.displayName,
+              usagePercent,
+              thresholdPercent,
+              monitorType,
+              latestStatus: run.status,
+            },
+            status: run.status === "fail" ? "open" : "resolved",
+          },
+          occurrenceMetadata: {
+            assuranceId: contract.id,
+            usagePercent,
+            thresholdPercent,
+          },
+        });
+        nextIncidents = routed.incidents;
+
+        if (run.status === "fail") {
+          const recommendation = ensureRecommendation(nextRecommendations, {
+            title: `Relieve disk pressure on ${device.name}`,
+            rationale: run.summary,
+            impact: "Reduces the chance of service failures, failed writes, and emergency cleanup.",
+            priority: severity === "critical" ? "high" : "medium",
+            relatedDeviceIds: [device.id],
+          });
+          nextRecommendations = recommendation.next;
+          recommendationsAdded += recommendation.added ? 1 : 0;
+        }
+      }
+      continue;
+    }
+
+    if (isServiceHealthContract(contract) && run) {
+      const serviceName = typeof run.evidenceJson.serviceName === "string"
+        ? run.evidenceJson.serviceName
+        : contract.displayName;
+      const routed = await routeFinding({
+        incidents: nextIncidents,
+        source: "monitor.service-health",
+        finding: {
+          deviceId: device.id,
+          dedupeKey: `service-health:${device.id}:${contract.id}`,
+          findingType: FAILED_SERVICE_FINDING_TYPE,
+          severity: criticalityToIncidentSeverity(contract.criticality),
+          title: `Service health drift on ${device.name}`,
+          summary: run.status === "fail"
+            ? run.summary
+            : `${serviceName} is reporting healthy again on ${device.name}.`,
+          evidenceJson: {
+            assuranceId: contract.id,
+            serviceName,
+            monitorType,
+            latestStatus: run.status,
+          },
+          status: run.status === "fail" ? "open" : "resolved",
+        },
+        occurrenceMetadata: {
+          assuranceId: contract.id,
+          serviceName,
+        },
+      });
+      nextIncidents = routed.incidents;
+
+      if (run.status === "fail") {
+        const recommendation = ensureRecommendation(nextRecommendations, {
+          title: `Investigate ${serviceName} on ${device.name}`,
+          rationale: run.summary,
+          impact: "Restores the failed service before it degrades user-facing workloads.",
+          priority: criticalityToRecommendationPriority(contract.criticality),
+          relatedDeviceIds: [device.id],
+        });
+        nextRecommendations = recommendation.next;
+        recommendationsAdded += recommendation.added ? 1 : 0;
+      }
+    }
+
+    if (isBackupContract(contract, run)) {
+      const lastEvaluatedAt = Date.parse(run?.evaluatedAt ?? String(contract.policyJson.lastEvaluatedAt ?? ""));
+      const staleAfterMs = Math.max(contract.checkIntervalSec * 2 * 1000, 12 * 60 * 60 * 1000);
+      const overdueMs = Number.isFinite(lastEvaluatedAt) ? Date.now() - lastEvaluatedAt : staleAfterMs + 1;
+      const stale = !Number.isFinite(lastEvaluatedAt) || overdueMs > staleAfterMs || run?.status === "fail" || run?.status === "pending";
+      const severity: Incident["severity"] = overdueMs > staleAfterMs * 2 || run?.status === "fail"
+        ? "critical"
+        : "warning";
+      const summary = run?.status === "fail"
+        ? run.summary
+        : run?.status === "pending"
+          ? `${contract.displayName} has not produced a current backup result yet.`
+          : !Number.isFinite(lastEvaluatedAt)
+            ? `${contract.displayName} has never recorded a backup validation result.`
+            : stale
+              ? `${contract.displayName} last evaluated at ${new Date(lastEvaluatedAt).toLocaleString()}, which is outside its expected backup cadence.`
+              : `${contract.displayName} backup evidence is current.`;
+      const routed = await routeFinding({
+        incidents: nextIncidents,
+        source: "monitor.backup",
+        finding: {
+          deviceId: device.id,
+          dedupeKey: `backup-staleness:${device.id}:${contract.id}`,
+          findingType: STALE_BACKUP_FINDING_TYPE,
+          severity,
+          title: `Backup coverage drift on ${device.name}`,
+          summary,
+          evidenceJson: {
+            assuranceId: contract.id,
+            displayName: contract.displayName,
+            latestStatus: run?.status ?? "missing",
+            lastEvaluatedAt: Number.isFinite(lastEvaluatedAt) ? new Date(lastEvaluatedAt).toISOString() : null,
+            staleAfterMs,
+          },
+          status: stale ? "open" : "resolved",
+        },
+        occurrenceMetadata: {
+          assuranceId: contract.id,
+          latestStatus: run?.status ?? "missing",
+        },
+      });
+      nextIncidents = routed.incidents;
+
+      if (stale) {
+        const recommendation = ensureRecommendation(nextRecommendations, {
+          title: `Verify backup freshness for ${device.name}`,
+          rationale: summary,
+          impact: "Reduces the risk of discovering backup gaps during an outage or restore event.",
+          priority: severity === "critical" ? "high" : "medium",
+          relatedDeviceIds: [device.id],
+        });
+        nextRecommendations = recommendation.next;
+        recommendationsAdded += recommendation.added ? 1 : 0;
+      }
+    }
+  }
+
+  const portViolations = device.services
+    .filter((service) => service.transport === "tcp")
+    .map((service) => ({
+      service,
+      rule: PORT_DRIFT_RULES.get(service.port),
+    }))
+    .filter(({ service, rule }) => {
+      if (!rule) {
+        return false;
+      }
+      if (service.port === 2375 || service.port === 5985 || service.port === 5900) {
+        return true;
+      }
+      if (service.port === 445) {
+        return !["server", "workstation", "laptop", "nas", "container-host", "hypervisor", "vm-host"].includes(device.type);
+      }
+      return PORT_DRIFT_SENSITIVE_TYPES.has(device.type);
+    });
+
+  const driftSummary = portViolations.length === 0
+    ? `Observed ports on ${device.name} align with Steward's default device-role policy.`
+    : `Observed port policy drift: ${portViolations
+      .slice(0, 4)
+      .map(({ service, rule }) => `${service.port}/${service.transport} (${rule?.reason ?? "unexpected exposure"})`)
+      .join("; ")}.`;
+  const driftRouted = await routeFinding({
+    incidents: nextIncidents,
+    source: "scanner.port-policy",
+    finding: {
+      deviceId: device.id,
+      dedupeKey: `open-port-policy:${device.id}`,
+      findingType: OPEN_PORT_DRIFT_FINDING_TYPE,
+      severity: highestSeverity(portViolations.map(({ rule }) => rule?.severity ?? "info")),
+      title: `Open-port policy drift on ${device.name}`,
+      summary: driftSummary,
+      evidenceJson: {
+        ports: portViolations.map(({ service, rule }) => ({
+          port: service.port,
+          transport: service.transport,
+          service: service.name,
+          reason: rule?.reason ?? "unexpected exposure",
+        })),
+      },
+      status: portViolations.length > 0 ? "open" : "resolved",
+    },
+    occurrenceMetadata: {
+      violatingPorts: portViolations.map(({ service }) => service.port),
+    },
+  });
+  nextIncidents = driftRouted.incidents;
+
+  if (portViolations.length > 0) {
+    const recommendation = ensureRecommendation(nextRecommendations, {
+      title: `Review open-port policy on ${device.name}`,
+      rationale: driftSummary,
+      impact: "Tightens exposed services to the ports Steward expects for this device role.",
+      priority: highestSeverity(portViolations.map(({ rule }) => rule?.severity ?? "info")) === "critical"
+        ? "high"
+        : "medium",
+      relatedDeviceIds: [device.id],
+    });
+    nextRecommendations = recommendation.next;
+    recommendationsAdded += recommendation.added ? 1 : 0;
+  }
+
+  return {
+    incidents: nextIncidents,
+    recommendations: nextRecommendations,
     recommendationsAdded,
   };
 };
@@ -1216,6 +1539,15 @@ const actPhase = async (devices: Device[]): Promise<{
         recommendationsAdded += recommendation.added ? 1 : 0;
       }
     }
+
+    const operationalFindingPack = await applyOperationalFindingPacks(
+      device,
+      incidents,
+      recommendations,
+    );
+    incidents = operationalFindingPack.incidents;
+    recommendations = operationalFindingPack.recommendations;
+    recommendationsAdded += operationalFindingPack.recommendationsAdded;
 
     const tlsServices = device.services
       .filter((service) => service.tlsCert?.validTo)
@@ -2274,6 +2606,7 @@ const runControlPlaneTick = async (): Promise<void> => {
   coordinatorRunning = true;
   try {
     const settings = stateStore.getRuntimeSettings();
+    ensureMissionBootstrap();
     expireStale();
     stateStore.cleanupExpiredRuntimeLeases();
     stateStore.requeueStaleDurableJobs(scannerJobStaleMs(settings), {
@@ -2285,6 +2618,9 @@ const runControlPlaneTick = async (): Promise<void> => {
     stateStore.requeueStaleDurableJobs(runtimeJobStaleMs(settings), {
       kinds: Array.from(RUNTIME_JOB_KINDS),
     });
+    stateStore.requeueStaleDurableJobs(runtimeJobStaleMs(settings), {
+      kinds: Array.from(AUTONOMY_JOB_KINDS),
+    });
 
     const latestScannerRun = stateStore.getLatestScannerRun();
     const scannerQueueBusy = stateStore.hasDurableJobsInFlight(Array.from(SCANNER_JOB_KINDS));
@@ -2294,6 +2630,7 @@ const runControlPlaneTick = async (): Promise<void> => {
 
     await queueDueAssuranceJobs();
     await queueDueDiscoveryEnrichmentJobs();
+    await queueDueMissionAutonomyJobs();
 
     const latestPeriodicAgentWake = stateStore.getLatestAgentRunByWakeReason("periodic_review");
     const agentWakeQueueBusy = stateStore.hasDurableJobsInFlight([AGENT_WAKE_JOB_KIND]);
@@ -2305,6 +2642,7 @@ const runControlPlaneTick = async (): Promise<void> => {
       processScannerJobs(),
       processDiscoveryEnrichmentJobs(),
       processRuntimeJobs(),
+      processMissionAutonomyJobs(),
     ]);
   } finally {
     coordinatorRunning = false;
@@ -2312,6 +2650,7 @@ const runControlPlaneTick = async (): Promise<void> => {
 };
 
 const startLeaderWorkers = (settings: RuntimeSettings, options?: { immediate?: boolean }): void => {
+  ensureMissionBootstrap();
   ensureDigestScheduler();
   ensureDeviceAutomationScheduler();
 
@@ -2346,6 +2685,9 @@ const startLeaderWorkers = (settings: RuntimeSettings, options?: { immediate?: b
       void webSessionManager.sweep().catch((error) => {
         console.error("Web session sweep failed", error);
       });
+      void pollGatewayBindings().catch((error) => {
+        console.error("Gateway polling worker failed", error);
+      });
       void processNotificationJobs().catch((error) => {
         console.error("Notification worker failed", error);
       });
@@ -2362,6 +2704,9 @@ const startLeaderWorkers = (settings: RuntimeSettings, options?: { immediate?: b
 
   void processNotificationJobs().catch((error) => {
     console.error("Notification worker startup failed", error);
+  });
+  void pollGatewayBindings().catch((error) => {
+    console.error("Gateway polling startup failed", error);
   });
 };
 
@@ -2417,6 +2762,7 @@ const refreshLeadership = async (): Promise<void> => {
           ...Array.from(SCANNER_JOB_KINDS),
           ...Array.from(DISCOVERY_JOB_KINDS),
           ...Array.from(RUNTIME_JOB_KINDS),
+          ...Array.from(AUTONOMY_JOB_KINDS),
         ],
       });
     }

@@ -1,0 +1,13 @@
+{
+  "slug": "managed-test",
+  "name": "Managed Test",
+  "version": "1.0.0",
+  "description": "Managed pack",
+  "resources": [
+    {
+      "type": "mission-template",
+      "key": "mission-x",
+      "title": "Mission X"
+    }
+  ]
+}

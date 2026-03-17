@@ -26,6 +26,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DeviceWorkloadsPanel } from "@/components/device-workloads-panel";
+import { DeviceMissionsPanel } from "@/components/device-missions-panel";
 import { DeviceAccessPanel } from "@/components/device-access-panel";
 import { DeviceRemoteDesktopPanel } from "@/components/device-remote-desktop-panel";
 import { DeviceAutomationsPanel } from "@/components/device-automations-panel";
@@ -276,7 +277,7 @@ type DevicePrimaryTab =
   | "activity"
   | "settings";
 
-type DeviceManageTab = "access" | "workloads" | "automations";
+type DeviceManageTab = "access" | "missions" | "workloads" | "automations";
 
 export default function DeviceDetailPage() {
   const params = useParams<{ id: string }>();
@@ -822,11 +823,12 @@ export default function DeviceDetailPage() {
               <div className="space-y-1">
                 <p className="text-sm font-medium text-foreground">Manage</p>
                 <p className="text-xs text-muted-foreground">
-                  Access, responsibilities, and automations for this device.
+                  Access, mission ownership, responsibilities, and automations for this device.
                 </p>
               </div>
               <TabsList className="h-auto w-fit flex-wrap justify-start self-start">
                 <TabsTrigger className="h-8 flex-none px-3 text-xs sm:h-9 sm:text-sm" value="access">Access</TabsTrigger>
+                <TabsTrigger className="h-8 flex-none px-3 text-xs sm:h-9 sm:text-sm" value="missions">Missions</TabsTrigger>
                 <TabsTrigger className="h-8 flex-none px-3 text-xs sm:h-9 sm:text-sm" value="workloads">Workloads</TabsTrigger>
                 <TabsTrigger className="h-8 flex-none px-3 text-xs sm:h-9 sm:text-sm" value="automations">Automations</TabsTrigger>
               </TabsList>
@@ -841,6 +843,22 @@ export default function DeviceDetailPage() {
                     <DeviceAccessPanel
                       deviceId={device.id}
                       active={activePrimaryTab === "manage" && activeManageTab === "access"}
+                      className="h-full"
+                    />
+                  </div>
+                </AnimatedTabPanel>
+              </TabsContent>
+
+              <TabsContent value="missions" forceMount className="mt-0 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
+                <AnimatedTabPanel
+                  active={activePrimaryTab === "manage" && activeManageTab === "missions"}
+                  persistent
+                  className="overflow-hidden"
+                >
+                  <div className="h-full min-h-0 min-w-0 overflow-hidden">
+                    <DeviceMissionsPanel
+                      deviceId={device.id}
+                      active={activePrimaryTab === "manage" && activeManageTab === "missions"}
                       className="h-full"
                     />
                   </div>

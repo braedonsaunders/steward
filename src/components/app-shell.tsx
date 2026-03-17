@@ -20,6 +20,10 @@ import {
   Network,
   Puzzle,
   UserRoundCog,
+  Bot,
+  Package2,
+  Send,
+  Target,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -63,6 +67,15 @@ const navGroups: { label: string; items: NavItem[] }[] = [
     items: [
       { href: "/approvals", label: "Approvals", icon: CheckSquare },
       { href: "/policies", label: "Policies", icon: ShieldCheck },
+    ],
+  },
+  {
+    label: "Autonomy",
+    items: [
+      { href: "/missions", label: "Missions", icon: Target },
+      { href: "/subagents", label: "Subagents", icon: Bot },
+      { href: "/packs", label: "Packs", icon: Package2 },
+      { href: "/gateway", label: "Gateway", icon: Send },
     ],
   },
   {

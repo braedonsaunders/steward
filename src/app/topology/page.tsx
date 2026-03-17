@@ -36,7 +36,7 @@ import {
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSteward } from "@/lib/hooks/use-steward";
-import type { Device, DeviceStatus, DeviceType, GraphEdge } from "@/lib/state/types";
+import type { Device, DeviceStatus, DeviceType, GraphEdge, GraphNode } from "@/lib/state/types";
 import { cn } from "@/lib/utils";
 
 type TopologyColumn = "internet" | "edge" | "network" | "infrastructure" | "endpoints";
@@ -198,18 +198,17 @@ function statusDotClass(status?: DeviceStatus): string {
   }
 }
 
-function subnet24(ip: string): string {
-  const parts = ip.split(".");
-  if (parts.length !== 4) return "Unassigned";
-  return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
-}
-
 function parseIpv4(ip: string): number {
   const parts = ip.split(".").map((part) => Number(part));
   if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
     return Number.MAX_SAFE_INTEGER;
   }
   return (((parts[0] << 24) >>> 0) + (parts[1] << 16) + (parts[2] << 8) + parts[3]) >>> 0;
+}
+
+function parseCidrBase(cidr: string): number {
+  const [base] = cidr.split("/");
+  return parseIpv4(base ?? "");
 }
 
 function isEdgeDevice(device: Device): boolean {
@@ -383,6 +382,35 @@ function buildDeviceDependencyMaps(edges: GraphEdge[]) {
   return { outgoing, incoming };
 }
 
+function buildDeviceSubnetMap(graphNodes: GraphNode[], graphEdges: GraphEdge[]): Map<string, string> {
+  const subnetByNodeId = new Map<string, string>();
+  for (const node of graphNodes) {
+    if (!node.id.startsWith("subnet:")) {
+      continue;
+    }
+    const cidr = typeof node.properties.cidr === "string" && node.properties.cidr.trim().length > 0
+      ? node.properties.cidr.trim()
+      : node.label.trim();
+    if (cidr.length > 0) {
+      subnetByNodeId.set(node.id, cidr);
+    }
+  }
+
+  const deviceSubnetById = new Map<string, string>();
+  for (const edge of graphEdges) {
+    if (edge.type !== "contains" || !edge.from.startsWith("subnet:") || !edge.to.startsWith("device:")) {
+      continue;
+    }
+    const cidr = subnetByNodeId.get(edge.from);
+    if (!cidr) {
+      continue;
+    }
+    deviceSubnetById.set(edge.to.replace(/^device:/, ""), cidr);
+  }
+
+  return deviceSubnetById;
+}
+
 function pickBestParentId(
   deviceId: string,
   outgoingDeps: Map<string, GraphEdge[]>,
@@ -406,20 +434,25 @@ function pickBestParentId(
   return { parentId: matching[0].targetId, reason: matching[0].reason };
 }
 
-function buildTopologySections(devices: Device[], graphEdges: GraphEdge[]): TopologySection[] {
+function buildTopologySections(
+  devices: Device[],
+  graphNodes: GraphNode[],
+  graphEdges: GraphEdge[],
+): TopologySection[] {
   const { outgoing, incoming } = buildDeviceDependencyMaps(graphEdges);
   const devicesById = new Map(devices.map((device) => [device.id, device]));
+  const deviceSubnetById = buildDeviceSubnetMap(graphNodes, graphEdges);
   const grouped = new Map<string, Device[]>();
 
   for (const device of devices) {
-    const cidr = subnet24(device.ip);
+    const cidr = deviceSubnetById.get(device.id) ?? "Unassigned";
     const existing = grouped.get(cidr) ?? [];
     existing.push(device);
     grouped.set(cidr, existing);
   }
 
   return [...grouped.entries()]
-    .sort((a, b) => parseIpv4(a[0].replace(/\.0\/24$/, ".0")) - parseIpv4(b[0].replace(/\.0\/24$/, ".0")))
+    .sort((a, b) => parseCidrBase(a[0]) - parseCidrBase(b[0]))
     .map(([cidr, subnetDevices]) => {
       subnetDevices.sort((a, b) => parseIpv4(a.ip) - parseIpv4(b.ip));
 
@@ -624,9 +657,6 @@ function layoutSection(section: TopologySection) {
   for (const [index, column] of COLUMN_ORDER.entries()) {
     const columnNodes = nodesByColumn.get(column) ?? [];
     const columnX = STAGE_PADDING_X + index * (DEVICE_CARD_WIDTH + COLUMN_GAP);
-    const columnHeight =
-      columnNodes.length * DEVICE_CARD_HEIGHT
-      + Math.max(0, columnNodes.length - 1) * ROW_GAP;
     const startY = STAGE_PADDING_TOP;
 
     columnNodes.forEach((node, nodeIndex) => {
@@ -835,11 +865,14 @@ function TopologyCanvas({
 
 export default function TopologyPage() {
   const router = useRouter();
-  const { devices, graphEdges, loading } = useSteward();
+  const { devices, graphNodes, graphEdges, loading } = useSteward();
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<TopologyStageNode | null>(null);
 
-  const sections = useMemo(() => buildTopologySections(devices, graphEdges), [devices, graphEdges]);
+  const sections = useMemo(
+    () => buildTopologySections(devices, graphNodes, graphEdges),
+    [devices, graphEdges, graphNodes],
+  );
 
   const handleOpenDevice = useCallback(() => {
     if (!selectedNode?.device) return;

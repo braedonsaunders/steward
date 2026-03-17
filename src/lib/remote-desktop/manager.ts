@@ -300,7 +300,9 @@ async function resolveGuacdHost(): Promise<string> {
       return candidate;
     }
   }
-  return "127.0.0.1";
+  throw new Error(
+    "guacd is unavailable. Start the bundled guacd service before opening remote desktop sessions.",
+  );
 }
 
 function selectCredential(deviceId: string, protocol: RemoteDesktopProtocol, credentialId?: string): DeviceCredential | undefined {

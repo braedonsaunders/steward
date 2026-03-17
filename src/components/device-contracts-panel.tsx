@@ -43,6 +43,24 @@ interface FindingsPayload {
   occurrences: FindingOccurrence[];
 }
 
+interface MissionOwner {
+  id: string;
+  title: string;
+  priority: "low" | "medium" | "high";
+  status: "active" | "paused" | "completed" | "archived";
+  subagent?: {
+    name: string;
+  };
+}
+
+interface DeviceAutonomyPayload {
+  deviceId: string;
+  deviceMissionIds: string[];
+  workloadMissionIdsByWorkloadId: Record<string, string[]>;
+  assuranceMissionIdsByAssuranceId: Record<string, string[]>;
+  missions: MissionOwner[];
+}
+
 function statusVariant(
   status: AdoptionRun["status"] | "idle",
 ): "default" | "destructive" | "secondary" | "outline" {
@@ -162,6 +180,7 @@ export function DeviceWorkloadsPanel({
   const [snapshot, setSnapshot] = useState<AdoptionSnapshot | null>(null);
   const [findings, setFindings] = useState<DeviceFinding[]>([]);
   const [findingOccurrences, setFindingOccurrences] = useState<FindingOccurrence[]>([]);
+  const [autonomy, setAutonomy] = useState<DeviceAutonomyPayload | null>(null);
   const [hasLoaded, setHasLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -196,6 +215,10 @@ export function DeviceWorkloadsPanel({
   const [draftSaving, setDraftSaving] = useState(false);
   const [draftResetting, setDraftResetting] = useState(false);
   const [draftDeleting, setDraftDeleting] = useState(false);
+  const [startingOnboarding, setStartingOnboarding] = useState(false);
+  const [selectionSaving, setSelectionSaving] = useState(false);
+  const [completingOnboarding, setCompletingOnboarding] = useState(false);
+  const [reopeningOnboarding, setReopeningOnboarding] = useState(false);
 
   const [draftWorkloadDialogOpen, setDraftWorkloadDialogOpen] = useState(false);
   const [editingDraftWorkloadKey, setEditingDraftWorkloadKey] = useState<string | null>(null);
@@ -224,9 +247,10 @@ export function DeviceWorkloadsPanel({
       setLoading(true);
     }
     try {
-      const [snapshotRes, findingsRes] = await Promise.all([
+      const [snapshotRes, findingsRes, autonomyRes] = await Promise.all([
         fetch(`/api/devices/${deviceId}/adoption`, withClientApiToken()),
         fetch(`/api/devices/${deviceId}/findings`, withClientApiToken()),
+        fetch(`/api/devices/${deviceId}/autonomy`, withClientApiToken()),
       ]);
       const snapshotData = (await snapshotRes.json()) as AdoptionSnapshot | { error?: string };
       if (!snapshotRes.ok) {
@@ -241,6 +265,12 @@ export function DeviceWorkloadsPanel({
       } else {
         setFindings([]);
         setFindingOccurrences([]);
+      }
+
+      if (autonomyRes.ok) {
+        setAutonomy(await autonomyRes.json() as DeviceAutonomyPayload);
+      } else {
+        setAutonomy(null);
       }
 
       setError(null);
@@ -374,6 +404,31 @@ export function DeviceWorkloadsPanel({
     [assurancesByWorkload],
   );
 
+  const autonomyMissionById = useMemo(
+    () => new Map((autonomy?.missions ?? []).map((mission) => [mission.id, mission])),
+    [autonomy?.missions],
+  );
+
+  const missionOwnersForWorkload = useCallback((workloadId: string): MissionOwner[] => {
+    const workloadMissionIds = autonomy?.workloadMissionIdsByWorkloadId?.[workloadId] ?? [];
+    const fallbackMissionIds = workloadMissionIds.length > 0 ? workloadMissionIds : (autonomy?.deviceMissionIds ?? []);
+    return fallbackMissionIds
+      .map((missionId) => autonomyMissionById.get(missionId))
+      .filter((mission): mission is MissionOwner => Boolean(mission));
+  }, [autonomy?.deviceMissionIds, autonomy?.workloadMissionIdsByWorkloadId, autonomyMissionById]);
+
+  const missionOwnersForAssurance = useCallback((assuranceId: string, workloadId?: string): MissionOwner[] => {
+    const assuranceMissionIds = autonomy?.assuranceMissionIdsByAssuranceId?.[assuranceId] ?? [];
+    const fallbackMissionIds = assuranceMissionIds.length > 0
+      ? assuranceMissionIds
+      : workloadId
+        ? (autonomy?.workloadMissionIdsByWorkloadId?.[workloadId] ?? [])
+        : (autonomy?.deviceMissionIds ?? []);
+    return fallbackMissionIds
+      .map((missionId) => autonomyMissionById.get(missionId))
+      .filter((mission): mission is MissionOwner => Boolean(mission));
+  }, [autonomy?.assuranceMissionIdsByAssuranceId, autonomy?.deviceMissionIds, autonomy?.workloadMissionIdsByWorkloadId, autonomyMissionById]);
+
   const committedWorkloadKeys = useMemo(
     () => new Set((snapshot?.workloads ?? []).map((workload) => workload.workloadKey.toLowerCase())),
     [snapshot?.workloads],
@@ -417,6 +472,33 @@ export function DeviceWorkloadsPanel({
   const unassignedDraftAssurances = useMemo(
     () => draftAssurancesByWorkloadKey.get("__unassigned__") ?? [],
     [draftAssurancesByWorkloadKey],
+  );
+
+  const effectiveSelectedProfileIds = useMemo(() => {
+    if (snapshot?.draft?.selectedProfileIds?.length) {
+      return snapshot.draft.selectedProfileIds;
+    }
+    return (snapshot?.profiles ?? [])
+      .filter((profile) => ["selected", "verified", "active"].includes(profile.status))
+      .map((profile) => profile.profileId);
+  }, [snapshot?.draft?.selectedProfileIds, snapshot?.profiles]);
+
+  const effectiveSelectedAccessMethodKeys = useMemo(() => {
+    if (snapshot?.draft?.selectedAccessMethodKeys?.length) {
+      return snapshot.draft.selectedAccessMethodKeys;
+    }
+    return (snapshot?.accessMethods ?? [])
+      .filter((method) => method.selected)
+      .map((method) => method.key);
+  }, [snapshot?.accessMethods, snapshot?.draft?.selectedAccessMethodKeys]);
+
+  const canFinalizeOnboarding = useMemo(
+    () => Boolean(
+      snapshot?.run
+        && snapshot.run.status !== "completed"
+        && (effectiveSelectedProfileIds.length > 0 || (snapshot?.profiles.length ?? 0) === 0),
+    ),
+    [effectiveSelectedProfileIds.length, snapshot?.profiles.length, snapshot?.run],
   );
 
   const openConcerns = useMemo(
@@ -497,6 +579,85 @@ export function DeviceWorkloadsPanel({
     await refresh();
     setError(null);
   }, [deviceId, refresh]);
+
+  const suggestAccessMethodKeys = useCallback((profileIds: string[]): string[] => {
+    const availableAccessMethods = snapshot?.accessMethods ?? [];
+    const accessKeyByKind = new Map<string, string>();
+    const sortedAccessMethods = [...availableAccessMethods].sort((left, right) => {
+      const statusRank = (value: AccessMethod["status"]) => (
+        value === "validated" ? 0
+          : value === "credentialed" ? 1
+            : value === "observed" ? 2
+              : 3
+      );
+      if (left.selected !== right.selected) {
+        return left.selected ? -1 : 1;
+      }
+      if (left.status !== right.status) {
+        return statusRank(left.status) - statusRank(right.status);
+      }
+      if (left.secure !== right.secure) {
+        return left.secure ? -1 : 1;
+      }
+      return (left.port ?? 0) - (right.port ?? 0);
+    });
+    for (const method of sortedAccessMethods) {
+      const kinds = method.kind === "http-api"
+        ? ["http-api", "web-session"]
+        : method.kind === "web-session"
+          ? ["web-session", "http-api"]
+          : [method.kind];
+      for (const kind of kinds) {
+        if (!accessKeyByKind.has(kind)) {
+          accessKeyByKind.set(kind, method.key);
+        }
+      }
+    }
+
+    const requiredKinds = (snapshot?.profiles ?? [])
+      .filter((profile) => profileIds.includes(profile.profileId))
+      .flatMap((profile) => profile.requiredAccessMethods);
+    const suggested = requiredKinds
+      .map((kind) => accessKeyByKind.get(kind))
+      .filter((key): key is string => Boolean(key));
+    return dedupeStrings([...effectiveSelectedAccessMethodKeys, ...suggested]);
+  }, [effectiveSelectedAccessMethodKeys, snapshot?.accessMethods, snapshot?.profiles]);
+
+  const toggleDraftProfileSelection = useCallback(async (profileId: string) => {
+    const nextSelectedProfileIds = effectiveSelectedProfileIds.includes(profileId)
+      ? effectiveSelectedProfileIds.filter((id) => id !== profileId)
+      : [...effectiveSelectedProfileIds, profileId];
+
+    setSelectionSaving(true);
+    try {
+      await persistDraftUpdate({
+        selectedProfileIds: nextSelectedProfileIds,
+        selectedAccessMethodKeys: suggestAccessMethodKeys(nextSelectedProfileIds),
+      });
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Failed to update selected profiles");
+    } finally {
+      setSelectionSaving(false);
+    }
+  }, [effectiveSelectedProfileIds, persistDraftUpdate, suggestAccessMethodKeys]);
+
+  const toggleDraftAccessMethodSelection = useCallback(async (accessMethodKey: string) => {
+    const nextSelectedAccessMethodKeys = effectiveSelectedAccessMethodKeys.includes(accessMethodKey)
+      ? effectiveSelectedAccessMethodKeys.filter((key) => key !== accessMethodKey)
+      : [...effectiveSelectedAccessMethodKeys, accessMethodKey];
+
+    setSelectionSaving(true);
+    try {
+      await persistDraftUpdate({
+        selectedProfileIds: effectiveSelectedProfileIds,
+        selectedAccessMethodKeys: nextSelectedAccessMethodKeys,
+      });
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Failed to update selected access methods");
+    } finally {
+      setSelectionSaving(false);
+    }
+  }, [effectiveSelectedAccessMethodKeys, effectiveSelectedProfileIds, persistDraftUpdate]);
 
   const openEditDraftDialog = useCallback(() => {
     if (!snapshot?.draft) {
@@ -995,6 +1156,101 @@ export function DeviceWorkloadsPanel({
     }
   }, [deviceId, refresh]);
 
+  const startOnboarding = useCallback(async () => {
+    setStartingOnboarding(true);
+    try {
+      const response = await fetch(
+        `/api/devices/${deviceId}/adoption`,
+        withClientApiToken({
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ force: false }),
+        }),
+      );
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to start onboarding");
+      }
+      await refresh();
+      setError(null);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Failed to start onboarding");
+    } finally {
+      setStartingOnboarding(false);
+    }
+  }, [deviceId, refresh]);
+
+  const reopenOnboarding = useCallback(async () => {
+    if (!window.confirm("Reopen onboarding and reset the current onboarding session for this device?")) {
+      return;
+    }
+
+    setReopeningOnboarding(true);
+    try {
+      const response = await fetch(
+        `/api/devices/${deviceId}/onboarding/reset`,
+        withClientApiToken({ method: "POST" }),
+      );
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to reopen onboarding");
+      }
+      await refresh();
+      setError(null);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Failed to reopen onboarding");
+    } finally {
+      setReopeningOnboarding(false);
+    }
+  }, [deviceId, refresh]);
+
+  const completeOnboarding = useCallback(async () => {
+    setCompletingOnboarding(true);
+    try {
+      const response = await fetch(
+        `/api/devices/${deviceId}/onboarding/complete`,
+        withClientApiToken({
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            selectedProfileIds: effectiveSelectedProfileIds,
+            selectedAccessMethodKeys: effectiveSelectedAccessMethodKeys,
+          }),
+        }),
+      );
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to complete onboarding");
+      }
+      await refresh();
+      setError(null);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Failed to complete onboarding");
+    } finally {
+      setCompletingOnboarding(false);
+    }
+  }, [deviceId, effectiveSelectedAccessMethodKeys, effectiveSelectedProfileIds, refresh]);
+
+  const renderMissionOwnerBadges = useCallback((owners: MissionOwner[]) => {
+    if (owners.length === 0) {
+      return null;
+    }
+    return (
+      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+        {owners.map((mission) => (
+          <Badge
+            key={mission.id}
+            variant={mission.priority === "high" ? "secondary" : "outline"}
+            className="text-[10px]"
+          >
+            {mission.title}
+            {mission.subagent?.name ? ` · ${mission.subagent.name}` : ""}
+          </Badge>
+        ))}
+      </div>
+    );
+  }, []);
+
   const renderAssuranceCard = useCallback((assurance: Assurance) => {
     const latestRun = runByAssuranceId.get(assurance.id);
     const rationale = assurance.rationale
@@ -1003,12 +1259,14 @@ export function DeviceWorkloadsPanel({
     const monitorType = assurance.monitorType
       ?? readString(assurance.configJson, "monitorType")
       ?? readString(assurance.policyJson, "monitorType");
+    const owners = missionOwnersForAssurance(assurance.id, assurance.workloadId);
 
     return (
       <div key={assurance.id} className="rounded-md border bg-background/70 p-2.5 text-xs">
         <div className="flex items-start justify-between gap-2">
           <div className="space-y-0.5">
             <p className="font-medium">{assurance.displayName}</p>
+            {renderMissionOwnerBadges(owners)}
             <p className="text-muted-foreground">
               Every {Math.max(1, Math.floor(assurance.checkIntervalSec))}s
               {monitorType ? ` · ${monitorType.replace(/_/g, " ")}` : ""}
@@ -1075,7 +1333,7 @@ export function DeviceWorkloadsPanel({
         </div>
       </div>
     );
-  }, [deleteAssurance, deletingAssuranceId, openEditAssuranceDialog, runByAssuranceId]);
+  }, [deleteAssurance, deletingAssuranceId, missionOwnersForAssurance, openEditAssuranceDialog, renderMissionOwnerBadges, runByAssuranceId]);
 
   const renderDraftAssuranceCard = useCallback((assurance: OnboardingDraftAssurance) => {
     return (
@@ -1226,6 +1484,180 @@ export function DeviceWorkloadsPanel({
               </div>
             ) : null}
 
+            {!snapshot?.run ? (
+              <div className="space-y-2 rounded-md border bg-background/50 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <Label className="text-xs">Onboarding Run</Label>
+                    <p className="text-[11px] text-muted-foreground">
+                      No onboarding run exists yet for this device.
+                    </p>
+                  </div>
+                  <Button size="sm" className="h-7 px-2 text-[11px]" onClick={() => void startOnboarding()} disabled={startingOnboarding}>
+                    {startingOnboarding ? <Loader2 className="mr-1 size-3 animate-spin" /> : <Plus className="mr-1 size-3" />}
+                    Start Onboarding
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Start onboarding to let Steward classify the endpoint, propose a contract, and capture the access surface it should use.
+                </p>
+              </div>
+            ) : null}
+
+            {snapshot?.run ? (
+              <div className="space-y-3 rounded-md border bg-background/50 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <Label className="text-xs">Onboarding Scope</Label>
+                    <p className="text-[11px] text-muted-foreground">
+                      Choose the profile and access path Steward should commit for this device.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {snapshot.run.status === "completed" ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2 text-[11px]"
+                        onClick={() => void reopenOnboarding()}
+                        disabled={reopeningOnboarding}
+                      >
+                        {reopeningOnboarding ? <Loader2 className="mr-1 size-3 animate-spin" /> : null}
+                        Reopen Onboarding
+                      </Button>
+                    ) : (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 px-2 text-[11px]"
+                          onClick={() => void reopenOnboarding()}
+                          disabled={reopeningOnboarding}
+                        >
+                          {reopeningOnboarding ? <Loader2 className="mr-1 size-3 animate-spin" /> : null}
+                          Restart
+                        </Button>
+                        <Button
+                          size="sm"
+                          className="h-7 px-2 text-[11px]"
+                          onClick={() => void completeOnboarding()}
+                          disabled={selectionSaving || completingOnboarding || !canFinalizeOnboarding}
+                        >
+                          {completingOnboarding ? <Loader2 className="mr-1 size-3 animate-spin" /> : <Shield className="mr-1 size-3" />}
+                          Commit Contract
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid gap-3 lg:grid-cols-2">
+                  <div className="space-y-2">
+                    <div>
+                      <p className="text-[11px] font-medium">Profiles</p>
+                      <p className="text-[10px] text-muted-foreground">
+                        Select at least one profile before committing when profile candidates exist.
+                      </p>
+                    </div>
+                    {(snapshot.profiles ?? []).length === 0 ? (
+                      <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+                        No profile candidates detected. Steward can still finish onboarding as an access-only device.
+                      </p>
+                    ) : (
+                      (snapshot.profiles ?? []).map((profile) => {
+                        const selected = effectiveSelectedProfileIds.includes(profile.profileId);
+                        return (
+                          <button
+                            key={profile.id}
+                            type="button"
+                            className={cn(
+                              "w-full rounded-md border px-3 py-2 text-left text-xs transition-colors",
+                              selected ? "border-primary bg-primary/5" : "bg-background hover:bg-muted/50",
+                            )}
+                            disabled={selectionSaving || snapshot.run?.status === "completed"}
+                            onClick={() => void toggleDraftProfileSelection(profile.profileId)}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="space-y-1">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <p className="font-medium">{profile.name}</p>
+                                  <Badge variant="outline">{profile.kind}</Badge>
+                                  <Badge variant="outline">{Math.round(profile.confidence * 100)}%</Badge>
+                                </div>
+                                <p className="text-muted-foreground">{profile.summary}</p>
+                                {(profile.requiredAccessMethods ?? []).length > 0 ? (
+                                  <p className="text-muted-foreground">
+                                    Needs access: {profile.requiredAccessMethods.join(", ")}
+                                  </p>
+                                ) : null}
+                              </div>
+                              <Badge variant={selected ? "default" : "outline"}>
+                                {selected ? "selected" : profile.status}
+                              </Badge>
+                            </div>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <div>
+                      <p className="text-[11px] font-medium">Access Methods</p>
+                      <p className="text-[10px] text-muted-foreground">
+                        Confirm which protocol path Steward should prefer after onboarding completes.
+                      </p>
+                    </div>
+                    {(snapshot.accessMethods ?? []).length === 0 ? (
+                      <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+                        No access methods have been observed yet.
+                      </p>
+                    ) : (
+                      (snapshot.accessMethods ?? []).map((method) => {
+                        const selected = effectiveSelectedAccessMethodKeys.includes(method.key);
+                        return (
+                          <button
+                            key={method.id}
+                            type="button"
+                            className={cn(
+                              "w-full rounded-md border px-3 py-2 text-left text-xs transition-colors",
+                              selected ? "border-primary bg-primary/5" : "bg-background hover:bg-muted/50",
+                            )}
+                            disabled={selectionSaving || snapshot.run?.status === "completed"}
+                            onClick={() => void toggleDraftAccessMethodSelection(method.key)}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="space-y-1">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <p className="font-medium">{method.title}</p>
+                                  <Badge variant="outline">{method.kind}</Badge>
+                                  <Badge variant="outline">{method.status}</Badge>
+                                  {method.port !== undefined ? <Badge variant="outline">:{method.port}</Badge> : null}
+                                </div>
+                                <p className="text-muted-foreground">
+                                  {method.protocol}{method.secure ? " over TLS" : " without transport security"}
+                                </p>
+                                {method.summary ? <p className="text-muted-foreground">{method.summary}</p> : null}
+                              </div>
+                              <Badge variant={selected ? "default" : "outline"}>
+                                {selected ? "selected" : "available"}
+                              </Badge>
+                            </div>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+
+                {!canFinalizeOnboarding && (snapshot.profiles ?? []).length > 0 && snapshot.run.status !== "completed" ? (
+                  <p className="rounded-md border border-amber-300/60 bg-amber-50/70 px-2.5 py-2 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-950/20 dark:text-amber-100">
+                    Select at least one profile before committing the contract.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
             <p className="text-xs text-muted-foreground">
               Steward should end onboarding with a committed contract, including an intentionally empty one for access-only devices. Edit responsibilities and checks here when you want deterministic control; use Chat when you want Steward to refine the model agentically.
             </p>
@@ -1258,6 +1690,7 @@ export function DeviceWorkloadsPanel({
                 <div className="space-y-2">
                   {snapshot?.workloads.map((workload) => {
                     const workloadAssurances = assurancesByWorkload.get(workload.id) ?? [];
+                    const workloadOwners = missionOwnersForWorkload(workload.id);
                     return (
                       <div key={workload.id} className="rounded-md border bg-background/45 p-3">
                         <div className="flex items-start justify-between gap-3">
@@ -1268,6 +1701,7 @@ export function DeviceWorkloadsPanel({
                               <Badge variant="outline">{workload.criticality}</Badge>
                               <Badge variant="outline">{workload.source.replace(/_/g, " ")}</Badge>
                             </div>
+                            {renderMissionOwnerBadges(workloadOwners)}
                             {workload.summary ? (
                               <p className="text-xs text-muted-foreground">{workload.summary}</p>
                             ) : (

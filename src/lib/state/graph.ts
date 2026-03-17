@@ -1,15 +1,19 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
+import { getLocalIpv4Interfaces, sameSubnet, subnetCidrForIp } from "@/lib/discovery/local";
 import { getDb, recoverCorruptDatabase } from "@/lib/state/db";
 import { stateStore } from "@/lib/state/store";
 import type { Device, GraphNode } from "@/lib/state/types";
 
-const subnet24 = (ip: string): string | undefined => {
-  const parts = ip.split(".");
-  if (parts.length !== 4) {
+const LOCAL_INTERFACES = getLocalIpv4Interfaces();
+
+const subnetForDeviceIp = (ip: string): string | undefined => {
+  const localMatch = LOCAL_INTERFACES.find((entry) => sameSubnet(ip, entry.ip, entry.netmask));
+  const subnet = subnetCidrForIp(ip, localMatch?.netmask);
+  if (!subnet) {
     return undefined;
   }
-  return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
+  return subnet;
 };
 
 function graphNodeFromRow(row: Record<string, unknown>): GraphNode {
@@ -121,7 +125,7 @@ export const graphStore = {
           updatedAt: now,
         });
 
-        const subnet = subnet24(device.ip);
+        const subnet = subnetForDeviceIp(device.ip);
         if (subnet) {
           const subnetNodeId = `subnet:${subnet}`;
           upsertNode.run({

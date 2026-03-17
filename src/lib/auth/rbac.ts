@@ -30,6 +30,7 @@ export function permissionForApiRoute(pathname: string, method: string): RoutePe
   if (route.startsWith("/api/auth/me")) return "public";
   if (route.startsWith("/api/auth/oidc/start")) return "public";
   if (route.startsWith("/api/auth/oidc/callback")) return "public";
+  if (route.startsWith("/api/gateway/telegram/") && route.endsWith("/webhook")) return "public";
 
   if (route.startsWith("/api/auth/users")) {
     return verb === "GET" ? "admin" : "owner";
@@ -68,6 +69,10 @@ export function permissionForApiRoute(pathname: string, method: string): RoutePe
     if (verb === "GET") return "read";
     return "admin";
   }
+  if (route.startsWith("/api/packs") || route.startsWith("/api/gateway/bindings")) {
+    if (verb === "GET") return "read";
+    return "admin";
+  }
   if (route.startsWith("/api/agent/run")) {
     return "operate";
   }
@@ -80,6 +85,10 @@ export function permissionForApiRoute(pathname: string, method: string): RoutePe
     return "operate";
   }
   if (route.startsWith("/api/incidents") || route.startsWith("/api/recommendations")) {
+    if (verb === "GET") return "read";
+    return "operate";
+  }
+  if (route.startsWith("/api/missions") || route.startsWith("/api/subagents") || route.startsWith("/api/investigations") || route.startsWith("/api/briefings")) {
     if (verb === "GET") return "read";
     return "operate";
   }

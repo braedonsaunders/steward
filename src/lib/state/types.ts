@@ -1232,7 +1232,22 @@ export interface ActionLog {
   id: string;
   at: string;
   actor: "steward" | "user";
-  kind: "discover" | "diagnose" | "remediate" | "learn" | "config" | "auth" | "policy" | "playbook" | "approval" | "digest" | "notification";
+  kind:
+    | "discover"
+    | "diagnose"
+    | "remediate"
+    | "learn"
+    | "config"
+    | "auth"
+    | "policy"
+    | "playbook"
+    | "approval"
+    | "digest"
+    | "notification"
+    | "mission"
+    | "investigation"
+    | "gateway"
+    | "pack";
   message: string;
   context: Record<string, unknown>;
 }
@@ -1638,6 +1653,9 @@ export interface ChatSession {
   id: string;
   title: string;
   deviceId?: string;
+  missionId?: string;
+  subagentId?: string;
+  gatewayThreadId?: string;
   provider?: string;
   model?: string;
   createdAt: string;

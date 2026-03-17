@@ -1,19 +1,31 @@
 services:
   guacd:
     image: guacamole/guacd:1.6.0
-    container_name: steward-guacd
     restart: unless-stopped
 
   steward:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: steward
     depends_on:
-      - guacd
+      guacd:
+        condition: service_started
+    init: true
     ports:
       - "3010:3000"
       - "3011:3001"
     volumes:
-      - ./.steward:/app/.steward
+      - steward_state:/app/.steward
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
     restart: unless-stopped
+
+volumes:
+  steward_state:

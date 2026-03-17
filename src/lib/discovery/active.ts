@@ -3,7 +3,13 @@ import dns from "node:dns/promises";
 import net from "node:net";
 import { runShell } from "@/lib/utils/shell";
 import { buildObservation } from "@/lib/discovery/evidence";
-import { getLocalInterfaceIdentity } from "@/lib/discovery/local";
+import {
+  getLocalIpv4Interfaces,
+  hostsForSubnet,
+  prefixLengthFromNetmask,
+  sameSubnet,
+  subnetCidrForIp,
+} from "@/lib/discovery/local";
 import type { DiscoveryCandidate } from "@/lib/discovery/types";
 import type { ServiceFingerprint } from "@/lib/state/types";
 
@@ -183,10 +189,18 @@ const parseNmapLine = (line: string): DiscoveryCandidate | undefined => {
   };
 };
 
+const preferredNmapTcpScanMode = (): "-sS" | "-sT" => {
+  if (process.platform !== "win32" && typeof process.getuid === "function" && process.getuid() !== 0) {
+    return "-sT";
+  }
+
+  return "-sS";
+};
+
 const tryGetLocalIps = async (): Promise<string[]> => {
-  const localInterfaceIps = getLocalInterfaceIdentity().ips;
-  if (localInterfaceIps.length > 0) {
-    return localInterfaceIps;
+  const localInterfaces = getLocalIpv4Interfaces();
+  if (localInterfaces.length > 0) {
+    return localInterfaces.map((entry) => entry.ip);
   }
 
   const candidates = [
@@ -210,15 +224,6 @@ const tryGetLocalIps = async (): Promise<string[]> => {
   }
 
   return [];
-};
-
-const toSlash24 = (ip: string): string => {
-  const [a, b, c] = ip.split(".");
-  return `${a}.${b}.${c}.0/24`;
-};
-
-const uniqueSubnetsFromIps = (ips: string[]): string[] => {
-  return Array.from(new Set(ips.filter(isEligibleIp).map((ip) => toSlash24(ip)))).sort();
 };
 
 const sliceWithOffset = <T>(items: T[], offset: number, maxItems: number): T[] => {
@@ -251,46 +256,53 @@ const isEligibleIp = (ip: string): boolean => {
   return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
 };
 
-const buildHostCandidatesFromLocalSubnet = (localIp: string): string[] => {
-  const [a, b, c] = localIp.split(".");
-  const ips: string[] = [];
-  for (let host = 1; host <= 254; host += 1) {
-    const ip = `${a}.${b}.${c}.${host}`;
-    if (ip !== localIp) {
-      ips.push(ip);
-    }
-  }
-  return ips;
+const uniqueSubnetsFromIps = (
+  ips: string[],
+  interfaces = getLocalIpv4Interfaces(),
+): string[] => {
+  return Array.from(new Set(
+    ips
+      .filter(isEligibleIp)
+      .map((ip) =>
+        interfaces
+          .map((entry) => sameSubnetCandidateCidr(ip, entry.ip, entry.netmask))
+          .find((value): value is string => Boolean(value))
+        ?? subnetCidrForIp(ip)
+        ?? null)
+      .filter((value): value is string => Boolean(value)),
+  )).sort();
 };
 
-const hostsFromSubnet = (subnet: string): string[] => {
-  const slash = subnet.indexOf("/");
-  const base = slash >= 0 ? subnet.slice(0, slash) : subnet;
-  const [a, b, c] = base.split(".").map((value) => Number(value));
-  if (
-    !Number.isInteger(a) ||
-    !Number.isInteger(b) ||
-    !Number.isInteger(c) ||
-    a < 0 ||
-    b < 0 ||
-    c < 0 ||
-    a > 255 ||
-    b > 255 ||
-    c > 255
-  ) {
-    return [];
+const sameSubnetCandidateCidr = (ip: string, interfaceIp: string, netmask?: string): string | null => {
+  if (!sameSubnet(ip, interfaceIp, netmask)) {
+    return null;
   }
+  return discoverySweepSubnetForIp(interfaceIp, netmask);
+};
 
-  const hosts: string[] = [];
-  for (let host = 1; host <= 254; host += 1) {
-    hosts.push(`${a}.${b}.${c}.${host}`);
+const discoverySweepSubnetForIp = (ip: string, netmask?: string): string | null => {
+  const prefixLength = prefixLengthFromNetmask(netmask);
+  if (prefixLength !== null && prefixLength >= 22) {
+    return subnetCidrForIp(ip, netmask);
   }
+  return subnetCidrForIp(ip);
+};
 
-  return hosts;
+const buildHostCandidatesFromLocalInterfaces = (
+  interfaces = getLocalIpv4Interfaces(),
+): string[] => {
+  const all = interfaces.flatMap((entry) => {
+    const subnet = discoverySweepSubnetForIp(entry.ip, entry.netmask);
+    if (!subnet) {
+      return [];
+    }
+    return hostsForSubnet(subnet).filter((ip) => ip !== entry.ip);
+  });
+  return Array.from(new Set(all)).filter(isEligibleIp).sort((a, b) => a.localeCompare(b));
 };
 
 const buildHostCandidatesFromSubnets = (subnets: string[]): string[] => {
-  const all = subnets.flatMap((subnet) => hostsFromSubnet(subnet));
+  const all = subnets.flatMap((subnet) => hostsForSubnet(subnet));
   return Array.from(new Set(all)).filter(isEligibleIp).sort((a, b) => a.localeCompare(b));
 };
 
@@ -409,17 +421,22 @@ export const collectActiveCandidates = async (
 
   const hasNmap = await runShell(process.platform === "win32" ? "where nmap" : "command -v nmap", 1_500);
 
-  const localIps = new Set(await tryGetLocalIps());
+  const localInterfaces = getLocalIpv4Interfaces();
+  const localIps = new Set(
+    localInterfaces.length > 0
+      ? localInterfaces.map((entry) => entry.ip)
+      : await tryGetLocalIps(),
+  );
   const isRemoteIp = (ip: string): boolean => !localIps.has(ip);
   const nmapSubnets = uniqueSubnetsFromIps([
     ...seedIps,
     ...localIps,
-  ]).slice(0, maxNmapSubnets);
+  ], localInterfaces).slice(0, maxNmapSubnets);
 
   if (deepScan && hasNmap.ok && hasNmap.stdout && nmapSubnets.length > 0) {
     const targetArgs = nmapSubnets.join(" ");
     const scan = await runShell(
-      `nmap -sS -sV --version-light -Pn -T4 -F ${targetArgs} -oG -`,
+      `nmap ${preferredNmapTcpScanMode()} -sV --version-light -Pn -T4 -F ${targetArgs} -oG -`,
       subnetSweepTimeoutMs,
     );
 
@@ -439,12 +456,12 @@ export const collectActiveCandidates = async (
   let targets = sliceWithOffset(deduped, targetOffset, maxTargets);
 
   if (targets.length === 0) {
-    const localIp = [...localIps][0];
-    if (!localIp) {
+    const localCandidates = buildHostCandidatesFromLocalInterfaces(localInterfaces);
+    if (localCandidates.length === 0) {
       return [];
     }
 
-    targets = sliceWithOffset(buildHostCandidatesFromLocalSubnet(localIp), targetOffset, maxTargets)
+    targets = sliceWithOffset(localCandidates, targetOffset, maxTargets)
       .filter((ip) => isRemoteIp(ip));
   }
 
@@ -453,7 +470,7 @@ export const collectActiveCandidates = async (
       ...seedIps,
       ...targets,
       ...localIps,
-    ]);
+    ], localInterfaces);
     const fallbackHosts = buildHostCandidatesFromSubnets(fallbackSubnets)
       .filter((ip) => !targets.includes(ip) && isRemoteIp(ip));
     if (fallbackHosts.length > 0) {

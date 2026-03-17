@@ -1,6 +1,6 @@
 # Steward Spec Checklist (Compared to `AGENTS.md`)
 
-Last audited: 2026-03-08
+Last audited: 2026-03-17
 
 Legend:
 - `[x]` Implemented
@@ -126,7 +126,7 @@ Legend:
 - [x] Daily digest generation endpoint
 - [x] Daily digest scheduler (DB-backed system settings)
 - [ ] Weekly executive report generation
-- [ ] Notification channel integrations (Telegram/email/Slack/Teams/SMS/push/webhooks)
+- [x] Notification outbox with Telegram and generic webhook channel delivery (email/Slack/Teams/SMS/push remain post-beta)
 - [x] Approval inbox with TTL/escalation rules
 
 ## 12) Deployment Model
@@ -179,6 +179,7 @@ Legend:
 ## 16) Reliability and Performance Targets
 
 - [x] State write serialization and durable DB paths
+- [x] Autonomy worker metrics for queue lag, worker health, mission latency, briefing latency, and channel delivery latency
 - [ ] Uptime SLO instrumentation (99.9%)
 - [ ] Discovery freshness SLA tracking
 - [ ] P95 conversational latency tracking
@@ -198,6 +199,9 @@ Legend:
 
 - [x] `npm run build` succeeds
 - [x] `npm run lint` succeeds with zero warnings
+- [x] `npm run test` succeeds with repo-owned Vitest coverage for APIs, subnet helpers, and finding packs
+- [x] GitHub Actions CI validates `lint -> test -> build`
+- [x] Autonomy schema migration and restore-drill coverage exists for the mission-control cutover
 - [x] No runtime `process.env.*` usage in product code paths
 - [x] No `/plugins` API/page surface in runtime
 
@@ -229,7 +233,7 @@ Legend:
 - [x] ADP-006: Credential preconditions are enforced in playbook execution
 - [ ] ADP-007: Implement profile-driven issue detection packs per device class
 - [ ] ADP-008: Map findings to deterministic remediation, then gated Lane B fallback
-- [ ] ADP-009: Onboarding session/draft UX exists, but the dedicated onboarding flow and discovery quick-start are incomplete
+- [x] ADP-009: Dedicated onboarding flow now supports start, profile/access selection, commit, and reopen from the device onboarding surface
 - [ ] ADP-010: Add audit/telemetry hardening for onboarding and credential flows
 
 Reference: `docs/device-adoption-autonomy-task-register.md`
@@ -240,11 +244,11 @@ Reference: `docs/device-adoption-autonomy-task-register.md`
 - [ ] WCX-002: Replace shell-template-first execution with protocol-native execution brokers
 - [ ] WCX-003: Add real credential governance (validated-use only, per-action access audit, scoped leases)
 - [ ] WCX-004: Add quantitative risk scoring to policy evaluation and approval UX
-- [ ] WCX-005: Expand deterministic findings and incident coverage across storage, backup, cert, network, workload, and security domains
+- [ ] WCX-005: Expand deterministic findings and incident coverage across storage, backup, cert, network, workload, and security domains (disk pressure, failed services, stale backups, and open-port drift are now covered)
 - [ ] WCX-006: Add a real anomaly engine and time-series baseline model
 - [ ] WCX-007: Make the knowledge graph operationally useful for correlation and diagnosis
 - [ ] WCX-008: Complete onboarding/adoption state machine and profile-driven checks
-- [ ] WCX-009: Add outbound notifications, escalations, and weekly reporting
+- [ ] WCX-009: Add broader outbound notifications, escalations, and weekly reporting (Telegram + webhook MVP is implemented)
 - [ ] WCX-010: Replace full-state streaming and table rewrites with scalable projections/deltas/workers
 - [ ] WCX-011: Add federation, site boundaries, and tenant-safe multi-site architecture
 - [ ] WCX-012: Add integration/certification/restore-drill coverage for Steward itself
@@ -263,7 +267,7 @@ Reference: `docs/world-class-system-program.md`
 - [ ] CM-001: Split deterministic signal collection and finding evaluation from agentic diagnosis/remediation
 - [x] CM-002: Add a wake coordinator backed by durable jobs for both schedule-driven and event-driven execution
 - [ ] CM-003: Add a finding router that dedupes, correlates, suppresses noise, and promotes incidents
-- [ ] CM-004: Add an outbound notification outbox and channel adapters (Telegram first, then webhooks/email/Slack/Teams)
+- [x] CM-004: Add an outbound notification outbox and channel adapters (Telegram + webhook MVP implemented; broader channels remain)
 - [ ] CM-005: Move assurances and scanners onto typed monitor jobs with per-check cadence/SLOs instead of one monolithic `act` phase
 - [ ] CM-006: Add an event/time-series store for baselines, anomalies, thresholds, and escalation windows
 - [ ] CM-007: Replace full-state SSE with projection/delta streams for live monitoring UX
@@ -278,9 +282,9 @@ Additional plan: `docs/scanner-agent-control-plane-plan.md`
 - [ ] RDS-003: Add a DB-backed remote desktop bridge/runtime model with launch-safe defaults
 - [ ] RDS-004: Start and supervise the browser remote desktop bridge as part of Steward runtime
 - [ ] RDS-005: Add one-click `guacd` bootstrap to Docker and host launcher scripts
-- [ ] RDS-006: Implement remote desktop session APIs (create/list/get/viewer token)
-- [ ] RDS-007: Implement browser-native remote desktop viewer pages and device-panel UX
-- [ ] RDS-008: Add chat inline previews for remote desktop screenshots and session state
+- [x] RDS-006: Implement remote desktop session APIs (create/list/get/viewer token)
+- [x] RDS-007: Implement browser-native remote desktop viewer pages and device-panel UX
+- [x] RDS-008: Add chat inline previews for remote desktop screenshots and session state
 - [ ] RDS-009: Add `steward_remote_desktop` for screenshot, click, double-click, drag, type, key, scroll, and wait
 - [ ] RDS-010: Reuse Playwright against Steward's own remote viewer for agentic desktop control
 - [ ] RDS-011: Persist remote desktop screenshots/artifacts for replay and debugging
@@ -300,3 +304,24 @@ Reference: `docs/remote-desktop-browser-cutover-plan.md`
 - [x] SACP-007: Run the production app and verify several clean live cycles
 
 Reference: `docs/scanner-agent-control-plane-plan.md`, `docs/scanner-agent-control-plane-task-register.md`
+
+## 25) Mission Control and Telegram Gateway Cutover (2026-03-17)
+
+- [x] MCG-001: Add DB-backed `packs`, `subagents`, `missions`, `mission_links`, `mission_runs`, `investigations`, `investigation_steps`, `gateway_bindings`, `gateway_threads`, and `briefings`
+- [x] MCG-002: Seed built-in packs, subagents, and missions for availability, certificates, backups, storage, WAN/network hygiene, and daily briefing
+- [x] MCG-003: Add autonomy runtime durable jobs for `mission.tick`, `investigation.step`, `briefing.compile`, `approval.followup`, and `channel.delivery`
+- [x] MCG-004: Wire autonomy workers into leader bootstrap, stale-job recovery, and the control-plane tick
+- [x] MCG-005: Add mission, subagent, investigation, pack, gateway binding, Telegram webhook, and briefing APIs
+- [x] MCG-006: Add primary operator surfaces for Missions, Subagents, Packs, Gateway, mission-aware dashboard views, and device ownership overlays
+- [x] MCG-007: Add Telegram-first gateway command handling for status, missions, subagents, investigations, briefings, approvals, simple natural-language prompts, and inbound dedupe
+- [x] MCG-008: Add pack-aware README and architecture documentation for the mission-control cutover
+- [x] MCG-009: Add focused API and runtime tests for the autonomy layer
+- [x] MCG-010: Add managed pack install/upgrade/remove lifecycle with manifest validation, compatibility checks, materialized resources, and version history
+- [x] MCG-011: Add signed community pack trust and verification flow
+- [x] MCG-012: Add deeper subagent memory, delegation, and cross-mission planning
+- [x] MCG-013: Add replayable Steward Lab scenarios for mission and investigation certification
+- [x] MCG-014: Formalize mission-thread chat session linkage across missions, subagents, and gateway threads
+- [x] MCG-015: Split autonomy domains into literal mission, subagent, gateway, pack, and investigation packages
+- [x] MCG-016: Add autonomy metrics surface plus migration and restore validation for the cutover
+
+Reference: `docs/mission-control-autonomy-architecture.md`

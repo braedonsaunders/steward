@@ -19,9 +19,12 @@ import {
   type WidgetRoutePlan,
 } from "@/lib/assistant/widget-routing";
 import { buildOnboardingSystemPrompt, isOnboardingSession } from "@/lib/adoption/conversation";
+import { normalizeChatError } from "@/lib/chat/errors";
 import { summarizeDeviceContractForPrompt } from "@/lib/devices/contract-management";
 import { getDefaultProvider } from "@/lib/llm/config";
 import { buildLanguageModel } from "@/lib/llm/providers";
+import { missionRepository } from "@/lib/missions/repository";
+import { buildMissionPromptContext } from "@/lib/missions/service";
 import { getDataDir } from "@/lib/state/db";
 import { getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
 import { stateStore } from "@/lib/state/store";
@@ -55,69 +58,6 @@ const schema = z.object({
   stream: z.boolean().optional(),
   suppressUserMessage: z.boolean().optional(),
 });
-
-function toFriendlyChatError(rawMessage: string, provider: LLMProvider): string {
-  if (
-    provider === "openai" &&
-    /missing scopes|insufficient permissions/i.test(rawMessage)
-  ) {
-    return "OpenAI authentication issue. Try disconnecting and reconnecting via OAuth in Settings, or add a Platform API key directly.";
-  }
-  return rawMessage;
-}
-
-function stringifyUnknownError(value: unknown): string {
-  if (value instanceof Error) {
-    return value.message;
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return String(value);
-  }
-  if (!value || typeof value !== "object") {
-    return String(value);
-  }
-
-  const record = value as Record<string, unknown>;
-  for (const key of ["message", "error", "reason", "detail", "cause"]) {
-    const candidate = record[key];
-    if (candidate instanceof Error && candidate.message.trim().length > 0) {
-      return candidate.message;
-    }
-    if (typeof candidate === "string" && candidate.trim().length > 0) {
-      return candidate;
-    }
-  }
-
-  try {
-    const seen = new WeakSet<object>();
-    const json = JSON.stringify(value, (_key, nested) => {
-      if (nested instanceof Error) {
-        return {
-          name: nested.name,
-          message: nested.message,
-          stack: nested.stack,
-        };
-      }
-      if (typeof nested === "object" && nested !== null) {
-        if (seen.has(nested)) {
-          return "[Circular]";
-        }
-        seen.add(nested);
-      }
-      return nested;
-    });
-    if (typeof json === "string" && json.trim().length > 0 && json !== "{}") {
-      return json;
-    }
-  } catch {
-    // no-op
-  }
-
-  return "An unknown structured error occurred.";
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -1250,11 +1190,13 @@ export async function POST(request: NextRequest) {
   const provider = (payload.data.provider ?? (await getDefaultProvider())) as LLMProvider;
   const sessionId = payload.data.sessionId;
   const session = sessionId ? stateStore.getChatSessionById(sessionId) : null;
-  const attachedDevice = session?.deviceId ? stateStore.getDeviceById(session.deviceId) : null;
+  const missionScopedDeviceId = session?.missionId ? missionRepository.getPrimaryDeviceId(session.missionId) : undefined;
+  const attachedDeviceId = session?.deviceId ?? missionScopedDeviceId;
+  const attachedDevice = attachedDeviceId ? stateStore.getDeviceById(attachedDeviceId) : null;
   const onboardingSession = isOnboardingSession(session);
 
-  if (session?.deviceId && !onboardingSession) {
-    const readiness = validateAttachedDeviceChatReadiness(session.deviceId);
+  if (attachedDeviceId && !onboardingSession) {
+    const readiness = validateAttachedDeviceChatReadiness(attachedDeviceId);
     if (!readiness.ok) {
       persistEarlySessionError({
         sessionId,
@@ -1412,8 +1354,7 @@ export async function POST(request: NextRequest) {
           metadata,
         });
       } catch (widgetError) {
-        const rawMessage = stringifyUnknownError(widgetError);
-        const friendlyMessage = toFriendlyChatError(rawMessage, provider);
+        const friendlyMessage = normalizeChatError(widgetError, provider);
         const failedToolEvent: ChatToolEvent = {
           id: toolEventId,
           toolName: "steward_manage_widget",
@@ -1471,11 +1412,14 @@ export async function POST(request: NextRequest) {
     const contractSummary = attachedDevice && !onboardingSession
       ? summarizeDeviceContractForPrompt(attachedDevice.id)
       : "";
+    const missionPromptContext = buildMissionPromptContext(session?.missionId);
     const systemPrompt = onboardingSession && attachedDevice
       ? await buildOnboardingSystemPrompt(attachedDevice)
       : attachedDevice
-        ? `${buildStewardSystemPrompt(context)}\n\nAttached conversation device:\n- ${attachedDevice.name} (${attachedDevice.ip}) id=${attachedDevice.id} type=${attachedDevice.type} status=${attachedDevice.status}${operatorNotes.trim().length > 0 ? `\n- Operator notes: ${operatorNotes}` : ""}${structuredMemory.trim().length > 0 ? `\n- Structured memory: ${structuredMemory}` : ""}${contractSummary.trim().length > 0 ? `\n${contractSummary}` : ""}\nPrioritize this device when the user's question is ambiguous.`
-        : buildStewardSystemPrompt(context);
+        ? `${buildStewardSystemPrompt(context)}\n\nAttached conversation device:\n- ${attachedDevice.name} (${attachedDevice.ip}) id=${attachedDevice.id} type=${attachedDevice.type} status=${attachedDevice.status}${operatorNotes.trim().length > 0 ? `\n- Operator notes: ${operatorNotes}` : ""}${structuredMemory.trim().length > 0 ? `\n- Structured memory: ${structuredMemory}` : ""}${contractSummary.trim().length > 0 ? `\n${contractSummary}` : ""}${missionPromptContext.trim().length > 0 ? `\n\n${missionPromptContext}` : ""}\nPrioritize this device when the user's question is ambiguous.`
+        : missionPromptContext.trim().length > 0
+          ? `${buildStewardSystemPrompt(context)}\n\n${missionPromptContext}`
+          : buildStewardSystemPrompt(context);
 
     // Build conversation history from DB for multi-turn context
     const messages: Array<{ role: "user" | "assistant"; content: string }> = [];
@@ -1608,8 +1552,7 @@ export async function POST(request: NextRequest) {
           return;
         }
         completed = true;
-        const rawMessage = stringifyUnknownError(rawError);
-        const friendlyMessage = toFriendlyChatError(rawMessage, provider);
+        const friendlyMessage = normalizeChatError(rawError, provider);
 
         if (toolEvents.length > 0 && isPromptTooLongError(rawError)) {
           const fallback = `${buildToolOnlyFallback(toolEvents)}\n\nI hit Steward's prompt budget while summarizing the tool results. Ask a narrower follow-up like 'summarize the backup status from the last run' and I'll continue from the existing evidence.`;
@@ -1994,8 +1937,7 @@ export async function POST(request: NextRequest) {
       return new Response(null, { status: 204 });
     }
 
-    const rawMessage = stringifyUnknownError(error);
-    const friendlyMessage = toFriendlyChatError(rawMessage, provider);
+    const friendlyMessage = normalizeChatError(error, provider);
 
     // Persist the friendly error message to the session
     if (sessionId) {

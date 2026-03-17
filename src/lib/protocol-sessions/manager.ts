@@ -144,7 +144,10 @@ function toSessionConfig(
   rendered: RenderedMqttRequest,
   credentialId?: string,
 ): MqttSessionConfig {
-  const { password: _password, ...withoutPassword } = rendered;
+  const withoutPassword = {
+    ...rendered,
+  };
+  delete (withoutPassword as Partial<RenderedMqttRequest>).password;
   return {
     ...withoutPassword,
     credentialId,

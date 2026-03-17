@@ -9,8 +9,19 @@ import { stateStore } from "@/lib/state/store";
 
 export const runtime = "nodejs";
 
-function isBrokenSeedMessage(content: string): boolean {
-  return /<tool_call>/i.test(content);
+function isBrokenSeedMessage(message: { content: string; error?: boolean }): boolean {
+  if (/<tool_call>/i.test(message.content)) {
+    return true;
+  }
+
+  if (!message.error) {
+    return false;
+  }
+
+  const normalized = message.content.trim();
+  return /^error$/i.test(normalized)
+    || /^failed to process error response$/i.test(normalized)
+    || /^[a-z0-9_]+_error$/i.test(normalized);
 }
 
 async function buildPayload(deviceId: string, createIfMissing: boolean) {
@@ -26,7 +37,7 @@ async function buildPayload(deviceId: string, createIfMissing: boolean) {
   const existingMessages = session ? stateStore.getChatMessages(session.id) : [];
   const hasBrokenSeedSession = existingMessages.length === 1
     && existingMessages[0]?.role === "assistant"
-    && isBrokenSeedMessage(existingMessages[0].content);
+    && isBrokenSeedMessage(existingMessages[0]);
   if (session && hasBrokenSeedSession) {
     stateStore.deleteChatSession(session.id);
     session = createIfMissing

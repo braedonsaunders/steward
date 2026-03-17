@@ -1,0 +1,13 @@
+{
+  "update_id": 424242,
+  "message": {
+    "message_id": 10,
+    "date": 1773748800,
+    "text": "/status",
+    "chat": {
+      "id": 1001,
+      "title": "Ops",
+      "type": "group"
+    }
+  }
+}

@@ -1,7 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { isAuthorized } from "@/lib/auth/guard";
+import { gatewayRepository } from "@/lib/gateway/repository";
+import { missionRepository } from "@/lib/missions/repository";
 import { stateStore } from "@/lib/state/store";
+import { subagentRepository } from "@/lib/subagents/repository";
 
 export const runtime = "nodejs";
 
@@ -27,7 +30,16 @@ export async function GET(
 const patchSchema = z.object({
   title: z.string().min(1).optional(),
   deviceId: z.string().min(1).nullable().optional(),
-}).refine((data) => data.title !== undefined || data.deviceId !== undefined, {
+  missionId: z.string().min(1).nullable().optional(),
+  subagentId: z.string().min(1).nullable().optional(),
+  gatewayThreadId: z.string().min(1).nullable().optional(),
+}).refine((data) => (
+  data.title !== undefined
+  || data.deviceId !== undefined
+  || data.missionId !== undefined
+  || data.subagentId !== undefined
+  || data.gatewayThreadId !== undefined
+), {
   message: "At least one field is required",
 });
 
@@ -53,16 +65,51 @@ export async function PATCH(
   if (payload.data.deviceId && !stateStore.getDeviceById(payload.data.deviceId)) {
     return NextResponse.json({ error: "Device not found" }, { status: 404 });
   }
-
-  if (payload.data.title !== undefined) {
-    stateStore.updateChatSessionTitle(id, payload.data.title);
+  if (payload.data.missionId && !missionRepository.getById(payload.data.missionId)) {
+    return NextResponse.json({ error: "Mission not found" }, { status: 404 });
+  }
+  if (payload.data.subagentId && !subagentRepository.getById(payload.data.subagentId)) {
+    return NextResponse.json({ error: "Subagent not found" }, { status: 404 });
+  }
+  if (payload.data.gatewayThreadId && !gatewayRepository.getThreadById(payload.data.gatewayThreadId)) {
+    return NextResponse.json({ error: "Gateway thread not found" }, { status: 404 });
   }
 
-  if (payload.data.deviceId !== undefined) {
-    stateStore.updateChatSessionDevice(id, payload.data.deviceId ?? undefined);
+  const mission = payload.data.missionId === undefined
+    ? (session.missionId ? missionRepository.getById(session.missionId) : undefined)
+    : payload.data.missionId
+      ? missionRepository.getById(payload.data.missionId)
+      : undefined;
+  const nextGatewayThread = payload.data.gatewayThreadId === undefined
+    ? (session.gatewayThreadId ? gatewayRepository.getThreadById(session.gatewayThreadId) : undefined)
+    : payload.data.gatewayThreadId
+      ? gatewayRepository.getThreadById(payload.data.gatewayThreadId)
+      : undefined;
+  const nextMissionId = payload.data.missionId === undefined ? session.missionId : payload.data.missionId ?? undefined;
+  const nextSubagentId = payload.data.subagentId === undefined
+    ? session.subagentId ?? mission?.subagentId ?? nextGatewayThread?.subagentId
+    : payload.data.subagentId ?? undefined;
+  const nextGatewayThreadId = payload.data.gatewayThreadId === undefined ? session.gatewayThreadId : payload.data.gatewayThreadId ?? undefined;
+  stateStore.updateChatSessionContext(id, {
+    title: payload.data.title,
+    deviceId: payload.data.deviceId === undefined
+      ? session.deviceId ?? missionRepository.getPrimaryDeviceId(nextMissionId ?? "")
+      : payload.data.deviceId,
+    missionId: nextMissionId,
+    subagentId: nextSubagentId,
+    gatewayThreadId: nextGatewayThreadId,
+  });
+  if (nextGatewayThread) {
+    gatewayRepository.upsertThread({
+      ...nextGatewayThread,
+      missionId: nextMissionId ?? nextGatewayThread.missionId,
+      subagentId: nextSubagentId ?? nextGatewayThread.subagentId,
+      chatSessionId: id,
+      updatedAt: new Date().toISOString(),
+    });
   }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json(stateStore.getChatSessionById(id));
 }
 
 export async function DELETE(

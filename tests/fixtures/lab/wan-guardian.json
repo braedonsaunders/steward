@@ -1,0 +1,74 @@
+{
+  "id": "wan-guardian-replay",
+  "title": "WAN Guardian replay",
+  "mission": {
+    "id": "mission.wan-guardian.test",
+    "kind": "wan-guardian",
+    "title": "WAN Guardian",
+    "summary": "Track WAN and edge drift.",
+    "objective": "Own WAN visibility and escalation.",
+    "subagentId": "subagent.network-operator",
+    "priority": "high",
+    "cadenceMinutes": 15,
+    "shadowMode": false,
+    "targetJson": {
+      "selector": {
+        "allDevices": true
+      },
+      "recommendationPattern": "wan|uplink|network"
+    }
+  },
+  "state": {
+    "devices": [
+      {
+        "id": "device.router-1",
+        "name": "edge-router-01",
+        "ip": "192.168.1.1",
+        "type": "router",
+        "status": "online",
+        "autonomyTier": 2,
+        "tags": [],
+        "protocols": [],
+        "services": [],
+        "firstSeenAt": "2026-03-17T11:00:00.000Z",
+        "lastSeenAt": "2026-03-17T12:00:00.000Z",
+        "lastChangedAt": "2026-03-17T12:00:00.000Z",
+        "metadata": {}
+      }
+    ],
+    "incidents": [
+      {
+        "id": "incident.wan-1",
+        "title": "Intermittent WAN latency",
+        "summary": "The edge router is reporting WAN latency spikes.",
+        "severity": "warning",
+        "deviceIds": ["device.router-1"],
+        "status": "open",
+        "detectedAt": "2026-03-17T11:55:00.000Z",
+        "updatedAt": "2026-03-17T12:00:00.000Z",
+        "timeline": [],
+        "autoRemediated": false,
+        "metadata": {}
+      }
+    ],
+    "recommendations": [
+      {
+        "id": "recommendation.wan-1",
+        "title": "Validate WAN uplink saturation",
+        "rationale": "Repeated network-edge drift suggests uplink or ISP degradation.",
+        "impact": "Users may see intermittent slowdowns.",
+        "priority": "high",
+        "relatedDeviceIds": ["device.router-1"],
+        "createdAt": "2026-03-17T12:00:00.000Z",
+        "dismissed": false
+      }
+    ],
+    "findingsByDevice": {},
+    "workloadsByDevice": {},
+    "assurancesByDevice": {}
+  },
+  "expectations": {
+    "summaryIncludes": "WAN Guardian is tracking 1 network device",
+    "openInvestigations": 1
+  }
+}

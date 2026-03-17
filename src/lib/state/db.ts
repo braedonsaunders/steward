@@ -368,6 +368,9 @@ function createSchema(database: Database.Database): void {
       id        TEXT PRIMARY KEY,
       title     TEXT NOT NULL,
       deviceId  TEXT REFERENCES devices(id) ON DELETE SET NULL,
+      missionId TEXT,
+      subagentId TEXT,
+      gatewayThreadId TEXT,
       provider  TEXT,
       model     TEXT,
       createdAt TEXT NOT NULL,
@@ -555,6 +558,215 @@ function createSchema(database: Database.Database): void {
       evaluatedAt TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS packs (
+      id           TEXT PRIMARY KEY,
+      slug         TEXT NOT NULL UNIQUE,
+      name         TEXT NOT NULL,
+      version      TEXT NOT NULL DEFAULT '0.0.0',
+      description  TEXT NOT NULL DEFAULT '',
+      kind         TEXT NOT NULL DEFAULT 'builtin',
+      enabled      INTEGER NOT NULL DEFAULT 1,
+      builtin      INTEGER NOT NULL DEFAULT 0,
+      trustMode    TEXT NOT NULL DEFAULT 'unsigned',
+      signerId     TEXT,
+      signature    TEXT,
+      signatureAlgorithm TEXT,
+      verificationStatus TEXT NOT NULL DEFAULT 'unsigned',
+      verifiedAt   TEXT,
+      manifestJson TEXT NOT NULL DEFAULT '{}',
+      installedAt  TEXT NOT NULL,
+      updatedAt    TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS pack_signers (
+      id           TEXT PRIMARY KEY,
+      slug         TEXT NOT NULL UNIQUE,
+      name         TEXT NOT NULL,
+      publicKeyPem TEXT NOT NULL,
+      algorithm    TEXT NOT NULL DEFAULT 'ed25519',
+      trustScope   TEXT NOT NULL DEFAULT 'trusted',
+      enabled      INTEGER NOT NULL DEFAULT 1,
+      createdAt    TEXT NOT NULL,
+      updatedAt    TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS pack_installs (
+      id          TEXT PRIMARY KEY,
+      packId      TEXT NOT NULL UNIQUE REFERENCES packs(id) ON DELETE CASCADE,
+      enabled     INTEGER NOT NULL DEFAULT 1,
+      installedAt TEXT NOT NULL,
+      updatedAt   TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS pack_versions (
+      id           TEXT PRIMARY KEY,
+      packId       TEXT NOT NULL REFERENCES packs(id) ON DELETE CASCADE,
+      version      TEXT NOT NULL,
+      action       TEXT NOT NULL,
+      manifestJson TEXT NOT NULL DEFAULT '{}',
+      createdAt    TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS pack_resources (
+      id          TEXT PRIMARY KEY,
+      packId      TEXT NOT NULL REFERENCES packs(id) ON DELETE CASCADE,
+      type        TEXT NOT NULL,
+      resourceKey TEXT NOT NULL,
+      title       TEXT NOT NULL,
+      description TEXT,
+      createdAt   TEXT NOT NULL,
+      updatedAt   TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS subagents (
+      id               TEXT PRIMARY KEY,
+      slug             TEXT NOT NULL UNIQUE,
+      name             TEXT NOT NULL,
+      description      TEXT NOT NULL DEFAULT '',
+      status           TEXT NOT NULL DEFAULT 'active',
+      scopeJson        TEXT NOT NULL DEFAULT '{}',
+      autonomyJson     TEXT NOT NULL DEFAULT '{}',
+      packId           TEXT REFERENCES packs(id) ON DELETE SET NULL,
+      channelBindingId TEXT,
+      createdAt        TEXT NOT NULL,
+      updatedAt        TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS subagent_memories (
+      id           TEXT PRIMARY KEY,
+      subagentId   TEXT NOT NULL REFERENCES subagents(id) ON DELETE CASCADE,
+      missionId    TEXT REFERENCES missions(id) ON DELETE SET NULL,
+      deviceId     TEXT REFERENCES devices(id) ON DELETE SET NULL,
+      kind         TEXT NOT NULL,
+      summary      TEXT NOT NULL,
+      detail       TEXT NOT NULL DEFAULT '',
+      importance   TEXT NOT NULL DEFAULT 'medium',
+      evidenceJson TEXT NOT NULL DEFAULT '{}',
+      lastUsedAt   TEXT,
+      createdAt    TEXT NOT NULL,
+      updatedAt    TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS standing_orders (
+      id           TEXT PRIMARY KEY,
+      subagentId   TEXT NOT NULL REFERENCES subagents(id) ON DELETE CASCADE,
+      title        TEXT NOT NULL,
+      objective    TEXT NOT NULL DEFAULT '',
+      instructionsJson TEXT NOT NULL DEFAULT '[]',
+      enabled      INTEGER NOT NULL DEFAULT 1,
+      scopeJson    TEXT NOT NULL DEFAULT '{}',
+      createdAt    TEXT NOT NULL,
+      updatedAt    TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS missions (
+      id            TEXT PRIMARY KEY,
+      slug          TEXT NOT NULL UNIQUE,
+      title         TEXT NOT NULL,
+      summary       TEXT NOT NULL DEFAULT '',
+      kind          TEXT NOT NULL,
+      status        TEXT NOT NULL DEFAULT 'active',
+      priority      TEXT NOT NULL DEFAULT 'medium',
+      objective     TEXT NOT NULL DEFAULT '',
+      subagentId    TEXT REFERENCES subagents(id) ON DELETE SET NULL,
+      packId        TEXT REFERENCES packs(id) ON DELETE SET NULL,
+      cadenceMinutes INTEGER NOT NULL DEFAULT 60,
+      autoRun       INTEGER NOT NULL DEFAULT 1,
+      autoApprove   INTEGER NOT NULL DEFAULT 0,
+      shadowMode    INTEGER NOT NULL DEFAULT 0,
+      targetJson    TEXT NOT NULL DEFAULT '{}',
+      stateJson     TEXT NOT NULL DEFAULT '{}',
+      lastRunAt     TEXT,
+      nextRunAt     TEXT,
+      lastStatus    TEXT,
+      lastSummary   TEXT,
+      createdBy     TEXT NOT NULL DEFAULT 'steward',
+      createdAt     TEXT NOT NULL,
+      updatedAt     TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS mission_links (
+      id           TEXT PRIMARY KEY,
+      missionId    TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+      resourceType TEXT NOT NULL,
+      resourceId   TEXT NOT NULL,
+      metadataJson TEXT NOT NULL DEFAULT '{}',
+      createdAt    TEXT NOT NULL,
+      updatedAt    TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS mission_runs (
+      id          TEXT PRIMARY KEY,
+      missionId   TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+      subagentId  TEXT REFERENCES subagents(id) ON DELETE SET NULL,
+      status      TEXT NOT NULL,
+      summary     TEXT NOT NULL,
+      outcomeJson TEXT NOT NULL DEFAULT '{}',
+      startedAt   TEXT NOT NULL,
+      completedAt TEXT,
+      createdAt   TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS mission_delegations (
+      id            TEXT PRIMARY KEY,
+      missionId     TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+      fromSubagentId TEXT REFERENCES subagents(id) ON DELETE SET NULL,
+      toSubagentId  TEXT NOT NULL REFERENCES subagents(id) ON DELETE CASCADE,
+      title         TEXT NOT NULL,
+      status        TEXT NOT NULL DEFAULT 'open',
+      reason        TEXT NOT NULL DEFAULT '',
+      payloadJson   TEXT NOT NULL DEFAULT '{}',
+      createdAt     TEXT NOT NULL,
+      updatedAt     TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS mission_plans (
+      id                TEXT PRIMARY KEY,
+      missionId         TEXT NOT NULL UNIQUE REFERENCES missions(id) ON DELETE CASCADE,
+      summary           TEXT NOT NULL DEFAULT '',
+      status            TEXT NOT NULL DEFAULT 'active',
+      checkpointsJson   TEXT NOT NULL DEFAULT '[]',
+      delegationIdsJson TEXT NOT NULL DEFAULT '[]',
+      createdAt         TEXT NOT NULL,
+      updatedAt         TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS investigations (
+      id          TEXT PRIMARY KEY,
+      missionId   TEXT REFERENCES missions(id) ON DELETE SET NULL,
+      subagentId  TEXT REFERENCES subagents(id) ON DELETE SET NULL,
+      parentInvestigationId TEXT REFERENCES investigations(id) ON DELETE SET NULL,
+      title       TEXT NOT NULL,
+      status      TEXT NOT NULL DEFAULT 'open',
+      severity    TEXT NOT NULL DEFAULT 'warning',
+      stage       TEXT NOT NULL DEFAULT 'detect',
+      objective   TEXT NOT NULL DEFAULT '',
+      hypothesis  TEXT,
+      summary     TEXT NOT NULL DEFAULT '',
+      sourceType  TEXT,
+      sourceId    TEXT,
+      deviceId    TEXT REFERENCES devices(id) ON DELETE SET NULL,
+      evidenceJson TEXT NOT NULL DEFAULT '{}',
+      recommendedActionsJson TEXT NOT NULL DEFAULT '[]',
+      unresolvedQuestionsJson TEXT NOT NULL DEFAULT '[]',
+      nextRunAt   TEXT,
+      lastRunAt   TEXT,
+      resolution  TEXT,
+      createdAt   TEXT NOT NULL,
+      updatedAt   TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS investigation_steps (
+      id              TEXT PRIMARY KEY,
+      investigationId TEXT NOT NULL REFERENCES investigations(id) ON DELETE CASCADE,
+      kind            TEXT NOT NULL,
+      status          TEXT NOT NULL DEFAULT 'completed',
+      title           TEXT NOT NULL,
+      detail          TEXT NOT NULL DEFAULT '',
+      evidenceJson    TEXT NOT NULL DEFAULT '{}',
+      createdAt       TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS device_findings (
       id          TEXT PRIMARY KEY,
       deviceId    TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
@@ -609,6 +821,74 @@ function createSchema(database: Database.Database): void {
       attempts    INTEGER NOT NULL DEFAULT 0,
       lastError   TEXT,
       deliveredAt TEXT,
+      createdAt   TEXT NOT NULL,
+      updatedAt   TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS gateway_bindings (
+      id                 TEXT PRIMARY KEY,
+      kind               TEXT NOT NULL,
+      name               TEXT NOT NULL,
+      enabled            INTEGER NOT NULL DEFAULT 1,
+      target             TEXT NOT NULL DEFAULT '',
+      vaultSecretRef     TEXT,
+      webhookSecret      TEXT,
+      defaultThreadTitle TEXT,
+      configJson         TEXT NOT NULL DEFAULT '{}',
+      lastInboundAt      TEXT,
+      lastOutboundAt     TEXT,
+      createdAt          TEXT NOT NULL,
+      updatedAt          TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS gateway_threads (
+      id                TEXT PRIMARY KEY,
+      bindingId         TEXT NOT NULL REFERENCES gateway_bindings(id) ON DELETE CASCADE,
+      externalThreadKey TEXT NOT NULL,
+      title             TEXT NOT NULL,
+      missionId         TEXT REFERENCES missions(id) ON DELETE SET NULL,
+      subagentId        TEXT REFERENCES subagents(id) ON DELETE SET NULL,
+      chatSessionId     TEXT REFERENCES chat_sessions(id) ON DELETE SET NULL,
+      lastInboundAt     TEXT,
+      lastOutboundAt    TEXT,
+      createdAt         TEXT NOT NULL,
+      updatedAt         TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS gateway_inbound_events (
+      id               TEXT PRIMARY KEY,
+      bindingId        TEXT NOT NULL REFERENCES gateway_bindings(id) ON DELETE CASCADE,
+      externalUpdateId TEXT NOT NULL,
+      threadId         TEXT REFERENCES gateway_threads(id) ON DELETE SET NULL,
+      receivedAt       TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS briefings (
+      id          TEXT PRIMARY KEY,
+      scope       TEXT NOT NULL DEFAULT 'global',
+      subagentId  TEXT REFERENCES subagents(id) ON DELETE SET NULL,
+      missionId   TEXT REFERENCES missions(id) ON DELETE SET NULL,
+      bindingId   TEXT REFERENCES gateway_bindings(id) ON DELETE SET NULL,
+      title       TEXT NOT NULL,
+      body        TEXT NOT NULL,
+      format      TEXT NOT NULL DEFAULT 'markdown',
+      delivered   INTEGER NOT NULL DEFAULT 0,
+      deliveredAt TEXT,
+      metadataJson TEXT NOT NULL DEFAULT '{}',
+      createdAt   TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS channel_delivery_events (
+      id          TEXT PRIMARY KEY,
+      bindingId   TEXT NOT NULL REFERENCES gateway_bindings(id) ON DELETE CASCADE,
+      threadId    TEXT REFERENCES gateway_threads(id) ON DELETE SET NULL,
+      missionId   TEXT REFERENCES missions(id) ON DELETE SET NULL,
+      briefingId  TEXT REFERENCES briefings(id) ON DELETE SET NULL,
+      status      TEXT NOT NULL DEFAULT 'queued',
+      textPreview TEXT NOT NULL DEFAULT '',
+      requestedAt TEXT NOT NULL,
+      deliveredAt TEXT,
+      error       TEXT,
       createdAt   TEXT NOT NULL,
       updatedAt   TEXT NOT NULL
     );
@@ -763,6 +1043,9 @@ function createSchema(database: Database.Database): void {
 
   // Migrate columns before creating indexes that reference them
   ensureColumn(database, "chat_sessions", "deviceId", "TEXT REFERENCES devices(id) ON DELETE SET NULL");
+  ensureColumn(database, "chat_sessions", "missionId", "TEXT");
+  ensureColumn(database, "chat_sessions", "subagentId", "TEXT");
+  ensureColumn(database, "chat_sessions", "gatewayThreadId", "TEXT");
   ensureColumn(database, "chat_messages", "metadata", "TEXT NOT NULL DEFAULT '{}'");
   ensureColumn(database, "devices", "secondaryIps", "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn(database, "adapters", "source", "TEXT NOT NULL DEFAULT 'file'");
@@ -776,6 +1059,17 @@ function createSchema(database: Database.Database): void {
   ensureColumn(database, "dashboard_widget_page_items", "rowStart", "INTEGER NOT NULL DEFAULT 1");
   ensureColumn(database, "device_widgets", "controlsJson", "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn(database, "device_automations", "targetJson", "TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn(database, "packs", "trustMode", "TEXT NOT NULL DEFAULT 'unsigned'");
+  ensureColumn(database, "packs", "signerId", "TEXT");
+  ensureColumn(database, "packs", "signature", "TEXT");
+  ensureColumn(database, "packs", "signatureAlgorithm", "TEXT");
+  ensureColumn(database, "packs", "verificationStatus", "TEXT NOT NULL DEFAULT 'unsigned'");
+  ensureColumn(database, "packs", "verifiedAt", "TEXT");
+  ensureColumn(database, "missions", "shadowMode", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(database, "investigations", "parentInvestigationId", "TEXT REFERENCES investigations(id) ON DELETE SET NULL");
+  ensureColumn(database, "investigations", "stage", "TEXT NOT NULL DEFAULT 'detect'");
+  ensureColumn(database, "investigations", "recommendedActionsJson", "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn(database, "investigations", "unresolvedQuestionsJson", "TEXT NOT NULL DEFAULT '[]'");
 
   // Indexes for frequently queried columns
   database.exec(`
@@ -799,8 +1093,23 @@ function createSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_daily_digests_generatedAt ON daily_digests(generatedAt);
     CREATE INDEX IF NOT EXISTS idx_chat_sessions_updatedAt ON chat_sessions(updatedAt);
     CREATE INDEX IF NOT EXISTS idx_chat_sessions_deviceId ON chat_sessions(deviceId);
+    CREATE INDEX IF NOT EXISTS idx_chat_sessions_missionId ON chat_sessions(missionId, updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_chat_sessions_gatewayThreadId ON chat_sessions(gatewayThreadId);
     CREATE INDEX IF NOT EXISTS idx_chat_messages_sessionId ON chat_messages(sessionId);
     CREATE INDEX IF NOT EXISTS idx_chat_messages_createdAt ON chat_messages(createdAt);
+    CREATE INDEX IF NOT EXISTS idx_packs_slug_enabled ON packs(slug, enabled);
+    CREATE INDEX IF NOT EXISTS idx_packs_signer_verification ON packs(signerId, verificationStatus, updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_pack_signers_slug_enabled ON pack_signers(slug, enabled);
+    CREATE INDEX IF NOT EXISTS idx_pack_versions_packId_createdAt ON pack_versions(packId, createdAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_pack_resources_packId_type ON pack_resources(packId, type);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_pack_resources_packId_resourceKey ON pack_resources(packId, resourceKey);
+    CREATE INDEX IF NOT EXISTS idx_pack_installs_packId ON pack_installs(packId);
+    CREATE INDEX IF NOT EXISTS idx_missions_subagent_status ON missions(subagentId, status);
+    CREATE INDEX IF NOT EXISTS idx_missions_nextRunAt ON missions(nextRunAt);
+    CREATE INDEX IF NOT EXISTS idx_mission_links_mission_resource ON mission_links(missionId, resourceType, resourceId);
+    CREATE INDEX IF NOT EXISTS idx_investigations_mission_status ON investigations(missionId, status);
+    CREATE INDEX IF NOT EXISTS idx_investigations_stage ON investigations(stage, updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_investigation_steps_investigation_createdAt ON investigation_steps(investigationId, createdAt DESC);
     CREATE INDEX IF NOT EXISTS idx_adapters_source ON adapters(source);
     CREATE INDEX IF NOT EXISTS idx_local_tools_status ON local_tools(status);
     CREATE INDEX IF NOT EXISTS idx_local_tools_updatedAt ON local_tools(updatedAt);
@@ -826,6 +1135,10 @@ function createSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_discovery_observations_deviceId ON discovery_observations(deviceId);
     CREATE INDEX IF NOT EXISTS idx_adoption_runs_deviceId ON adoption_runs(deviceId);
     CREATE INDEX IF NOT EXISTS idx_adoption_runs_status ON adoption_runs(status);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_gateway_inbound_events_binding_update
+      ON gateway_inbound_events(bindingId, externalUpdateId);
+    CREATE INDEX IF NOT EXISTS idx_gateway_threads_binding_thread ON gateway_threads(bindingId, externalThreadKey);
+    CREATE INDEX IF NOT EXISTS idx_briefings_binding_createdAt ON briefings(bindingId, createdAt DESC);
     CREATE INDEX IF NOT EXISTS idx_adoption_runs_updatedAt ON adoption_runs(updatedAt);
     CREATE INDEX IF NOT EXISTS idx_adoption_questions_runId ON adoption_questions(runId);
     CREATE INDEX IF NOT EXISTS idx_adoption_questions_deviceId ON adoption_questions(deviceId);
@@ -864,6 +1177,36 @@ function createSchema(database: Database.Database): void {
       ON assurance_runs(assuranceId, evaluatedAt DESC);
     CREATE INDEX IF NOT EXISTS idx_assurance_runs_device
       ON assurance_runs(deviceId, evaluatedAt DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_subagents_slug
+      ON subagents(slug);
+    CREATE INDEX IF NOT EXISTS idx_subagents_status
+      ON subagents(status, updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_subagent_memories_subagent_used
+      ON subagent_memories(subagentId, updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_standing_orders_subagent_enabled
+      ON standing_orders(subagentId, enabled, updatedAt DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_missions_slug
+      ON missions(slug);
+    CREATE INDEX IF NOT EXISTS idx_missions_status_next
+      ON missions(status, nextRunAt, updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_missions_subagent
+      ON missions(subagentId, status, updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_mission_delegations_mission_status
+      ON mission_delegations(missionId, status, updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_mission_delegations_target_status
+      ON mission_delegations(toSubagentId, status, updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_mission_plans_mission
+      ON mission_plans(missionId, updatedAt DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_mission_links_unique
+      ON mission_links(missionId, resourceType, resourceId);
+    CREATE INDEX IF NOT EXISTS idx_mission_runs_mission_created
+      ON mission_runs(missionId, createdAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_investigations_status_updated
+      ON investigations(status, updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_investigations_mission_status
+      ON investigations(missionId, status, updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_investigation_steps_investigation_created
+      ON investigation_steps(investigationId, createdAt DESC);
     CREATE INDEX IF NOT EXISTS idx_device_findings_device_status ON device_findings(deviceId, status);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_device_findings_dedupe_key
       ON device_findings(deviceId, dedupeKey);
@@ -877,6 +1220,18 @@ function createSchema(database: Database.Database): void {
       ON notification_deliveries(channelId, createdAt DESC);
     CREATE INDEX IF NOT EXISTS idx_notification_deliveries_status_created
       ON notification_deliveries(status, createdAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_gateway_bindings_enabled
+      ON gateway_bindings(enabled, kind, updatedAt DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_gateway_threads_binding_external
+      ON gateway_threads(bindingId, externalThreadKey);
+    CREATE INDEX IF NOT EXISTS idx_gateway_threads_updated
+      ON gateway_threads(updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_briefings_created
+      ON briefings(createdAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_channel_delivery_events_binding_requested
+      ON channel_delivery_events(bindingId, requestedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_channel_delivery_events_status_requested
+      ON channel_delivery_events(status, requestedAt DESC);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_device_widgets_device_slug
       ON device_widgets(deviceId, slug);
     CREATE INDEX IF NOT EXISTS idx_device_widgets_device_updated
@@ -1331,18 +1686,22 @@ function migrateLegacyWorkloadArchitecture(database: Database.Database): void {
   migrate();
 }
 
+export function applyStateSchemaAndMigrations(database: Database.Database): void {
+  database.pragma("journal_mode = WAL");
+  database.pragma("foreign_keys = ON");
+  createSchema(database);
+  migrateLegacyWorkloadArchitecture(database);
+  migrateCompletedOnboardingDraftCleanup(database);
+  migrateLegacyWidgetJsonParsers(database);
+}
+
 export function getDb(): Database.Database {
   if (stateDb) return stateDb;
 
   mkdirSync(DATA_DIR, { recursive: true });
   stateDb = new Database(STATE_DB_PATH);
   try {
-    stateDb.pragma("journal_mode = WAL");
-    stateDb.pragma("foreign_keys = ON");
-    createSchema(stateDb);
-    migrateLegacyWorkloadArchitecture(stateDb);
-    migrateCompletedOnboardingDraftCleanup(stateDb);
-    migrateLegacyWidgetJsonParsers(stateDb);
+    applyStateSchemaAndMigrations(stateDb);
   } catch (error) {
     try {
       stateDb.close();
@@ -1485,6 +1844,11 @@ function closeAuditDbQuietly(): void {
   } finally {
     auditDb = null;
   }
+}
+
+export function closeOpenDatabases(): void {
+  closeDbQuietly();
+  closeAuditDbQuietly();
 }
 
 function moveIfExists(sourcePath: string, targetPath: string): void {

@@ -10,7 +10,6 @@ import type {
   LocalToolExecutionResult,
   LocalToolManifest,
   LocalToolRecord,
-  LocalToolStatus,
   RuntimeSettings,
 } from "@/lib/state/types";
 import { runCommand } from "@/lib/utils/shell";

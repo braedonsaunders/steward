@@ -13,6 +13,9 @@ export interface ChatSessionRecord {
   id: string;
   title: string;
   deviceId?: string;
+  missionId?: string;
+  subagentId?: string;
+  gatewayThreadId?: string;
   provider?: string;
   model?: string;
   createdAt: string;
@@ -97,6 +100,9 @@ function parseChatSessionRecord(value: unknown): ChatSessionRecord | null {
     id: record.id,
     title: record.title,
     deviceId: typeof record.deviceId === "string" ? record.deviceId : undefined,
+    missionId: typeof record.missionId === "string" ? record.missionId : undefined,
+    subagentId: typeof record.subagentId === "string" ? record.subagentId : undefined,
+    gatewayThreadId: typeof record.gatewayThreadId === "string" ? record.gatewayThreadId : undefined,
     provider: typeof record.provider === "string" ? record.provider : undefined,
     model: typeof record.model === "string" ? record.model : undefined,
     createdAt: record.createdAt,

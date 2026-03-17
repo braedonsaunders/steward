@@ -1,8 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { isAuthorized } from "@/lib/auth/guard";
-import { exchangeAnthropicCode } from "@/lib/auth/oauth";
+import { createAnthropicApiKey, exchangeAnthropicCode } from "@/lib/auth/oauth";
 import { getProviderConfig } from "@/lib/llm/config";
+import { persistAnthropicOAuthTokens } from "@/lib/llm/anthropic-oauth";
 import { listProviderModelsFromApi, normalizeProviderModel } from "@/lib/llm/models";
 import { getProviderMeta } from "@/lib/llm/registry";
 import { ensureVaultReadyForProviders } from "@/lib/security/vault-gate";
@@ -14,6 +15,14 @@ export const runtime = "nodejs";
 const bodySchema = z.object({
   code: z.string().min(1, "Authorization code is required"),
 });
+
+function isMissingAnthropicApiKeyScopeError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("Anthropic API key creation failed") &&
+    message.includes("org:create_api_key")
+  );
+}
 
 /**
  * Anthropic OAuth code exchange — matches oneshot's opencode-anthropic-auth
@@ -67,14 +76,21 @@ export async function POST(request: NextRequest) {
     // Exchange code for OAuth tokens (matches oneshot's exchange() function)
     const tokens = await exchangeAnthropicCode(authCode, verifier, verifier);
 
-    // Store OAuth tokens in vault (like oneshot stores auth info)
-    await vault.setSecret("llm.oauth.anthropic.access_token", tokens.access_token);
-    if (tokens.refresh_token) {
-      await vault.setSecret("llm.oauth.anthropic.refresh_token", tokens.refresh_token);
-    }
-    if (tokens.expires_in) {
-      const expiresAt = Date.now() + tokens.expires_in * 1000;
-      await vault.setSecret("llm.oauth.anthropic.expires_at", String(expiresAt));
+    // Persist the OAuth session so later runtime restarts can refresh it.
+    await persistAnthropicOAuthTokens(tokens);
+
+    let apiKeyWarning: string | undefined;
+    try {
+      // Prefer a durable API key when Anthropic grants the required scope.
+      const apiKey = await createAnthropicApiKey(tokens.access_token);
+      await vault.setSecret("llm.api.anthropic.key", apiKey);
+    } catch (error) {
+      if (!isMissingAnthropicApiKeyScopeError(error)) {
+        throw error;
+      }
+
+      apiKeyWarning =
+        "Anthropic OAuth connected without API-key minting because the granted token does not include org:create_api_key.";
     }
 
     // Persist provider config only with a model that is returned by
@@ -104,10 +120,17 @@ export async function POST(request: NextRequest) {
       actor: "user",
       kind: "auth",
       message: "Anthropic connected via OAuth (Claude Pro/Max flow)",
-      context: { provider: "anthropic" },
+      context: {
+        provider: "anthropic",
+        apiKeyMinted: !apiKeyWarning,
+        ...(apiKeyWarning ? { warning: apiKeyWarning } : {}),
+      },
     });
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({
+      ok: true,
+      ...(apiKeyWarning ? { warning: apiKeyWarning } : {}),
+    });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : String(error) },

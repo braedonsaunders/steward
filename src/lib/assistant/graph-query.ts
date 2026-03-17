@@ -1,5 +1,6 @@
 import { graphStore } from "@/lib/state/graph";
 import { getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
+import { getLocalIpv4Interfaces, sameSubnetUsingInterfaces } from "@/lib/discovery/local";
 import { stateStore } from "@/lib/state/store";
 import type { Device } from "@/lib/state/types";
 
@@ -48,13 +49,10 @@ function normalize(value: string): string {
   return value.trim().toLowerCase();
 }
 
-function sameSubnet24(a: string, b: string): boolean {
-  const aParts = a.split(".");
-  const bParts = b.split(".");
-  return aParts.length === 4 && bParts.length === 4
-    && aParts[0] === bParts[0]
-    && aParts[1] === bParts[1]
-    && aParts[2] === bParts[2];
+const LOCAL_INTERFACES = getLocalIpv4Interfaces();
+
+function sameSubnetAware(a: string, b: string): boolean {
+  return sameSubnetUsingInterfaces(a, b, LOCAL_INTERFACES);
 }
 
 function clampInt(value: unknown, min: number, max: number, fallback: number): number {
@@ -174,7 +172,7 @@ function inventoryMatchScore(
   if (normalize(device.vendor ?? "").includes(normalizedQuery)) score += 3;
   if (normalize(device.os ?? "").includes(normalizedQuery)) score += 2;
   if (buildDeviceSearchHaystack(device).includes(normalizedQuery)) score += 1;
-  if (sameSubnetTarget && sameSubnet24(device.ip, sameSubnetTarget.ip)) score += 1;
+  if (sameSubnetTarget && sameSubnetAware(device.ip, sameSubnetTarget.ip)) score += 1;
   if (device.status === "online") score += 1;
   return score;
 }
@@ -204,8 +202,8 @@ function summarizeDeviceRecord(
     services: device.services.slice(0, 8).map((service) => `${service.name}:${service.port}`),
     incidentCount: args?.incidentCount ?? 0,
     recommendationCount: args?.recommendationCount ?? 0,
-    sameSubnetAsAttachedDevice: args?.attachedDevice ? sameSubnet24(device.ip, args.attachedDevice.ip) : undefined,
-    sameSubnetAsTarget: args?.sameSubnetTarget ? sameSubnet24(device.ip, args.sameSubnetTarget.ip) : undefined,
+    sameSubnetAsAttachedDevice: args?.attachedDevice ? sameSubnetAware(device.ip, args.attachedDevice.ip) : undefined,
+    sameSubnetAsTarget: args?.sameSubnetTarget ? sameSubnetAware(device.ip, args.sameSubnetTarget.ip) : undefined,
     lastSeenAt: device.lastSeenAt,
     lastChangedAt: device.lastChangedAt,
   };
@@ -275,7 +273,7 @@ export async function queryNetworkState(
       if (type && device.type !== type) {
         return false;
       }
-      if (sameSubnetTarget && (device.id === sameSubnetTarget.id || !sameSubnet24(device.ip, sameSubnetTarget.ip))) {
+      if (sameSubnetTarget && (device.id === sameSubnetTarget.id || !sameSubnetAware(device.ip, sameSubnetTarget.ip))) {
         return false;
       }
       if (query.length > 0 && !buildDeviceSearchHaystack(device).includes(normalize(query))) {
@@ -359,7 +357,7 @@ export async function queryNetworkState(
       .map((id) => devices.find((device) => device.id === id))
       .filter((device): device is Device => Boolean(device));
     const subnetPeers = devices
-      .filter((device) => device.id !== target.id && sameSubnet24(device.ip, target.ip))
+      .filter((device) => device.id !== target.id && sameSubnetAware(device.ip, target.ip))
       .sort((a, b) => a.name.localeCompare(b.name))
       .slice(0, 12)
       .map((device) =>

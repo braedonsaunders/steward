@@ -1,6 +1,6 @@
 # World-Class System Program
 
-Last updated: 2026-03-08
+Last updated: 2026-03-17
 
 Purpose:
 - Turn Steward from a strong prototype into a world-class autonomous IT operator.
@@ -12,6 +12,7 @@ Status:
 - First implementation tranche started on 2026-03-06.
 - Backlog reconciled against the current repo on 2026-03-08.
 - Continuous monitoring should now be treated as deterministic-first with a wake coordinator and notification outbox, not as one monolithic interval loop.
+- Mission control tranche landed on 2026-03-17 with DB-backed missions, subagents, investigations, packs, briefings, and a Telegram-first gateway.
 
 ## 0. Continuous Monitoring, Wake-Ups, and Notifications
 
@@ -50,6 +51,17 @@ Reference: `docs/continuous-monitoring-architecture-analysis.md`, `docs/continuo
 - [ ] Add freeze-window, change-budget, and failure-budget policy inputs.
 - [ ] Add site-aware and tenant-aware policy inheritance.
 - [ ] Add simulation mode for high-risk changes before approval.
+
+## 3A. Mission Control, Gateway, and Durable Agency
+
+- [x] Add first-class `missions`, `subagents`, `investigations`, `packs`, `gateway_bindings`, and `briefings`.
+- [x] Move durable agency onto dedicated workers instead of keeping it inside the scanner or chat turn only.
+- [x] Add Telegram-first gateway routing for briefings, mission visibility, investigations, approvals, inbound dedupe, and basic natural-language operator prompts.
+- [x] Add standing orders, subagent delegation, and cross-mission planning.
+- [x] Add managed pack compatibility policy and upgrade/remove lifecycle.
+- [x] Add pack signing and trust verification.
+- [x] Add Steward Lab fixtures so mission behavior and investigations can be replayed and certified.
+- [x] Link chat sessions to mission threads and gateway threads so durable agency owns conversation context too.
 
 ## 4. Detection, Findings, and Incident Coverage
 
@@ -111,14 +123,14 @@ Reference: `docs/continuous-monitoring-architecture-analysis.md`, `docs/continuo
 - [ ] Add workerized durable job processing instead of write-only queue APIs.
 - [ ] Route wakes, notifications, and monitor executions through durable workers instead of inline loop side effects.
 - [ ] Add paginated read models for large installations and evidence-heavy incidents.
-- [ ] Add control-plane self-observability for queue lag, DB contention, loop time, and provider health.
+- [ ] Add control-plane self-observability for queue lag, DB contention, loop time, and provider health. Queue lag, worker health, and mission/briefing/channel latency metrics now exist; DB contention, loop-time, and provider-health coverage still remain.
 
 ## 11. Reliability, Testing, and Certification
 
 - [ ] Add integration tests for discovery, onboarding, policy, approvals, and playbooks.
 - [ ] Add adapter certification fixtures and conformance test packs.
-- [ ] Add replayable incident fixtures and rollback drills.
-- [ ] Add restore validation for state/audit/vault backups.
+- [ ] Add replayable incident fixtures and rollback drills. Mission replay fixtures exist for the autonomy layer; broader incident and rollback certification still remains.
+- [ ] Add restore validation for state/audit/vault backups. State-schema migration and restore-drill coverage now exist for the autonomy cutover; full audit/vault restore validation still remains.
 - [ ] Add Steward internal SLO tracking and regression gates.
 
 ## 12. Federation, Multi-Site, and Tenant Boundaries

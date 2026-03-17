@@ -3775,6 +3775,9 @@ class StateStore {
           id: row.id as string,
           title: row.title as string,
           deviceId: (row.deviceId as string) ?? undefined,
+          missionId: (row.missionId as string) ?? undefined,
+          subagentId: (row.subagentId as string) ?? undefined,
+          gatewayThreadId: (row.gatewayThreadId as string) ?? undefined,
           provider: (row.provider as string) ?? undefined,
           model: (row.model as string) ?? undefined,
           createdAt: row.createdAt as string,
@@ -3792,6 +3795,30 @@ class StateStore {
         id: row.id as string,
         title: row.title as string,
         deviceId: (row.deviceId as string) ?? undefined,
+        missionId: (row.missionId as string) ?? undefined,
+        subagentId: (row.subagentId as string) ?? undefined,
+        gatewayThreadId: (row.gatewayThreadId as string) ?? undefined,
+        provider: (row.provider as string) ?? undefined,
+        model: (row.model as string) ?? undefined,
+        createdAt: row.createdAt as string,
+        updatedAt: row.updatedAt as string,
+      };
+    });
+  }
+
+  getChatSessionByGatewayThreadId(gatewayThreadId: string): ChatSession | null {
+    return this.withDbRecovery("StateStore.getChatSessionByGatewayThreadId", (db) => {
+      const row = db.prepare("SELECT * FROM chat_sessions WHERE gatewayThreadId = ? ORDER BY updatedAt DESC LIMIT 1").get(
+        gatewayThreadId,
+      ) as Record<string, unknown> | undefined;
+      if (!row) return null;
+      return {
+        id: row.id as string,
+        title: row.title as string,
+        deviceId: (row.deviceId as string) ?? undefined,
+        missionId: (row.missionId as string) ?? undefined,
+        subagentId: (row.subagentId as string) ?? undefined,
+        gatewayThreadId: (row.gatewayThreadId as string) ?? undefined,
         provider: (row.provider as string) ?? undefined,
         model: (row.model as string) ?? undefined,
         createdAt: row.createdAt as string,
@@ -3822,12 +3849,19 @@ class StateStore {
   createChatSession(session: ChatSession): void {
     this.withDbRecovery("StateStore.createChatSession", (db) => {
       db.prepare(`
-        INSERT INTO chat_sessions (id, title, deviceId, provider, model, createdAt, updatedAt)
-        VALUES (@id, @title, @deviceId, @provider, @model, @createdAt, @updatedAt)
+        INSERT INTO chat_sessions (
+          id, title, deviceId, missionId, subagentId, gatewayThreadId, provider, model, createdAt, updatedAt
+        )
+        VALUES (
+          @id, @title, @deviceId, @missionId, @subagentId, @gatewayThreadId, @provider, @model, @createdAt, @updatedAt
+        )
       `).run({
         id: session.id,
         title: session.title,
         deviceId: session.deviceId ?? null,
+        missionId: session.missionId ?? null,
+        subagentId: session.subagentId ?? null,
+        gatewayThreadId: session.gatewayThreadId ?? null,
         provider: session.provider ?? null,
         model: session.model ?? null,
         createdAt: session.createdAt,
@@ -3880,6 +3914,39 @@ class StateStore {
         new Date().toISOString(),
         id,
       );
+    });
+  }
+
+  updateChatSessionContext(
+    id: string,
+    context: {
+      deviceId?: string | null;
+      missionId?: string | null;
+      subagentId?: string | null;
+      gatewayThreadId?: string | null;
+      title?: string;
+    },
+  ): void {
+    this.withDbRecovery("StateStore.updateChatSessionContext", (db) => {
+      db.prepare(`
+        UPDATE chat_sessions
+        SET
+          title = COALESCE(@title, title),
+          deviceId = @deviceId,
+          missionId = @missionId,
+          subagentId = @subagentId,
+          gatewayThreadId = @gatewayThreadId,
+          updatedAt = @updatedAt
+        WHERE id = @id
+      `).run({
+        id,
+        title: context.title ?? null,
+        deviceId: context.deviceId ?? null,
+        missionId: context.missionId ?? null,
+        subagentId: context.subagentId ?? null,
+        gatewayThreadId: context.gatewayThreadId ?? null,
+        updatedAt: new Date().toISOString(),
+      });
     });
   }
 

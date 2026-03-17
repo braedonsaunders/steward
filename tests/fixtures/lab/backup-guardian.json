@@ -1,0 +1,110 @@
+{
+  "id": "backup-guardian-replay",
+  "title": "Backup Guardian replay",
+  "mission": {
+    "id": "mission.backup-guardian.test",
+    "kind": "backup-guardian",
+    "title": "Backup Hygiene",
+    "summary": "Own backup freshness.",
+    "objective": "Keep backups fresh and restore-ready.",
+    "subagentId": "subagent.backup-operator",
+    "priority": "high",
+    "cadenceMinutes": 30,
+    "shadowMode": false,
+    "targetJson": {
+      "selector": {
+        "allDevices": true
+      }
+    }
+  },
+  "state": {
+    "devices": [
+      {
+        "id": "device.backup-1",
+        "name": "backup-host-01",
+        "ip": "192.168.1.20",
+        "type": "server",
+        "status": "online",
+        "autonomyTier": 2,
+        "tags": [],
+        "protocols": [],
+        "services": [],
+        "firstSeenAt": "2026-03-17T11:00:00.000Z",
+        "lastSeenAt": "2026-03-17T12:00:00.000Z",
+        "lastChangedAt": "2026-03-17T12:00:00.000Z",
+        "metadata": {}
+      }
+    ],
+    "incidents": [],
+    "recommendations": [
+      {
+        "id": "recommendation.backup-1",
+        "title": "Rerun failed backup job",
+        "rationale": "Backup freshness drift remains unresolved.",
+        "impact": "Restore point risk is increasing.",
+        "priority": "high",
+        "relatedDeviceIds": ["device.backup-1"],
+        "createdAt": "2026-03-17T12:00:00.000Z",
+        "dismissed": false
+      }
+    ],
+    "findingsByDevice": {
+      "device.backup-1": [
+        {
+          "id": "finding.backup-1",
+          "deviceId": "device.backup-1",
+          "dedupeKey": "backup.job.failed",
+          "findingType": "backup.failure",
+          "severity": "warning",
+          "title": "Backup job failed",
+          "summary": "Nightly backup failed and freshness is outside policy.",
+          "evidenceJson": {
+            "jobName": "nightly-backup"
+          },
+          "status": "open",
+          "firstSeenAt": "2026-03-17T10:00:00.000Z",
+          "lastSeenAt": "2026-03-17T12:00:00.000Z"
+        }
+      ]
+    },
+    "workloadsByDevice": {
+      "device.backup-1": [
+        {
+          "id": "workload.backup-1",
+          "deviceId": "device.backup-1",
+          "workloadKey": "backup-service",
+          "displayName": "Backup Service",
+          "category": "data",
+          "criticality": "high",
+          "source": "operator",
+          "summary": "Owns nightly backups.",
+          "evidenceJson": {},
+          "createdAt": "2026-03-17T12:00:00.000Z",
+          "updatedAt": "2026-03-17T12:00:00.000Z"
+        }
+      ]
+    },
+    "assurancesByDevice": {
+      "device.backup-1": [
+        {
+          "id": "assurance.backup-1",
+          "deviceId": "device.backup-1",
+          "workloadId": "workload.backup-1",
+          "assuranceKey": "backup-freshness",
+          "displayName": "Backup Freshness",
+          "criticality": "high",
+          "desiredState": "running",
+          "checkIntervalSec": 900,
+          "monitorType": "backup",
+          "requiredProtocols": [],
+          "createdAt": "2026-03-17T12:00:00.000Z",
+          "updatedAt": "2026-03-17T12:00:00.000Z"
+        }
+      ]
+    }
+  },
+  "expectations": {
+    "summaryIncludes": "tracking 1 open finding",
+    "openInvestigations": 1
+  }
+}
