@@ -409,7 +409,7 @@ export function builtinMissions(now = nowIso()): MissionRecord[] {
       kind: "storage-guardian",
       status: "active",
       priority: "high",
-      objective: "Own disk pressure awareness and storage risk escalation across NAS, SAN, and server workloads.",
+    objective: "Own disk pressure awareness and storage risk escalation across NAS, SAN, and server responsibilities.",
       subagentId: "subagent.storage-operator",
       packId: "pack.core-storage",
       cadenceMinutes: 30,

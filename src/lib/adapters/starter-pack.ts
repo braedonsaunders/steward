@@ -155,7 +155,7 @@ module.exports = {
         protocol: "docker",
         actions: [
           "Inventory running containers",
-          "Restart unhealthy workloads",
+          "Restart unhealthy responsibilities",
           "Prune dangling images",
         ],
       },
@@ -2452,7 +2452,7 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
         {
           id: "skill.docker.inventory",
           name: "Container Inventory",
-          description: "Inspect running workloads and identify stale container services.",
+          description: "Inspect running responsibilities and identify stale container services.",
           category: "operations",
           operationKinds: ["shell.command"],
           enabledByDefault: true,
@@ -3181,7 +3181,7 @@ export const BUILTIN_ADAPTERS: BuiltinAdapterBundle[] = [
     manifest: {
       id: "steward.bambu-printer",
       name: "Bambu Printer",
-      description: "First-party Bambu Lab printer profile with native MQTT and printer workload modeling.",
+      description: "First-party Bambu Lab printer profile with native MQTT and printer responsibility modeling.",
       version: "1.0.0",
       author: "Steward",
       entry: "index.js",

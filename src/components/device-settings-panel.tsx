@@ -299,7 +299,7 @@ export function DeviceSettingsPanel({ deviceId }: { deviceId: string }) {
           <Textarea
             value={operatorNotes}
             onChange={(event) => setOperatorNotes(event.target.value)}
-            placeholder="Write key facts Steward should remember about this device (workload role, dependencies, caveats)."
+                placeholder="Write key facts Steward should remember about this device (responsibility role, dependencies, caveats)."
             className="min-h-28"
           />
         </div>

@@ -164,7 +164,7 @@ function toWorkloads(value: unknown): WorkloadDraft[] {
           : typeof record.serviceKey === "string" && record.serviceKey.trim().length > 0
             ? record.serviceKey.trim()
           : displayName.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-        const reason = typeof record.reason === "string" ? record.reason : "Identified as critical workload";
+  const reason = typeof record.reason === "string" ? record.reason : "Identified as a critical responsibility";
         const criticality = record.criticality === "high" || record.criticality === "low"
           ? record.criticality
           : "medium";
@@ -240,7 +240,7 @@ function fallbackProfile(device: Device): DeviceAdoptionProfile {
     credentialIntents.push({ protocol: "docker", reason: "Container lifecycle and health checks", priority: "medium" });
   }
   if (device.protocols.includes("kubernetes")) {
-    credentialIntents.push({ protocol: "kubernetes", reason: "Cluster workload and node management", priority: "medium" });
+    credentialIntents.push({ protocol: "kubernetes", reason: "Cluster responsibility and node management", priority: "medium" });
   }
   if (device.protocols.includes("mqtt")) {
     credentialIntents.push({ protocol: "mqtt", reason: "Native telemetry subscriptions and command exchange", priority: "medium" });
@@ -251,7 +251,7 @@ function fallbackProfile(device: Device): DeviceAdoptionProfile {
     .map((service) => ({
       workloadKey: `${service.transport}_${service.port}_${service.name}`.replace(/[^a-z0-9_]+/gi, "_").toLowerCase(),
       displayName: `${service.name}:${service.port}`,
-      reason: `Observed endpoint on port ${service.port}; likely maps to a workload or dependency.`,
+      reason: `Observed endpoint on port ${service.port}; likely maps to a responsibility or dependency.`,
       criticality: service.port === 22 || service.port === 443 || service.port === 3389 ? "high" : "medium",
     })) as WorkloadDraft[];
 
@@ -266,7 +266,7 @@ function fallbackProfile(device: Device): DeviceAdoptionProfile {
       .join(", ");
     questions.push({
       questionKey: "critical_services_confirm",
-      prompt: `List the workloads or responsibilities Steward should actively keep healthy on this device (comma-separated). Observed endpoints: ${discoveredServicesLabel || "none"}. Include responsibilities discovery may have missed (for example: nginx reverse proxy, Laravel queue workers, MySQL, backup jobs).`,
+      prompt: `List the responsibilities Steward should actively keep healthy on this device (comma-separated). Observed endpoints: ${discoveredServicesLabel || "none"}. Include responsibilities discovery may have missed (for example: nginx reverse proxy, Laravel queue workers, MySQL, backup jobs).`,
       options: [],
       required: true,
     });
@@ -322,7 +322,7 @@ function fallbackProfile(device: Device): DeviceAdoptionProfile {
 
   questions.push({
     questionKey: "manual_service_contracts",
-    prompt: "Any additional workloads or assurances to add manually? Provide comma-separated names and optional ports (example: laravel-api:443, queue-worker, nightly-backups).",
+    prompt: "Any additional responsibilities or assurances to add manually? Provide comma-separated names and optional ports (example: laravel-api:443, queue-worker, nightly-backups).",
     options: [],
     required: false,
   });
@@ -419,7 +419,7 @@ export async function generateDeviceAdoptionProfile(
         "You are generating an onboarding profile for a network endpoint managed by Steward.",
         "Return ONLY a single JSON object with keys:",
         "summary (string), role (string optional), confidence (0..1),",
-        "workloads (array of {workloadKey, displayName, reason, criticality}),",
+    "responsibilities (array of {workloadKey, displayName, reason, criticality}),",
         "watchItems (string array),",
         "credentialIntents (array of {protocol, reason, priority}),",
         "adapterCandidates (array of {adapterId, protocol, score, reason}),",
@@ -427,7 +427,7 @@ export async function generateDeviceAdoptionProfile(
          "Rules:",
          "- Ask questions only when evidence is ambiguous.",
          "- Keep questions under 8 total.",
-         "- For questionKey 'critical_services_confirm', do NOT provide options. Ask for a comma-separated free-text list of workloads and responsibilities so the user can include things discovery missed.",
+    "- For questionKey 'critical_services_confirm', do NOT provide options. Ask for a comma-separated free-text list of responsibilities so the user can include things discovery missed.",
          "- If existingAssuranceCount > 0, do not require critical_services_confirm again unless telemetry clearly conflicts.",
          "- RDP-only Windows endpoints are usually workstations, not servers.",
          "- Do not request WinRM credentials unless WinRM is actually observed or explicitly confirmed in telemetry.",

@@ -129,7 +129,7 @@ function formatScope(mission: MissionItem, devicesById: Map<string, DeviceItem>)
     parts.push("TLS");
   }
   if (selector.workloadCategory) {
-    parts.push(`${selector.workloadCategory} workloads`);
+    parts.push(`${selector.workloadCategory} responsibilities`);
   }
   if (selector.assuranceMonitorTypes?.length) {
     parts.push(`assurances:${selector.assuranceMonitorTypes.join(", ")}`);

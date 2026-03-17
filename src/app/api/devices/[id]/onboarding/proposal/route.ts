@@ -150,7 +150,7 @@ export async function POST(
   await stateStore.addAction({
     actor: "user",
     kind: "config",
-    message: `Applied ${selected.length} onboarding workload assurance recommendation(s) for ${device.name}`,
+      message: `Applied ${selected.length} onboarding responsibility assurance recommendation(s) for ${device.name}`,
     context: {
       deviceId: id,
       proposalIds: payload.data.proposalIds,

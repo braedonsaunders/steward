@@ -2324,7 +2324,7 @@ function GeneralSection({ tab }: { tab: GeneralTabValue }) {
                   onChange={(checked) => setRuntimeToggleField("securityScannerAlertsEnabled", checked)}
                 />
                 <SettingsToggleRow
-                  label="Assurance scanner alerts (workload drift and monitor failures)"
+                  label="Assurance scanner alerts (responsibility drift and monitor failures)"
                   checked={runtimeDraft.serviceContractScannerAlertsEnabled}
                   onChange={(checked) => setRuntimeToggleField("serviceContractScannerAlertsEnabled", checked)}
                 />

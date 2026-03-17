@@ -731,7 +731,7 @@ export function DeviceWorkloadsPanel({
       );
       const payload = (await response.json()) as { error?: string };
       if (!response.ok) {
-        throw new Error(payload.error ?? "Failed to save workload");
+        throw new Error(payload.error ?? "Failed to save responsibility");
       }
 
       setWorkloadDialogOpen(false);
@@ -739,7 +739,7 @@ export function DeviceWorkloadsPanel({
       await refresh();
       setError(null);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Failed to save workload");
+      setError(nextError instanceof Error ? nextError.message : "Failed to save responsibility");
     } finally {
       setWorkloadSaving(false);
     }
@@ -992,13 +992,13 @@ export function DeviceWorkloadsPanel({
       );
       const payload = (await response.json()) as { error?: string };
       if (!response.ok) {
-        throw new Error(payload.error ?? "Failed to delete workload");
+        throw new Error(payload.error ?? "Failed to delete responsibility");
       }
 
       await refresh();
       setError(null);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Failed to delete workload");
+      setError(nextError instanceof Error ? nextError.message : "Failed to delete responsibility");
     } finally {
       setDeletingWorkloadId(null);
     }
@@ -1969,7 +1969,7 @@ export function DeviceWorkloadsPanel({
                   </Button>
                 </div>
                 <p className="text-xs text-amber-900/90 dark:text-amber-100/90">
-                  Continue onboarding in Chat or generate a fresh draft proposal here when you want Steward to propose workloads and assurances again.
+                  Continue onboarding in Chat or generate a fresh draft proposal here when you want Steward to propose responsibilities and assurances again.
                 </p>
               </div>
             ) : null}
@@ -2266,7 +2266,7 @@ export function DeviceWorkloadsPanel({
           <DialogHeader>
             <DialogTitle>{editingWorkloadId ? "Edit Responsibility" : "Add Responsibility"}</DialogTitle>
             <DialogDescription>
-              Define a workload Steward should explicitly own for this endpoint.
+              Define a responsibility Steward should explicitly own for this endpoint.
             </DialogDescription>
           </DialogHeader>
 

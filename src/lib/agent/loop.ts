@@ -470,7 +470,7 @@ const evaluateAssurancesForDevice = async (
           summary: evaluation.summary,
           severity: criticalityToIncidentSeverity(contract.criticality),
           diagnosis: "Device assurance drifted from its expected state.",
-          remediationPlan: "Inspect assurance evidence, confirm credentials, and remediate the workload drift.",
+      remediationPlan: "Inspect assurance evidence, confirm credentials, and remediate the responsibility drift.",
           metadata: {
             incidentType: ASSURANCE_FAILURE_INCIDENT_TYPE,
             scannerType: "assurance",
@@ -545,7 +545,7 @@ const evaluateAssurancesForDevice = async (
           summary: evaluation.summary,
           severity,
           diagnosis: "Device assurance drifted from its expected state.",
-          remediationPlan: "Inspect assurance evidence, confirm credentials, and remediate the workload drift.",
+      remediationPlan: "Inspect assurance evidence, confirm credentials, and remediate the responsibility drift.",
           metadata: {
             incidentType: ASSURANCE_FAILURE_INCIDENT_TYPE,
             scannerType: "assurance",
@@ -586,7 +586,7 @@ const evaluateAssurancesForDevice = async (
         summary: evaluation.summary,
         severity,
         diagnosis: "Device assurance drifted from its expected state.",
-        remediationPlan: "Inspect assurance evidence, confirm credentials, and remediate the workload drift.",
+      remediationPlan: "Inspect assurance evidence, confirm credentials, and remediate the responsibility drift.",
         metadata: {
           incidentType: ASSURANCE_FAILURE_INCIDENT_TYPE,
           scannerType: "assurance",
@@ -736,7 +736,7 @@ export const applyOperationalFindingPacks = async (
         const recommendation = ensureRecommendation(nextRecommendations, {
           title: `Investigate ${serviceName} on ${device.name}`,
           rationale: run.summary,
-          impact: "Restores the failed service before it degrades user-facing workloads.",
+      impact: "Restores the failed service before it degrades user-facing responsibilities.",
           priority: criticalityToRecommendationPriority(contract.criticality),
           relatedDeviceIds: [device.id],
         });

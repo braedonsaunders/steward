@@ -88,7 +88,7 @@ export default function DeviceOnboardingPage() {
         <div className="flex items-center gap-2">
           <Wrench className="size-4 text-muted-foreground" />
           <h1 className="text-xl font-semibold tracking-tight steward-heading-font">
-            Workloads & Onboarding
+            Responsibilities & Onboarding
           </h1>
           <Badge variant="outline" className="ml-auto">
             {device.name}

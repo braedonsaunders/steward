@@ -54,7 +54,7 @@ export async function PATCH(
   if (workloadId) {
     const workload = stateStore.getWorkloadById(workloadId);
     if (!workload || workload.deviceId !== id) {
-      return NextResponse.json({ error: "Workload not found" }, { status: 404 });
+      return NextResponse.json({ error: "Responsibility not found" }, { status: 404 });
     }
   }
 

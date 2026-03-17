@@ -14,7 +14,7 @@ export async function POST(
   const { id } = await params;
   return NextResponse.json(
     {
-      error: "Legacy onboarding questions are retired. Use conversational onboarding in the Workloads tab.",
+      error: "Legacy onboarding questions are retired. Use conversational onboarding in the Responsibilities tab.",
       deviceId: id,
     },
     { status: 410 },

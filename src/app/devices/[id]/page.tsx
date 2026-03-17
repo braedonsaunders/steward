@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { DeviceWorkloadsPanel } from "@/components/device-workloads-panel";
+import { DeviceResponsibilitiesPanel } from "@/components/device-responsibilities-panel";
 import { DeviceMissionsPanel } from "@/components/device-missions-panel";
 import { DeviceAccessPanel } from "@/components/device-access-panel";
 import { DeviceRemoteDesktopPanel } from "@/components/device-remote-desktop-panel";
@@ -277,7 +277,7 @@ type DevicePrimaryTab =
   | "activity"
   | "settings";
 
-type DeviceManageTab = "access" | "missions" | "workloads" | "automations";
+type DeviceManageTab = "access" | "missions" | "responsibilities" | "automations";
 
 export default function DeviceDetailPage() {
   const params = useParams<{ id: string }>();
@@ -564,7 +564,7 @@ export default function DeviceDetailPage() {
                 <div>
                   <p className="text-sm font-medium text-amber-900 dark:text-amber-100">Onboarding pending</p>
                   <p className="text-xs text-amber-800/90 dark:text-amber-200/90">
-                    This device is adopted. Start onboarding from Chat so it can commit adapter selection, access, and any workloads or assurances Steward should own.
+                    This device is adopted. Start onboarding from Chat so it can commit adapter selection, access, and any responsibilities or assurances Steward should own.
                   </p>
                 </div>
                 <Button size="sm" onClick={() => void startOnboardingFromNudge()} disabled={startingOnboarding}>
@@ -829,7 +829,7 @@ export default function DeviceDetailPage() {
               <TabsList className="h-auto w-fit flex-wrap justify-start self-start">
                 <TabsTrigger className="h-8 flex-none px-3 text-xs sm:h-9 sm:text-sm" value="access">Access</TabsTrigger>
                 <TabsTrigger className="h-8 flex-none px-3 text-xs sm:h-9 sm:text-sm" value="missions">Missions</TabsTrigger>
-                <TabsTrigger className="h-8 flex-none px-3 text-xs sm:h-9 sm:text-sm" value="workloads">Workloads</TabsTrigger>
+                <TabsTrigger className="h-8 flex-none px-3 text-xs sm:h-9 sm:text-sm" value="responsibilities">Responsibilities</TabsTrigger>
                 <TabsTrigger className="h-8 flex-none px-3 text-xs sm:h-9 sm:text-sm" value="automations">Automations</TabsTrigger>
               </TabsList>
 
@@ -865,16 +865,16 @@ export default function DeviceDetailPage() {
                 </AnimatedTabPanel>
               </TabsContent>
 
-              <TabsContent value="workloads" forceMount className="mt-0 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
+              <TabsContent value="responsibilities" forceMount className="mt-0 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
                 <AnimatedTabPanel
-                  active={activePrimaryTab === "manage" && activeManageTab === "workloads"}
+                  active={activePrimaryTab === "manage" && activeManageTab === "responsibilities"}
                   persistent
                   className="overflow-hidden"
                 >
                   <div className="h-full min-h-0 min-w-0 overflow-hidden">
-                    <DeviceWorkloadsPanel
+                    <DeviceResponsibilitiesPanel
                       deviceId={device.id}
-                      active={activePrimaryTab === "manage" && activeManageTab === "workloads"}
+                      active={activePrimaryTab === "manage" && activeManageTab === "responsibilities"}
                       className="h-full"
                     />
                   </div>

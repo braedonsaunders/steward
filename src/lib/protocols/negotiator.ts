@@ -134,7 +134,7 @@ export const buildManagementSurface = (device: Device): DeviceManagementSurface 
       actions: [
         "Container inventory",
         "Image update checks",
-        "Restart failed workloads",
+  "Restart failed responsibilities",
       ],
     });
   }
@@ -145,7 +145,7 @@ export const buildManagementSurface = (device: Device): DeviceManagementSurface 
       title: "Kubernetes API",
       protocol: "kubernetes",
       actions: [
-        "Workload health",
+  "Responsibility health",
         "Node pressure checks",
         "Rolling update orchestration",
       ],

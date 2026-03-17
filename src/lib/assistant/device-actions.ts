@@ -437,7 +437,7 @@ function fallbackPlanForDevice(device: Device, input: string): AdhocPlan | null 
   if (protocol === "docker") {
     return {
       family: "custom-install",
-      rationale: `Deploy ${service} as a container workload on ${device.name}.`,
+      rationale: `Deploy ${service} as a container responsibility on ${device.name}.`,
       requiredProtocol: "docker",
       mutateCommandTemplates: [
         `docker -H tcp://{{host}} pull ${service}:latest`,

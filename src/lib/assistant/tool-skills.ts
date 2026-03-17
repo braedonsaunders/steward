@@ -4408,7 +4408,7 @@ export async function buildAdapterSkillTools(
   });
 
   tools.steward_complete_onboarding = dynamicTool({
-    description: "Commit onboarding for a device by selecting the adapter, accepted access methods, and any workloads or assurances Steward will own.",
+    description: "Commit onboarding for a device by selecting the adapter, accepted access methods, and any responsibilities or assurances Steward will own.",
     inputSchema: jsonSchema({
       type: "object",
       properties: {
@@ -4432,7 +4432,7 @@ export async function buildAdapterSkillTools(
         },
         workloads: {
           type: "array",
-          description: "Optional committed workloads Steward will own after onboarding. Omit to use the current draft, or pass an empty array to commit no ongoing responsibilities.",
+        description: "Optional committed responsibilities Steward will own after onboarding. Omit to use the current draft, or pass an empty array to commit no ongoing responsibilities.",
           items: {
             type: "object",
             properties: {

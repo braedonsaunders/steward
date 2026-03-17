@@ -121,10 +121,10 @@ export function describeMissionScope(mission: MissionRecord): string {
     parts.push("TLS endpoints");
   }
   if (selector.workloadCategory) {
-    parts.push(`${selector.workloadCategory} workloads`);
+    parts.push(`${selector.workloadCategory} responsibilities`);
   }
   if (selector.workloadNamePattern) {
-    parts.push(`workloads:${selector.workloadNamePattern}`);
+    parts.push(`responsibilities:${selector.workloadNamePattern}`);
   }
   if (selector.assuranceMonitorTypes?.length) {
     parts.push(`assurances:${selector.assuranceMonitorTypes.join(", ")}`);

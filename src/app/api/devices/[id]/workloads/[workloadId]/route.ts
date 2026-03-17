@@ -51,7 +51,7 @@ export async function PATCH(
 
   const existing = stateStore.getWorkloadById(workloadId);
   if (!existing || existing.deviceId !== id) {
-    return NextResponse.json({ error: "Workload not found" }, { status: 404 });
+    return NextResponse.json({ error: "Responsibility not found" }, { status: 404 });
   }
 
   const workload = await updateResponsibility({
@@ -92,7 +92,7 @@ export async function DELETE(
 
   const existing = stateStore.getWorkloadById(workloadId);
   if (!existing || existing.deviceId !== id) {
-    return NextResponse.json({ error: "Workload not found" }, { status: 404 });
+    return NextResponse.json({ error: "Responsibility not found" }, { status: 404 });
   }
 
   await deleteResponsibility({
