@@ -23,6 +23,7 @@ import { normalizeChatError } from "@/lib/chat/errors";
 import { summarizeDeviceContractForPrompt } from "@/lib/devices/contract-management";
 import { getDefaultProvider } from "@/lib/llm/config";
 import { buildLanguageModel } from "@/lib/llm/providers";
+import { createToolCallRepair } from "@/lib/llm/tool-call-repair";
 import { missionRepository } from "@/lib/missions/repository";
 import { buildMissionPromptContext } from "@/lib/missions/service";
 import { getDataDir } from "@/lib/state/db";
@@ -1142,6 +1143,7 @@ async function autoContinueIfTruncated(args: {
 }): Promise<{ text: string; truncated: boolean }> {
   let text = args.initialText;
   let finishReason = args.initialFinishReason;
+  const repairToolCall = createToolCallRepair({ model: args.model });
 
   for (let i = 0; i < CHAT_MAX_AUTO_CONTINUATIONS; i++) {
     if (!shouldAutoContinueForFinishReason(finishReason)) {
@@ -1164,6 +1166,7 @@ async function autoContinueIfTruncated(args: {
       temperature: 0.2,
       maxOutputTokens: args.maxOutputTokens,
       abortSignal: args.abortSignal,
+      experimental_repairToolCall: repairToolCall,
     });
 
     const chunk = continuation.text.trim();
@@ -1396,6 +1399,7 @@ export async function POST(request: NextRequest) {
 
     const context = await buildAssistantContext();
     const model = await buildLanguageModel(provider, payload.data.model);
+    const repairToolCall = createToolCallRepair({ model });
     const operatorNotes = attachedDevice
       && typeof attachedDevice.metadata.notes === "object"
       && attachedDevice.metadata.notes !== null
@@ -1601,6 +1605,7 @@ export async function POST(request: NextRequest) {
         temperature: 0.2,
         maxOutputTokens,
         abortSignal: streamAbortController.signal,
+        experimental_repairToolCall: repairToolCall,
         onAbort() {
           explicitlyCanceled = true;
           persistInterruptedAssistant();
@@ -1861,6 +1866,7 @@ export async function POST(request: NextRequest) {
       temperature: 0.2,
       maxOutputTokens,
       abortSignal: request.signal,
+      experimental_repairToolCall: repairToolCall,
     });
 
     const nonStreamFinishReason = await Promise.resolve(

@@ -561,6 +561,7 @@ export async function buildOnboardingSystemPrompt(device: Device): Promise<strin
     "6) Call steward_complete_onboarding once you have a credible adapter selection, accepted access methods, and any responsibilities or assurances Steward should own.",
     "6a) If the user explicitly wants access-only onboarding with no committed responsibilities and no ongoing monitoring, complete onboarding with empty responsibilities and empty assurances instead of inventing placeholder responsibilities.",
     "6b) Do not block completion on unknowns that only affect cosmetic naming or physical placement. Keep the name generic and record the uncertainty as a residual unknown instead.",
+    "6c) Tool-call arguments must be raw JSON objects. Never wrap tool arguments in quotes or pass stringified JSON.",
     "7) Never output fake <tool_call> blocks.",
     "8) Do not say widgets or remotes are outside Steward's scope when the user asks for them.",
     "9) If local evidence is ambiguous or conflicts with public research, state the leading hypotheses with confidence and ask for confirmation instead of asserting a product family.",
