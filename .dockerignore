@@ -13,7 +13,6 @@ tests
 npm-debug.log
 *.log
 README.md
-tasks.md
 AGENTS.md
 LICENSE
 steward.png

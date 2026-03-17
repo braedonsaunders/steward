@@ -30,6 +30,7 @@ import type {
   Recommendation,
   RuntimeSettings,
   ScannerRunRecord,
+  StateStreamPatch,
   StewardState,
   SystemSettings,
   UserRole,
@@ -291,6 +292,28 @@ type StatePayload = StewardState & {
   controlPlane?: ControlPlaneHealth | null;
 };
 
+function mergeStatePatch(
+  current: StewardState | null,
+  patch: StateStreamPatch,
+): StewardState | null {
+  if (!current) {
+    return current;
+  }
+
+  return {
+    ...current,
+    actions: patch.sections.actions ?? current.actions,
+    agentRuns: patch.sections.agentRuns ?? current.agentRuns,
+    baselines: patch.sections.baselines ?? current.baselines,
+    devices: patch.sections.devices ?? current.devices,
+    graph: patch.sections.graph ?? current.graph,
+    incidents: patch.sections.incidents ?? current.incidents,
+    playbookRuns: patch.sections.playbookRuns ?? current.playbookRuns,
+    recommendations: patch.sections.recommendations ?? current.recommendations,
+    scannerRuns: patch.sections.scannerRuns ?? current.scannerRuns,
+  };
+}
+
 export function StewardProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<StewardState | null>(null);
   const [controlPlane, setControlPlane] = useState<ControlPlaneHealth | null>(null);
@@ -388,13 +411,18 @@ export function StewardProvider({ children }: { children: ReactNode }) {
       clearReconnect();
       stream = new EventSource(withApiTokenQuery("/api/state/stream"));
 
-      const onState = (event: MessageEvent<string>) => {
+      const onPatch = (event: MessageEvent<string>) => {
         try {
-            const next = JSON.parse(event.data) as StatePayload;
-            setState(next);
-            setControlPlane(next.controlPlane ?? null);
-          setPendingApprovals(filterActivePlaybookApprovals(next.playbookRuns ?? []));
-          setLatestDigest(next.dailyDigests?.[0] ?? null);
+          const patch = JSON.parse(event.data) as StateStreamPatch;
+          setState((current) => {
+            const next = mergeStatePatch(current, patch);
+            if (next) {
+              setPendingApprovals(filterActivePlaybookApprovals(next.playbookRuns ?? []));
+              setLatestDigest(next.dailyDigests?.[0] ?? null);
+            }
+            return next;
+          });
+          setControlPlane(patch.controlPlane ?? null);
           setLoading(false);
           setError(null);
         } catch (streamError) {
@@ -433,7 +461,7 @@ export function StewardProvider({ children }: { children: ReactNode }) {
         })();
       };
 
-      stream.addEventListener("state", onState as EventListener);
+      stream.addEventListener("patch", onPatch as EventListener);
       stream.onerror = onError;
     };
 

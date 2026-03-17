@@ -65,6 +65,7 @@ function createSchema(database: Database.Database): void {
 
     CREATE TABLE IF NOT EXISTS devices (
       id            TEXT PRIMARY KEY,
+      siteId        TEXT NOT NULL DEFAULT 'site.local.default',
       name          TEXT NOT NULL,
       ip            TEXT NOT NULL,
       mac           TEXT,
@@ -117,6 +118,7 @@ function createSchema(database: Database.Database): void {
       priority         TEXT NOT NULL,
       relatedDeviceIds TEXT NOT NULL DEFAULT '[]',
       createdAt        TEXT NOT NULL,
+      updatedAt        TEXT NOT NULL,
       dismissed        INTEGER NOT NULL DEFAULT 0
     );
 
@@ -148,19 +150,75 @@ function createSchema(database: Database.Database): void {
       updatedAt  TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS graph_node_versions (
+      id           TEXT PRIMARY KEY,
+      nodeId       TEXT NOT NULL,
+      label        TEXT NOT NULL,
+      properties   TEXT NOT NULL DEFAULT '{}',
+      snapshotHash TEXT NOT NULL,
+      versionedAt  TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS graph_edge_versions (
+      id           TEXT PRIMARY KEY,
+      edgeId       TEXT NOT NULL,
+      "from"       TEXT NOT NULL,
+      "to"         TEXT NOT NULL,
+      type         TEXT NOT NULL,
+      properties   TEXT NOT NULL DEFAULT '{}',
+      snapshotHash TEXT NOT NULL,
+      versionedAt  TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sites (
+      id        TEXT PRIMARY KEY,
+      slug      TEXT NOT NULL UNIQUE,
+      name      TEXT NOT NULL,
+      timezone  TEXT NOT NULL,
+      createdAt TEXT NOT NULL,
+      updatedAt TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS metric_series (
+      id            TEXT PRIMARY KEY,
+      scopeType     TEXT NOT NULL,
+      scopeId       TEXT NOT NULL,
+      metricKey     TEXT NOT NULL,
+      unit          TEXT,
+      source        TEXT NOT NULL,
+      retentionDays INTEGER NOT NULL DEFAULT 30,
+      createdAt     TEXT NOT NULL,
+      updatedAt     TEXT NOT NULL,
+      UNIQUE(scopeType, scopeId, metricKey)
+    );
+
+    CREATE TABLE IF NOT EXISTS metric_samples (
+      id            TEXT PRIMARY KEY,
+      seriesId      TEXT NOT NULL,
+      scopeType     TEXT NOT NULL,
+      scopeId       TEXT NOT NULL,
+      metricKey     TEXT NOT NULL,
+      value         REAL NOT NULL,
+      unit          TEXT,
+      source        TEXT NOT NULL,
+      observedAt    TEXT NOT NULL,
+      dimensionsJson TEXT NOT NULL DEFAULT '{}',
+      anomalyScore  REAL,
+      baselineLower REAL,
+      baselineUpper REAL
+    );
+
     CREATE TABLE IF NOT EXISTS provider_configs (
-      provider             TEXT PRIMARY KEY,
-      enabled              INTEGER NOT NULL DEFAULT 1,
-      model                TEXT NOT NULL,
-      apiKeyEnvVar         TEXT,
-      oauthTokenSecret     TEXT,
-      oauthClientIdEnvVar  TEXT,
-      oauthClientSecretEnvVar TEXT,
-      oauthAuthUrl         TEXT,
-      oauthTokenUrl        TEXT,
-      oauthScopes          TEXT,
-      baseUrl              TEXT,
-      extraHeaders         TEXT
+      provider         TEXT PRIMARY KEY,
+      enabled          INTEGER NOT NULL DEFAULT 1,
+      model            TEXT NOT NULL,
+      oauthTokenSecret TEXT,
+      oauthAuthUrl     TEXT,
+      oauthTokenUrl    TEXT,
+      oauthScopes      TEXT,
+      baseUrl          TEXT,
+      extraHeaders     TEXT,
+      updatedAt        TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS oauth_states (
@@ -246,7 +304,8 @@ function createSchema(database: Database.Database): void {
       deniedAt           TEXT,
       denialReason       TEXT,
       expiresAt          TEXT,
-      failureCount       INTEGER NOT NULL DEFAULT 0
+      failureCount       INTEGER NOT NULL DEFAULT 0,
+      updatedAt          TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS daily_digests (
@@ -1047,7 +1106,9 @@ function createSchema(database: Database.Database): void {
   ensureColumn(database, "chat_sessions", "subagentId", "TEXT");
   ensureColumn(database, "chat_sessions", "gatewayThreadId", "TEXT");
   ensureColumn(database, "chat_messages", "metadata", "TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn(database, "devices", "siteId", "TEXT NOT NULL DEFAULT 'site.local.default'");
   ensureColumn(database, "devices", "secondaryIps", "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn(database, "recommendations", "updatedAt", "TEXT NOT NULL DEFAULT ''");
   ensureColumn(database, "adapters", "source", "TEXT NOT NULL DEFAULT 'file'");
   ensureColumn(database, "adapters", "docsUrl", "TEXT");
   ensureColumn(database, "adapters", "manifestJson", "TEXT NOT NULL DEFAULT '{}'");
@@ -1065,6 +1126,7 @@ function createSchema(database: Database.Database): void {
   ensureColumn(database, "packs", "signatureAlgorithm", "TEXT");
   ensureColumn(database, "packs", "verificationStatus", "TEXT NOT NULL DEFAULT 'unsigned'");
   ensureColumn(database, "packs", "verifiedAt", "TEXT");
+  ensureColumn(database, "playbook_runs", "updatedAt", "TEXT NOT NULL DEFAULT ''");
   ensureColumn(database, "missions", "shadowMode", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(database, "investigations", "parentInvestigationId", "TEXT REFERENCES investigations(id) ON DELETE SET NULL");
   ensureColumn(database, "investigations", "stage", "TEXT NOT NULL DEFAULT 'detect'");
@@ -1074,6 +1136,7 @@ function createSchema(database: Database.Database): void {
   // Indexes for frequently queried columns
   database.exec(`
     CREATE INDEX IF NOT EXISTS idx_devices_ip ON devices(ip);
+    CREATE INDEX IF NOT EXISTS idx_devices_siteId ON devices(siteId);
     CREATE INDEX IF NOT EXISTS idx_incidents_severity ON incidents(severity);
     CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
     CREATE INDEX IF NOT EXISTS idx_actions_kind ON actions(kind);
@@ -1083,6 +1146,12 @@ function createSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_graph_edges_type ON graph_edges(type);
     CREATE INDEX IF NOT EXISTS idx_graph_nodes_type ON graph_nodes(type);
     CREATE INDEX IF NOT EXISTS idx_graph_nodes_updatedAt ON graph_nodes(updatedAt);
+    CREATE INDEX IF NOT EXISTS idx_graph_node_versions_node_versionedAt ON graph_node_versions(nodeId, versionedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_graph_edge_versions_edge_versionedAt ON graph_edge_versions(edgeId, versionedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_sites_slug ON sites(slug);
+    CREATE INDEX IF NOT EXISTS idx_metric_series_scope_metric ON metric_series(scopeType, scopeId, metricKey);
+    CREATE INDEX IF NOT EXISTS idx_metric_samples_series_observedAt ON metric_samples(seriesId, observedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_metric_samples_scope_metric_observedAt ON metric_samples(scopeType, scopeId, metricKey, observedAt DESC);
     CREATE INDEX IF NOT EXISTS idx_agent_runs_startedAt ON agent_runs(startedAt);
     CREATE INDEX IF NOT EXISTS idx_oauth_states_expiresAt ON oauth_states(expiresAt);
     CREATE INDEX IF NOT EXISTS idx_policy_rules_priority ON policy_rules(priority);
@@ -1090,6 +1159,7 @@ function createSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_playbook_runs_status ON playbook_runs(status);
     CREATE INDEX IF NOT EXISTS idx_playbook_runs_deviceId ON playbook_runs(deviceId);
     CREATE INDEX IF NOT EXISTS idx_playbook_runs_createdAt ON playbook_runs(createdAt);
+    CREATE INDEX IF NOT EXISTS idx_playbook_runs_updatedAt ON playbook_runs(updatedAt);
     CREATE INDEX IF NOT EXISTS idx_daily_digests_generatedAt ON daily_digests(generatedAt);
     CREATE INDEX IF NOT EXISTS idx_chat_sessions_updatedAt ON chat_sessions(updatedAt);
     CREATE INDEX IF NOT EXISTS idx_chat_sessions_deviceId ON chat_sessions(deviceId);
@@ -1686,10 +1756,142 @@ function migrateLegacyWorkloadArchitecture(database: Database.Database): void {
   migrate();
 }
 
+function migrateProviderConfigSchema(database: Database.Database): void {
+  const requiresRebuild =
+    hasColumn(database, "provider_configs", "apiKeyEnvVar")
+    || hasColumn(database, "provider_configs", "oauthClientIdEnvVar")
+    || hasColumn(database, "provider_configs", "oauthClientSecretEnvVar")
+    || !hasColumn(database, "provider_configs", "updatedAt");
+
+  if (!requiresRebuild) {
+    return;
+  }
+
+  const preserveUpdatedAt = hasColumn(database, "provider_configs", "updatedAt");
+
+  const migrate = database.transaction(() => {
+    database.exec(`
+      CREATE TABLE provider_configs_next (
+        provider         TEXT PRIMARY KEY,
+        enabled          INTEGER NOT NULL DEFAULT 1,
+        model            TEXT NOT NULL,
+        oauthTokenSecret TEXT,
+        oauthAuthUrl     TEXT,
+        oauthTokenUrl    TEXT,
+        oauthScopes      TEXT,
+        baseUrl          TEXT,
+        extraHeaders     TEXT,
+        updatedAt        TEXT NOT NULL
+      );
+    `);
+
+    const selectUpdatedAt = preserveUpdatedAt
+      ? "COALESCE(updatedAt, CURRENT_TIMESTAMP)"
+      : "CURRENT_TIMESTAMP";
+
+    database.exec(`
+      INSERT INTO provider_configs_next (
+        provider, enabled, model, oauthTokenSecret, oauthAuthUrl, oauthTokenUrl, oauthScopes, baseUrl, extraHeaders, updatedAt
+      )
+      SELECT
+        provider,
+        enabled,
+        model,
+        oauthTokenSecret,
+        oauthAuthUrl,
+        oauthTokenUrl,
+        oauthScopes,
+        baseUrl,
+        extraHeaders,
+        ${selectUpdatedAt}
+      FROM provider_configs;
+
+      DROP TABLE provider_configs;
+      ALTER TABLE provider_configs_next RENAME TO provider_configs;
+    `);
+  });
+
+  migrate();
+}
+
+function migrateReleaseStateSchema(database: Database.Database): void {
+  ensureColumn(database, "devices", "siteId", "TEXT NOT NULL DEFAULT 'site.local.default'");
+  ensureColumn(database, "recommendations", "updatedAt", "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(database, "playbook_runs", "updatedAt", "TEXT NOT NULL DEFAULT ''");
+
+  database.prepare(`
+    INSERT OR IGNORE INTO sites (id, slug, name, timezone, createdAt, updatedAt)
+    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+  `).run(
+    "site.local.default",
+    "local-default",
+    "Local Site",
+    "America/Toronto",
+  );
+
+  database.prepare(`
+    UPDATE devices
+    SET siteId = 'site.local.default'
+    WHERE siteId IS NULL OR TRIM(siteId) = ''
+  `).run();
+
+  database.prepare(`
+    UPDATE recommendations
+    SET updatedAt = COALESCE(NULLIF(updatedAt, ''), createdAt)
+    WHERE updatedAt IS NULL OR TRIM(updatedAt) = ''
+  `).run();
+
+  database.prepare(`
+    UPDATE playbook_runs
+    SET updatedAt = COALESCE(
+      NULLIF(updatedAt, ''),
+      completedAt,
+      deniedAt,
+      approvedAt,
+      startedAt,
+      createdAt
+    )
+    WHERE updatedAt IS NULL OR TRIM(updatedAt) = ''
+  `).run();
+
+  const legacySiteNode = database
+    .prepare("SELECT id FROM graph_nodes WHERE id = 'site:default'")
+    .get() as { id?: string } | undefined;
+  const releaseSiteNode = database
+    .prepare("SELECT id FROM graph_nodes WHERE id = 'site:site.local.default'")
+    .get() as { id?: string } | undefined;
+
+  if (legacySiteNode?.id && !releaseSiteNode?.id) {
+    database.prepare(`
+      UPDATE graph_nodes
+      SET id = 'site:site.local.default',
+          properties = json_patch(COALESCE(properties, '{}'), '{"siteId":"site.local.default","slug":"local-default"}'),
+          updatedAt = CURRENT_TIMESTAMP
+      WHERE id = 'site:default'
+    `).run();
+  }
+
+  database.prepare(`
+    UPDATE graph_edges
+    SET "from" = 'site:site.local.default',
+        updatedAt = CURRENT_TIMESTAMP
+    WHERE "from" = 'site:default'
+  `).run();
+  database.prepare(`
+    UPDATE graph_edges
+    SET "to" = 'site:site.local.default',
+        updatedAt = CURRENT_TIMESTAMP
+    WHERE "to" = 'site:default'
+  `).run();
+  database.prepare("DELETE FROM graph_nodes WHERE id = 'site:default'").run();
+}
+
 export function applyStateSchemaAndMigrations(database: Database.Database): void {
   database.pragma("journal_mode = WAL");
   database.pragma("foreign_keys = ON");
   createSchema(database);
+  migrateProviderConfigSchema(database);
+  migrateReleaseStateSchema(database);
   migrateLegacyWorkloadArchitecture(database);
   migrateCompletedOnboardingDraftCleanup(database);
   migrateLegacyWidgetJsonParsers(database);

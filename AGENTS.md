@@ -9,10 +9,13 @@
 - All configuration must be persisted in SQLite and managed through Steward state/settings flows.
 - If a new tunable is needed, add it to the DB-backed configuration model and expose it through the app/API.
 
-## Implementation Backlog
+## Release Documentation
 
-- The live implementation checklist is tracked in `tasks.md`.
-- The world-class systems backlog is tracked in `docs/world-class-system-program.md`.
+- Public architecture notes live in `docs/architecture.md`.
+- Operator guidance lives in `docs/operator-guide.md`.
+- Security guidance lives in `docs/security.md`.
+- API guidance lives in `docs/api.md`.
+- Packs and extension guidance lives in `docs/packs-sdk.md`.
 
 ---
 

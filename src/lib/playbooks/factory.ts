@@ -39,6 +39,7 @@ export function buildPlaybookRun(
     lane: "A" | "B" | "C";
   },
 ): PlaybookRun {
+  const createdAt = new Date().toISOString();
   const toRunStep = (step: Omit<PlaybookStep, "status" | "output" | "startedAt" | "completedAt" | "gateResults">): PlaybookStep => ({
     ...step,
     status: "pending",
@@ -74,7 +75,8 @@ export function buildPlaybookRun(
         operations: [],
       },
     },
-    createdAt: new Date().toISOString(),
+    createdAt,
+    updatedAt: createdAt,
     failureCount: 0,
   };
 }

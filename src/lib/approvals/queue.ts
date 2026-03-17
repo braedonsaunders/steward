@@ -1,5 +1,6 @@
 import { enqueueNotificationEvent } from "@/lib/notifications/manager";
 import { isPlaybookApprovalExpired } from "@/lib/playbooks/approval-utils";
+import { queuePlaybookExecution } from "@/lib/playbooks/orchestrator";
 import { stateStore } from "@/lib/state/store";
 import type { Device, PlaybookRun } from "@/lib/state/types";
 
@@ -22,10 +23,12 @@ function ttlForRun(run: PlaybookRun): number {
  */
 export function createApproval(run: PlaybookRun, device: Device): PlaybookRun {
   const ttlMs = ttlForRun(run);
+  const now = new Date().toISOString();
   const updated: PlaybookRun = {
     ...run,
     status: "pending_approval",
     expiresAt: new Date(Date.now() + ttlMs).toISOString(),
+    updatedAt: now,
   };
 
   stateStore.upsertPlaybookRun(updated);
@@ -69,14 +72,17 @@ export function approveAction(id: string, approvedBy: string = "user"): Playbook
     return undefined;
   }
 
+  const now = new Date().toISOString();
   const updated: PlaybookRun = {
     ...run,
     status: "approved",
     approvedBy,
-    approvedAt: new Date().toISOString(),
+    approvedAt: now,
+    updatedAt: now,
   };
 
   stateStore.upsertPlaybookRun(updated);
+  queuePlaybookExecution(updated, "approval");
 
   void stateStore.addAction({
     actor: "user",
@@ -103,12 +109,14 @@ export function denyAction(
     return undefined;
   }
 
+  const now = new Date().toISOString();
   const updated: PlaybookRun = {
     ...run,
     status: "denied",
     deniedBy,
-    deniedAt: new Date().toISOString(),
+    deniedAt: now,
     denialReason: reason,
+    updatedAt: now,
   };
 
   stateStore.upsertPlaybookRun(updated);
@@ -143,6 +151,7 @@ export function expireStale(): number {
         const escalated: PlaybookRun = {
           ...run,
           expiresAt: new Date(now + escalationTtlMs).toISOString(),
+          updatedAt: new Date().toISOString(),
           evidence: {
             ...run.evidence,
             preSnapshot: {
@@ -184,6 +193,7 @@ export function expireStale(): number {
         denialReason: "Approval TTL expired",
         deniedAt: new Date().toISOString(),
         deniedBy: "system",
+        updatedAt: new Date().toISOString(),
       };
 
       stateStore.upsertPlaybookRun(updated);

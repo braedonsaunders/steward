@@ -16,12 +16,14 @@ export const STEWARD_STATE_VERSION = 1;
 
 export const defaultProviderConfigs = (): ProviderConfig[] => {
   return PROVIDER_REGISTRY.map((meta) => {
+    const now = new Date().toISOString();
     const base: ProviderConfig = {
       provider: meta.id,
       enabled: meta.id === "openai",
       // Model names must come from the live provider API, not static defaults.
       model: "",
       baseUrl: meta.defaultBaseUrl,
+      updatedAt: now,
     };
 
     // OpenAI OAuth (localhost:1455 callback server, Codex CLI public client)
@@ -198,6 +200,16 @@ export const defaultAuthSettings = (): AuthSettings => ({
 export const defaultState = (): StewardState => ({
   version: STEWARD_STATE_VERSION,
   initializedAt: new Date().toISOString(),
+  sites: [
+    {
+      id: "site.local.default",
+      slug: "local-default",
+      name: "Local Site",
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? "America/Toronto",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+  ],
   devices: [],
   baselines: [],
   incidents: [],
@@ -206,11 +218,12 @@ export const defaultState = (): StewardState => ({
   graph: {
     nodes: [
       {
-        id: "site:default",
+        id: "site:site.local.default",
         type: "site",
         label: "Local Site",
         properties: {
-          name: "default",
+          siteId: "site.local.default",
+          slug: "local-default",
           locale: Intl.DateTimeFormat().resolvedOptions().timeZone ?? "America/Toronto",
         },
         createdAt: new Date().toISOString(),
@@ -303,8 +316,8 @@ export function ensureDefaults(db: Database.Database): void {
 
     // Default provider configs (only insert providers that don't exist yet)
     const insertProvider = db.prepare(`
-      INSERT OR IGNORE INTO provider_configs (provider, enabled, model, apiKeyEnvVar, oauthTokenSecret, oauthClientIdEnvVar, oauthClientSecretEnvVar, oauthAuthUrl, oauthTokenUrl, oauthScopes, baseUrl, extraHeaders)
-      VALUES (@provider, @enabled, @model, @apiKeyEnvVar, @oauthTokenSecret, @oauthClientIdEnvVar, @oauthClientSecretEnvVar, @oauthAuthUrl, @oauthTokenUrl, @oauthScopes, @baseUrl, @extraHeaders)
+      INSERT OR IGNORE INTO provider_configs (provider, enabled, model, oauthTokenSecret, oauthAuthUrl, oauthTokenUrl, oauthScopes, baseUrl, extraHeaders, updatedAt)
+      VALUES (@provider, @enabled, @model, @oauthTokenSecret, @oauthAuthUrl, @oauthTokenUrl, @oauthScopes, @baseUrl, @extraHeaders, @updatedAt)
     `);
     const backfillProviderDefaults = db.prepare(`
       UPDATE provider_configs
@@ -313,7 +326,8 @@ export function ensureDefaults(db: Database.Database): void {
           oauthTokenUrl = COALESCE(oauthTokenUrl, @oauthTokenUrl),
           oauthScopes = COALESCE(oauthScopes, @oauthScopes),
           baseUrl = COALESCE(baseUrl, @baseUrl),
-          extraHeaders = COALESCE(extraHeaders, @extraHeaders)
+          extraHeaders = COALESCE(extraHeaders, @extraHeaders),
+          updatedAt = @updatedAt
       WHERE provider = @provider
     `);
 
@@ -322,15 +336,13 @@ export function ensureDefaults(db: Database.Database): void {
         provider: p.provider,
         enabled: p.enabled ? 1 : 0,
         model: p.model,
-        apiKeyEnvVar: null,
         oauthTokenSecret: p.oauthTokenSecret ?? null,
-        oauthClientIdEnvVar: null,
-        oauthClientSecretEnvVar: null,
         oauthAuthUrl: p.oauthAuthUrl ?? null,
         oauthTokenUrl: p.oauthTokenUrl ?? null,
         oauthScopes: p.oauthScopes ? JSON.stringify(p.oauthScopes) : null,
         baseUrl: p.baseUrl ?? null,
         extraHeaders: p.extraHeaders ? JSON.stringify(p.extraHeaders) : null,
+        updatedAt: p.updatedAt ?? new Date().toISOString(),
       });
       backfillProviderDefaults.run({
         provider: p.provider,
@@ -340,6 +352,7 @@ export function ensureDefaults(db: Database.Database): void {
         oauthScopes: p.oauthScopes ? JSON.stringify(p.oauthScopes) : null,
         baseUrl: p.baseUrl ?? null,
         extraHeaders: p.extraHeaders ? JSON.stringify(p.extraHeaders) : null,
+        updatedAt: p.updatedAt ?? new Date().toISOString(),
       });
     }
 
@@ -421,6 +434,18 @@ export function ensureDefaults(db: Database.Database): void {
     ensureMeta.run("system.digestMinuteLocal", String(systemDefaults.digestMinuteLocal));
     ensureMeta.run("system.upgradeChannel", systemDefaults.upgradeChannel);
 
+    db.prepare(`
+      INSERT OR IGNORE INTO sites (id, slug, name, timezone, createdAt, updatedAt)
+      VALUES (@id, @slug, @name, @timezone, @createdAt, @updatedAt)
+    `).run({
+      id: "site.local.default",
+      slug: "local-default",
+      name: "Local Site",
+      timezone: systemDefaults.timezone,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
     // Auth settings domain
     const authDefaults = defaultAuthSettings();
     ensureMeta.run("auth.apiTokenEnabled", String(authDefaults.apiTokenEnabled));
@@ -473,7 +498,7 @@ export function ensureDefaults(db: Database.Database): void {
 
     // Default site graph node
     const existingSiteNode = db
-      .prepare("SELECT id FROM graph_nodes WHERE id = 'site:default'")
+      .prepare("SELECT id FROM graph_nodes WHERE id = 'site:site.local.default'")
       .get();
 
     if (!existingSiteNode) {
@@ -482,12 +507,13 @@ export function ensureDefaults(db: Database.Database): void {
         INSERT INTO graph_nodes (id, type, label, properties, createdAt, updatedAt)
         VALUES (@id, @type, @label, @properties, @createdAt, @updatedAt)
       `).run({
-        id: "site:default",
+        id: "site:site.local.default",
         type: "site",
         label: "Local Site",
         properties: JSON.stringify({
-          name: "default",
-          locale: Intl.DateTimeFormat().resolvedOptions().timeZone ?? "America/Toronto",
+          siteId: "site.local.default",
+          slug: "local-default",
+          locale: systemDefaults.timezone,
         }),
         createdAt: now,
         updatedAt: now,

@@ -3,6 +3,7 @@ import { isAuthorized } from "@/lib/auth/guard";
 import { ensureStewardLoop } from "@/lib/agent/loop";
 import { expireStale } from "@/lib/approvals/queue";
 import { stateStore } from "@/lib/state/store";
+import type { StateStreamSection } from "@/lib/state/types";
 
 export const runtime = "nodejs";
 
@@ -19,17 +20,26 @@ export async function GET(request: NextRequest) {
     start(controller) {
       let closed = false;
       let pumping = false;
+      let lastRevisions: Partial<Record<StateStreamSection, string>> = {};
+      let lastControlPlaneJson = "";
 
-      const sendState = async () => {
+      const sendPatch = async (force = false) => {
         if (closed || pumping) {
           return;
         }
         pumping = true;
         try {
           expireStale();
-          const state = await stateStore.getState();
-          const controlPlane = stateStore.getControlPlaneHealth();
-          controller.enqueue(encoder.encode(`event: state\ndata: ${JSON.stringify({ ...state, controlPlane })}\n\n`));
+          const patch = stateStore.getStateStreamPatch(lastRevisions);
+          const nextControlPlaneJson = JSON.stringify(patch.controlPlane ?? null);
+          const hasSections = Object.keys(patch.sections).length > 0;
+          const controlPlaneChanged = force || nextControlPlaneJson !== lastControlPlaneJson;
+          if (!hasSections && !controlPlaneChanged && !force) {
+            return;
+          }
+          lastRevisions = { ...patch.revisions };
+          lastControlPlaneJson = nextControlPlaneJson;
+          controller.enqueue(encoder.encode(`event: patch\ndata: ${JSON.stringify(patch)}\n\n`));
         } catch (error) {
           controller.enqueue(
             encoder.encode(
@@ -41,9 +51,9 @@ export async function GET(request: NextRequest) {
         }
       };
 
-      void sendState();
+      void sendPatch(true);
       const timer = setInterval(() => {
-        void sendState();
+        void sendPatch();
       }, STREAM_INTERVAL_MS);
 
       const onAbort = () => {

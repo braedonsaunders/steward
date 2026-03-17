@@ -5,6 +5,7 @@ import { stateStore } from "@/lib/state/store";
 import { evaluatePolicy } from "@/lib/policy/engine";
 import { createApproval } from "@/lib/approvals/queue";
 import { buildPlaybookRun, countRecentFamilyFailures, isFamilyQuarantined } from "@/lib/playbooks/factory";
+import { queuePlaybookExecution } from "@/lib/playbooks/orchestrator";
 import { getMissingCredentialProtocolsForPlaybook } from "@/lib/adoption/playbook-credentials";
 import {
   buildCustomMonitorContractFromPrompt,
@@ -781,6 +782,7 @@ async function handleAdhocTaskRequest(
     createApproval(run, device);
   } else {
     stateStore.upsertPlaybookRun(run);
+    queuePlaybookExecution(run, "auto");
   }
 
   await stateStore.addAction({

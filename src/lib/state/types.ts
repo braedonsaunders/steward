@@ -694,6 +694,7 @@ export interface ProtocolSessionMessage {
 
 export interface Device {
   id: string;
+  siteId?: string;
   name: string;
   ip: string;
   secondaryIps?: string[];
@@ -1225,6 +1226,7 @@ export interface Recommendation {
   priority: RecommendationPriority;
   relatedDeviceIds: string[];
   createdAt: string;
+  updatedAt: string;
   dismissed: boolean;
 }
 
@@ -1271,6 +1273,65 @@ export interface GraphEdge {
   updatedAt: string;
 }
 
+export interface GraphNodeVersion {
+  id: string;
+  nodeId: string;
+  label: string;
+  properties: Record<string, unknown>;
+  snapshotHash: string;
+  versionedAt: string;
+}
+
+export interface GraphEdgeVersion {
+  id: string;
+  edgeId: string;
+  from: string;
+  to: string;
+  type: string;
+  properties: Record<string, unknown>;
+  snapshotHash: string;
+  versionedAt: string;
+}
+
+export interface SiteRecord {
+  id: string;
+  slug: string;
+  name: string;
+  timezone: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type MetricScopeType = "device" | "assurance" | "workload" | "service" | "site" | "steward";
+
+export interface MetricSeries {
+  id: string;
+  scopeType: MetricScopeType;
+  scopeId: string;
+  metricKey: string;
+  unit?: string;
+  source: string;
+  retentionDays: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MetricSample {
+  id: string;
+  seriesId: string;
+  scopeType: MetricScopeType;
+  scopeId: string;
+  metricKey: string;
+  value: number;
+  unit?: string;
+  source: string;
+  observedAt: string;
+  dimensionsJson: Record<string, unknown>;
+  anomalyScore?: number;
+  baselineLower?: number;
+  baselineUpper?: number;
+}
+
 export type LLMProvider =
   | "openai"
   | "anthropic"
@@ -1292,18 +1353,13 @@ export interface ProviderConfig {
   provider: LLMProvider;
   enabled: boolean;
   model: string;
-  /** @deprecated Kept for DB column compatibility; no longer used at runtime. */
-  apiKeyEnvVar?: string;
   oauthTokenSecret?: string;
-  /** @deprecated Kept for DB column compatibility; no longer used at runtime. */
-  oauthClientIdEnvVar?: string;
-  /** @deprecated Kept for DB column compatibility; no longer used at runtime. */
-  oauthClientSecretEnvVar?: string;
   oauthAuthUrl?: string;
   oauthTokenUrl?: string;
   oauthScopes?: string[];
   baseUrl?: string;
   extraHeaders?: Record<string, string>;
+  updatedAt?: string;
 }
 
 export interface OAuthState {
@@ -1609,6 +1665,7 @@ export interface PlaybookRun {
   denialReason?: string;
   expiresAt?: string;
   failureCount: number;
+  updatedAt?: string;
 }
 
 export interface DailyDigest {
@@ -1733,6 +1790,7 @@ export interface AuthSession {
 export interface StewardState {
   version: number;
   initializedAt: string;
+  sites: SiteRecord[];
   devices: Device[];
   baselines: DeviceBaseline[];
   incidents: Incident[];
@@ -1758,5 +1816,29 @@ export interface StewardState {
   dashboardWidgetPages: DashboardWidgetPage[];
   systemSettings: SystemSettings;
   authSettings: AuthSettings;
+}
+
+export type StateStreamSection =
+  | "actions"
+  | "agentRuns"
+  | "baselines"
+  | "devices"
+  | "graph"
+  | "incidents"
+  | "playbookRuns"
+  | "recommendations"
+  | "scannerRuns";
+
+export type StateStreamSectionData = Pick<
+  StewardState,
+  "actions" | "agentRuns" | "baselines" | "devices" | "incidents" | "playbookRuns" | "recommendations" | "scannerRuns"
+> & {
+  graph: StewardState["graph"];
+};
+
+export interface StateStreamPatch {
+  revisions: Partial<Record<StateStreamSection, string>>;
+  sections: Partial<StateStreamSectionData>;
+  controlPlane?: ControlPlaneHealth | null;
 }
 

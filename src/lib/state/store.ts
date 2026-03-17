@@ -65,6 +65,9 @@ import type {
   LocalToolApproval,
   LocalToolRecord,
   MaintenanceWindow,
+  MetricSample,
+  MetricScopeType,
+  MetricSeries,
   NotificationChannel,
   NotificationDelivery,
   OAuthState,
@@ -79,6 +82,10 @@ import type {
   ScannerRunRecord,
   ServiceContract,
   SettingsHistoryEntry,
+  SiteRecord,
+  StateStreamPatch,
+  StateStreamSection,
+  StateStreamSectionData,
   StewardState,
   SystemSettings,
   Workload,
@@ -111,6 +118,7 @@ function deviceFromRow(row: Record<string, unknown>): Device {
   const secondaryIps = row.secondaryIps ? JSON.parse(row.secondaryIps as string) as string[] : [];
   return {
     id: row.id as string,
+    siteId: row.siteId ? String(row.siteId) : "site.local.default",
     name: row.name as string,
     ip: row.ip as string,
     secondaryIps: secondaryIps.length > 0 ? secondaryIps : undefined,
@@ -170,6 +178,7 @@ function recommendationFromRow(row: Record<string, unknown>): Recommendation {
     priority: row.priority as Recommendation["priority"],
     relatedDeviceIds: JSON.parse(row.relatedDeviceIds as string) as string[],
     createdAt: row.createdAt as string,
+    updatedAt: row.updatedAt as string,
     dismissed: Boolean(row.dismissed),
   };
 }
@@ -213,17 +222,58 @@ function providerConfigFromRow(row: Record<string, unknown>): ProviderConfig {
     provider: row.provider as ProviderConfig["provider"],
     enabled: Boolean(row.enabled),
     model: row.model as string,
+    updatedAt: row.updatedAt ? String(row.updatedAt) : undefined,
   };
-  if (row.apiKeyEnvVar) config.apiKeyEnvVar = row.apiKeyEnvVar as string;
   if (row.oauthTokenSecret) config.oauthTokenSecret = row.oauthTokenSecret as string;
-  if (row.oauthClientIdEnvVar) config.oauthClientIdEnvVar = row.oauthClientIdEnvVar as string;
-  if (row.oauthClientSecretEnvVar) config.oauthClientSecretEnvVar = row.oauthClientSecretEnvVar as string;
   if (row.oauthAuthUrl) config.oauthAuthUrl = row.oauthAuthUrl as string;
   if (row.oauthTokenUrl) config.oauthTokenUrl = row.oauthTokenUrl as string;
   if (row.oauthScopes) config.oauthScopes = JSON.parse(row.oauthScopes as string) as string[];
   if (row.baseUrl) config.baseUrl = row.baseUrl as string;
   if (row.extraHeaders) config.extraHeaders = JSON.parse(row.extraHeaders as string) as Record<string, string>;
   return config;
+}
+
+function siteFromRow(row: Record<string, unknown>): SiteRecord {
+  return {
+    id: String(row.id),
+    slug: String(row.slug),
+    name: String(row.name),
+    timezone: String(row.timezone),
+    createdAt: String(row.createdAt),
+    updatedAt: String(row.updatedAt),
+  };
+}
+
+function metricSeriesFromRow(row: Record<string, unknown>): MetricSeries {
+  return {
+    id: String(row.id),
+    scopeType: row.scopeType as MetricScopeType,
+    scopeId: String(row.scopeId),
+    metricKey: String(row.metricKey),
+    unit: row.unit ? String(row.unit) : undefined,
+    source: String(row.source),
+    retentionDays: Number(row.retentionDays ?? 30),
+    createdAt: String(row.createdAt),
+    updatedAt: String(row.updatedAt),
+  };
+}
+
+function metricSampleFromRow(row: Record<string, unknown>): MetricSample {
+  return {
+    id: String(row.id),
+    seriesId: String(row.seriesId),
+    scopeType: row.scopeType as MetricScopeType,
+    scopeId: String(row.scopeId),
+    metricKey: String(row.metricKey),
+    value: Number(row.value),
+    unit: row.unit ? String(row.unit) : undefined,
+    source: String(row.source),
+    observedAt: String(row.observedAt),
+    dimensionsJson: JSON.parse(String(row.dimensionsJson ?? "{}")) as Record<string, unknown>,
+    anomalyScore: row.anomalyScore === null || typeof row.anomalyScore === "undefined" ? undefined : Number(row.anomalyScore),
+    baselineLower: row.baselineLower === null || typeof row.baselineLower === "undefined" ? undefined : Number(row.baselineLower),
+    baselineUpper: row.baselineUpper === null || typeof row.baselineUpper === "undefined" ? undefined : Number(row.baselineUpper),
+  };
 }
 
 function oauthStateFromRow(row: Record<string, unknown>): OAuthState {
@@ -395,6 +445,7 @@ function playbookRunFromRow(row: Record<string, unknown>): PlaybookRun {
     denialReason: (row.denialReason as string) ?? undefined,
     expiresAt: (row.expiresAt as string) ?? undefined,
     failureCount: row.failureCount as number,
+    updatedAt: row.updatedAt ? String(row.updatedAt) : row.createdAt as string,
   };
 }
 
@@ -1555,6 +1606,7 @@ class StateStore {
 
   getState(): Promise<StewardState> {
     const state = this.withDbRecovery("StateStore.getState", (db) => {
+      const sites = (db.prepare("SELECT * FROM sites ORDER BY createdAt ASC").all() as Record<string, unknown>[]).map(siteFromRow);
       const devices = (db.prepare("SELECT * FROM devices").all() as Record<string, unknown>[]).map(deviceFromRow);
       const baselines = (db.prepare("SELECT * FROM device_baselines").all() as Record<string, unknown>[]).map(baselineFromRow);
       const incidents = (db.prepare("SELECT * FROM incidents").all() as Record<string, unknown>[]).map(incidentFromRow);
@@ -1582,6 +1634,7 @@ class StateStore {
       return {
         version: this.getVersion(db),
         initializedAt: this.getInitializedAt(db),
+        sites,
         devices,
         baselines,
         incidents,
@@ -1608,6 +1661,147 @@ class StateStore {
     });
 
     return Promise.resolve(state);
+  }
+
+  getSites(): SiteRecord[] {
+    return this.withDbRecovery("StateStore.getSites", (db) => {
+      return (db.prepare("SELECT * FROM sites ORDER BY createdAt ASC").all() as Record<string, unknown>[]).map(siteFromRow);
+    });
+  }
+
+  getPrimarySite(): SiteRecord | null {
+    return this.withDbRecovery("StateStore.getPrimarySite", (db) => {
+      const row = db.prepare(`
+        SELECT *
+        FROM sites
+        ORDER BY createdAt ASC, updatedAt ASC
+        LIMIT 1
+      `).get() as Record<string, unknown> | undefined;
+      return row ? siteFromRow(row) : null;
+    });
+  }
+
+  upsertSite(site: SiteRecord): SiteRecord {
+    return this.withDbRecovery("StateStore.upsertSite", (db) => {
+      db.prepare(`
+        INSERT INTO sites (id, slug, name, timezone, createdAt, updatedAt)
+        VALUES (@id, @slug, @name, @timezone, @createdAt, @updatedAt)
+        ON CONFLICT(id) DO UPDATE SET
+          slug = excluded.slug,
+          name = excluded.name,
+          timezone = excluded.timezone,
+          updatedAt = excluded.updatedAt
+      `).run(site);
+      return site;
+    });
+  }
+
+  getDevices(): Device[] {
+    return this.withDbRecovery("StateStore.getDevices", (db) => {
+      return (db.prepare("SELECT * FROM devices").all() as Record<string, unknown>[]).map(deviceFromRow);
+    });
+  }
+
+  getGraph(): StewardState["graph"] {
+    return this.withDbRecovery("StateStore.getGraph", (db) => {
+      const nodes = (db.prepare("SELECT * FROM graph_nodes").all() as Record<string, unknown>[]).map(graphNodeFromRow);
+      const edges = (db.prepare('SELECT id, "from", "to", type, properties, createdAt, updatedAt FROM graph_edges').all() as Record<string, unknown>[]).map(graphEdgeFromRow);
+      return { nodes, edges };
+    });
+  }
+
+  getRecentActions(limit = 2_000): ActionLog[] {
+    return this.readRecentAuditEvents(limit);
+  }
+
+  getScannerRuns(limit = 200): ScannerRunRecord[] {
+    return this.withDbRecovery("StateStore.getScannerRuns", (db) => {
+      return (db.prepare("SELECT * FROM scanner_runs ORDER BY startedAt DESC LIMIT ?").all(Math.max(1, Math.min(limit, 2_000))) as Record<string, unknown>[]).map(scannerRunFromRow);
+    });
+  }
+
+  getAgentRuns(limit = 200): AgentRunRecord[] {
+    return this.withDbRecovery("StateStore.getAgentRuns", (db) => {
+      return (db.prepare("SELECT * FROM agent_runs ORDER BY startedAt DESC LIMIT ?").all(Math.max(1, Math.min(limit, 2_000))) as Record<string, unknown>[]).map(agentRunFromRow);
+    });
+  }
+
+  getStateStreamRevisions(): Partial<Record<StateStreamSection, string>> {
+    const revisions: Partial<Record<StateStreamSection, string>> = this.withDbRecovery("StateStore.getStateStreamRevisions", (db) => {
+      const scalar = (query: string): string => {
+        const row = db.prepare(query).get() as { revision?: string | null } | undefined;
+        return row?.revision ? String(row.revision) : "";
+      };
+
+      return {
+        agentRuns: scalar("SELECT COALESCE(MAX(COALESCE(completedAt, startedAt)), '') AS revision FROM agent_runs"),
+        baselines: scalar("SELECT COALESCE(MAX(lastUpdatedAt), '') AS revision FROM device_baselines"),
+        devices: scalar("SELECT COALESCE(MAX(lastChangedAt), '') AS revision FROM devices"),
+        graph: scalar(`
+          SELECT COALESCE(MAX(updatedAt), '') AS revision
+          FROM (
+            SELECT updatedAt FROM graph_nodes
+            UNION ALL
+            SELECT updatedAt FROM graph_edges
+          )
+        `),
+        incidents: scalar("SELECT COALESCE(MAX(updatedAt), '') AS revision FROM incidents"),
+        playbookRuns: scalar("SELECT COALESCE(MAX(updatedAt), '') AS revision FROM playbook_runs"),
+        recommendations: scalar("SELECT COALESCE(MAX(updatedAt), '' ) AS revision FROM recommendations"),
+        scannerRuns: scalar("SELECT COALESCE(MAX(COALESCE(completedAt, startedAt)), '') AS revision FROM scanner_runs"),
+      };
+    });
+
+    revisions.actions = this.withAuditDbRecovery("StateStore.getStateStreamRevisions.actions", (auditDb) => {
+      const row = auditDb.prepare("SELECT COALESCE(MAX(at), '') AS revision FROM audit_events").get() as { revision?: string | null } | undefined;
+      return row?.revision ? String(row.revision) : "";
+    });
+
+    return revisions;
+  }
+
+  getStateStreamPatch(
+    since: Partial<Record<StateStreamSection, string>>,
+  ): StateStreamPatch {
+    const revisions = this.getStateStreamRevisions();
+    const sections: Partial<StateStreamSectionData> = {};
+
+    const shouldInclude = (section: StateStreamSection): boolean =>
+      !since[section] || since[section] !== revisions[section];
+
+    if (shouldInclude("actions")) {
+      sections.actions = this.getRecentActions(2_000);
+    }
+    if (shouldInclude("agentRuns")) {
+      sections.agentRuns = this.getAgentRuns();
+    }
+    if (shouldInclude("baselines")) {
+      sections.baselines = this.getBaselines();
+    }
+    if (shouldInclude("devices")) {
+      sections.devices = this.getDevices();
+    }
+    if (shouldInclude("graph")) {
+      sections.graph = this.getGraph();
+    }
+    if (shouldInclude("incidents")) {
+      sections.incidents = this.getIncidents();
+    }
+    if (shouldInclude("playbookRuns")) {
+      sections.playbookRuns = this.getPlaybookRuns();
+    }
+    if (shouldInclude("recommendations")) {
+      sections.recommendations = this.getRecommendations();
+    }
+    if (shouldInclude("scannerRuns")) {
+      sections.scannerRuns = this.getScannerRuns();
+    }
+
+    return {
+      revisions,
+      sections,
+      controlPlane: this.getControlPlaneHealth(),
+    };
   }
 
   async updateState(
@@ -1715,9 +1909,10 @@ class StateStore {
 
       // Devices (upsert + delete stale; avoid full-table delete to preserve FK-linked child rows)
       const upsertDevice = db.prepare(`
-        INSERT INTO devices (id, name, ip, mac, hostname, vendor, os, role, type, status, autonomyTier, tags, protocols, services, firstSeenAt, lastSeenAt, lastChangedAt, metadata, secondaryIps)
-        VALUES (@id, @name, @ip, @mac, @hostname, @vendor, @os, @role, @type, @status, @autonomyTier, @tags, @protocols, @services, @firstSeenAt, @lastSeenAt, @lastChangedAt, @metadata, @secondaryIps)
+        INSERT INTO devices (id, siteId, name, ip, mac, hostname, vendor, os, role, type, status, autonomyTier, tags, protocols, services, firstSeenAt, lastSeenAt, lastChangedAt, metadata, secondaryIps)
+        VALUES (@id, @siteId, @name, @ip, @mac, @hostname, @vendor, @os, @role, @type, @status, @autonomyTier, @tags, @protocols, @services, @firstSeenAt, @lastSeenAt, @lastChangedAt, @metadata, @secondaryIps)
         ON CONFLICT(id) DO UPDATE SET
+          siteId = excluded.siteId,
           name = excluded.name,
           ip = excluded.ip,
           mac = excluded.mac,
@@ -1741,7 +1936,7 @@ class StateStore {
       for (const d of state.devices) {
         nextDeviceIds.add(d.id);
         upsertDevice.run({
-          id: d.id, name: d.name, ip: d.ip, mac: d.mac ?? null, hostname: d.hostname ?? null,
+          id: d.id, siteId: d.siteId ?? "site.local.default", name: d.name, ip: d.ip, mac: d.mac ?? null, hostname: d.hostname ?? null,
           vendor: d.vendor ?? null, os: d.os ?? null, role: d.role ?? null, type: d.type,
           status: d.status, autonomyTier: d.autonomyTier, tags: JSON.stringify(d.tags),
           protocols: JSON.stringify(d.protocols), services: JSON.stringify(d.services),
@@ -1754,6 +1949,16 @@ class StateStore {
       } else {
         const placeholders = Array.from(nextDeviceIds).map(() => "?").join(",");
         db.prepare(`DELETE FROM devices WHERE id NOT IN (${placeholders})`).run(...Array.from(nextDeviceIds));
+      }
+
+      // Sites
+      db.prepare("DELETE FROM sites").run();
+      const insertSite = db.prepare(`
+        INSERT INTO sites (id, slug, name, timezone, createdAt, updatedAt)
+        VALUES (@id, @slug, @name, @timezone, @createdAt, @updatedAt)
+      `);
+      for (const site of state.sites) {
+        insertSite.run(site);
       }
 
       // Baselines
@@ -1787,14 +1992,14 @@ class StateStore {
       // Recommendations
       db.prepare("DELETE FROM recommendations").run();
       const insertRec = db.prepare(`
-        INSERT INTO recommendations (id, title, rationale, impact, priority, relatedDeviceIds, createdAt, dismissed)
-        VALUES (@id, @title, @rationale, @impact, @priority, @relatedDeviceIds, @createdAt, @dismissed)
+        INSERT INTO recommendations (id, title, rationale, impact, priority, relatedDeviceIds, createdAt, updatedAt, dismissed)
+        VALUES (@id, @title, @rationale, @impact, @priority, @relatedDeviceIds, @createdAt, @updatedAt, @dismissed)
       `);
       for (const r of state.recommendations) {
         insertRec.run({
           id: r.id, title: r.title, rationale: r.rationale, impact: r.impact,
           priority: r.priority, relatedDeviceIds: JSON.stringify(r.relatedDeviceIds),
-          createdAt: r.createdAt, dismissed: r.dismissed ? 1 : 0,
+          createdAt: r.createdAt, updatedAt: r.updatedAt, dismissed: r.dismissed ? 1 : 0,
         });
       }
 
@@ -1829,19 +2034,18 @@ class StateStore {
       // Provider configs
       db.prepare("DELETE FROM provider_configs").run();
       const insertProvider = db.prepare(`
-        INSERT INTO provider_configs (provider, enabled, model, apiKeyEnvVar, oauthTokenSecret, oauthClientIdEnvVar, oauthClientSecretEnvVar, oauthAuthUrl, oauthTokenUrl, oauthScopes, baseUrl, extraHeaders)
-        VALUES (@provider, @enabled, @model, @apiKeyEnvVar, @oauthTokenSecret, @oauthClientIdEnvVar, @oauthClientSecretEnvVar, @oauthAuthUrl, @oauthTokenUrl, @oauthScopes, @baseUrl, @extraHeaders)
+        INSERT INTO provider_configs (provider, enabled, model, oauthTokenSecret, oauthAuthUrl, oauthTokenUrl, oauthScopes, baseUrl, extraHeaders, updatedAt)
+        VALUES (@provider, @enabled, @model, @oauthTokenSecret, @oauthAuthUrl, @oauthTokenUrl, @oauthScopes, @baseUrl, @extraHeaders, @updatedAt)
       `);
       for (const p of state.providerConfigs) {
         insertProvider.run({
           provider: p.provider, enabled: p.enabled ? 1 : 0, model: p.model,
-          apiKeyEnvVar: p.apiKeyEnvVar ?? null, oauthTokenSecret: p.oauthTokenSecret ?? null,
-          oauthClientIdEnvVar: p.oauthClientIdEnvVar ?? null,
-          oauthClientSecretEnvVar: p.oauthClientSecretEnvVar ?? null,
+          oauthTokenSecret: p.oauthTokenSecret ?? null,
           oauthAuthUrl: p.oauthAuthUrl ?? null, oauthTokenUrl: p.oauthTokenUrl ?? null,
           oauthScopes: p.oauthScopes ? JSON.stringify(p.oauthScopes) : null,
           baseUrl: p.baseUrl ?? null,
           extraHeaders: p.extraHeaders ? JSON.stringify(p.extraHeaders) : null,
+          updatedAt: p.updatedAt ?? new Date().toISOString(),
         });
       }
 
@@ -1916,8 +2120,8 @@ class StateStore {
       // Playbook runs
       db.prepare("DELETE FROM playbook_runs").run();
       const insertPlaybookRun = db.prepare(`
-        INSERT INTO playbook_runs (id, playbookId, family, name, deviceId, incidentId, actionClass, status, policyEvaluation, steps, verificationSteps, rollbackSteps, evidence, createdAt, startedAt, completedAt, approvedBy, approvedAt, deniedBy, deniedAt, denialReason, expiresAt, failureCount)
-        VALUES (@id, @playbookId, @family, @name, @deviceId, @incidentId, @actionClass, @status, @policyEvaluation, @steps, @verificationSteps, @rollbackSteps, @evidence, @createdAt, @startedAt, @completedAt, @approvedBy, @approvedAt, @deniedBy, @deniedAt, @denialReason, @expiresAt, @failureCount)
+        INSERT INTO playbook_runs (id, playbookId, family, name, deviceId, incidentId, actionClass, status, policyEvaluation, steps, verificationSteps, rollbackSteps, evidence, createdAt, startedAt, completedAt, approvedBy, approvedAt, deniedBy, deniedAt, denialReason, expiresAt, failureCount, updatedAt)
+        VALUES (@id, @playbookId, @family, @name, @deviceId, @incidentId, @actionClass, @status, @policyEvaluation, @steps, @verificationSteps, @rollbackSteps, @evidence, @createdAt, @startedAt, @completedAt, @approvedBy, @approvedAt, @deniedBy, @deniedAt, @denialReason, @expiresAt, @failureCount, @updatedAt)
       `);
       for (const pr of state.playbookRuns) {
         insertPlaybookRun.run({
@@ -1934,6 +2138,7 @@ class StateStore {
           approvedAt: pr.approvedAt ?? null, deniedBy: pr.deniedBy ?? null,
           deniedAt: pr.deniedAt ?? null, denialReason: pr.denialReason ?? null,
           expiresAt: pr.expiresAt ?? null, failureCount: pr.failureCount,
+          updatedAt: pr.updatedAt ?? pr.completedAt ?? pr.deniedAt ?? pr.approvedAt ?? pr.startedAt ?? pr.createdAt,
         });
       }
 
@@ -2132,9 +2337,10 @@ class StateStore {
   async upsertDevice(device: Device): Promise<Device> {
     this.withDbRecovery("StateStore.upsertDevice", (db) => {
       db.prepare(`
-        INSERT INTO devices (id, name, ip, secondaryIps, mac, hostname, vendor, os, role, type, status, autonomyTier, tags, protocols, services, firstSeenAt, lastSeenAt, lastChangedAt, metadata)
-        VALUES (@id, @name, @ip, @secondaryIps, @mac, @hostname, @vendor, @os, @role, @type, @status, @autonomyTier, @tags, @protocols, @services, @firstSeenAt, @lastSeenAt, @lastChangedAt, @metadata)
+        INSERT INTO devices (id, siteId, name, ip, secondaryIps, mac, hostname, vendor, os, role, type, status, autonomyTier, tags, protocols, services, firstSeenAt, lastSeenAt, lastChangedAt, metadata)
+        VALUES (@id, @siteId, @name, @ip, @secondaryIps, @mac, @hostname, @vendor, @os, @role, @type, @status, @autonomyTier, @tags, @protocols, @services, @firstSeenAt, @lastSeenAt, @lastChangedAt, @metadata)
         ON CONFLICT(id) DO UPDATE SET
+          siteId = excluded.siteId,
           name = excluded.name,
           ip = excluded.ip,
           secondaryIps = excluded.secondaryIps,
@@ -2154,7 +2360,7 @@ class StateStore {
           lastChangedAt = excluded.lastChangedAt,
           metadata = excluded.metadata
       `).run({
-        id: device.id, name: device.name, ip: device.ip,
+        id: device.id, siteId: device.siteId ?? "site.local.default", name: device.name, ip: device.ip,
         secondaryIps: JSON.stringify(device.secondaryIps ?? []),
         mac: device.mac ?? null, hostname: device.hostname ?? null,
         vendor: device.vendor ?? null, os: device.os ?? null, role: device.role ?? null,
@@ -2194,24 +2400,36 @@ class StateStore {
     });
   }
 
+  getIncidents(): Incident[] {
+    return this.withDbRecovery("StateStore.getIncidents", (db) => {
+      return (db.prepare("SELECT * FROM incidents ORDER BY updatedAt DESC").all() as Record<string, unknown>[]).map(incidentFromRow);
+    });
+  }
+
   async setRecommendations(recommendations: Recommendation[]): Promise<void> {
     this.withDbRecovery("StateStore.setRecommendations", (db) => {
       const tx = db.transaction(() => {
         db.prepare("DELETE FROM recommendations").run();
         const insert = db.prepare(`
-          INSERT INTO recommendations (id, title, rationale, impact, priority, relatedDeviceIds, createdAt, dismissed)
-          VALUES (@id, @title, @rationale, @impact, @priority, @relatedDeviceIds, @createdAt, @dismissed)
+          INSERT INTO recommendations (id, title, rationale, impact, priority, relatedDeviceIds, createdAt, updatedAt, dismissed)
+          VALUES (@id, @title, @rationale, @impact, @priority, @relatedDeviceIds, @createdAt, @updatedAt, @dismissed)
         `);
         for (const r of recommendations) {
           insert.run({
             id: r.id, title: r.title, rationale: r.rationale, impact: r.impact,
             priority: r.priority, relatedDeviceIds: JSON.stringify(r.relatedDeviceIds),
-            createdAt: r.createdAt, dismissed: r.dismissed ? 1 : 0,
+            createdAt: r.createdAt, updatedAt: r.updatedAt, dismissed: r.dismissed ? 1 : 0,
           });
         }
       });
 
       tx();
+    });
+  }
+
+  getRecommendations(): Recommendation[] {
+    return this.withDbRecovery("StateStore.getRecommendations", (db) => {
+      return (db.prepare("SELECT * FROM recommendations ORDER BY updatedAt DESC, createdAt DESC").all() as Record<string, unknown>[]).map(recommendationFromRow);
     });
   }
 
@@ -2233,20 +2451,159 @@ class StateStore {
     });
   }
 
+  getBaselines(): DeviceBaseline[] {
+    return this.withDbRecovery("StateStore.getBaselines", (db) => {
+      return (db.prepare("SELECT * FROM device_baselines").all() as Record<string, unknown>[]).map(baselineFromRow);
+    });
+  }
+
+  getMetricSeries(scopeType: MetricScopeType, scopeId: string, metricKey: string): MetricSeries | null {
+    return this.withDbRecovery("StateStore.getMetricSeries", (db) => {
+      const row = db.prepare(`
+        SELECT *
+        FROM metric_series
+        WHERE scopeType = ? AND scopeId = ? AND metricKey = ?
+        LIMIT 1
+      `).get(scopeType, scopeId, metricKey) as Record<string, unknown> | undefined;
+      return row ? metricSeriesFromRow(row) : null;
+    });
+  }
+
+  upsertMetricSeries(input: Omit<MetricSeries, "id" | "createdAt" | "updatedAt"> & {
+    id?: string;
+    createdAt?: string;
+    updatedAt?: string;
+  }): MetricSeries {
+    return this.withDbRecovery("StateStore.upsertMetricSeries", (db) => {
+      const existing = db.prepare(`
+        SELECT *
+        FROM metric_series
+        WHERE scopeType = ? AND scopeId = ? AND metricKey = ?
+        LIMIT 1
+      `).get(input.scopeType, input.scopeId, input.metricKey) as Record<string, unknown> | undefined;
+      const now = new Date().toISOString();
+      const next: MetricSeries = existing
+        ? {
+          ...metricSeriesFromRow(existing),
+          unit: input.unit,
+          source: input.source,
+          retentionDays: input.retentionDays,
+          updatedAt: input.updatedAt ?? now,
+        }
+        : {
+          id: input.id ?? randomUUID(),
+          scopeType: input.scopeType,
+          scopeId: input.scopeId,
+          metricKey: input.metricKey,
+          unit: input.unit,
+          source: input.source,
+          retentionDays: input.retentionDays,
+          createdAt: input.createdAt ?? now,
+          updatedAt: input.updatedAt ?? now,
+        };
+
+      db.prepare(`
+        INSERT INTO metric_series (id, scopeType, scopeId, metricKey, unit, source, retentionDays, createdAt, updatedAt)
+        VALUES (@id, @scopeType, @scopeId, @metricKey, @unit, @source, @retentionDays, @createdAt, @updatedAt)
+        ON CONFLICT(id) DO UPDATE SET
+          unit = excluded.unit,
+          source = excluded.source,
+          retentionDays = excluded.retentionDays,
+          updatedAt = excluded.updatedAt
+      `).run({
+        id: next.id,
+        scopeType: next.scopeType,
+        scopeId: next.scopeId,
+        metricKey: next.metricKey,
+        unit: next.unit ?? null,
+        source: next.source,
+        retentionDays: next.retentionDays,
+        createdAt: next.createdAt,
+        updatedAt: next.updatedAt,
+      });
+
+      return next;
+    });
+  }
+
+  recordMetricSample(sample: Omit<MetricSample, "id"> & { id?: string }): MetricSample {
+    return this.withDbRecovery("StateStore.recordMetricSample", (db) => {
+      const next: MetricSample = {
+        ...sample,
+        id: sample.id ?? randomUUID(),
+      };
+
+      db.prepare(`
+        INSERT INTO metric_samples (
+          id, seriesId, scopeType, scopeId, metricKey, value, unit, source, observedAt,
+          dimensionsJson, anomalyScore, baselineLower, baselineUpper
+        )
+        VALUES (
+          @id, @seriesId, @scopeType, @scopeId, @metricKey, @value, @unit, @source, @observedAt,
+          @dimensionsJson, @anomalyScore, @baselineLower, @baselineUpper
+        )
+      `).run({
+        id: next.id,
+        seriesId: next.seriesId,
+        scopeType: next.scopeType,
+        scopeId: next.scopeId,
+        metricKey: next.metricKey,
+        value: next.value,
+        unit: next.unit ?? null,
+        source: next.source,
+        observedAt: next.observedAt,
+        dimensionsJson: JSON.stringify(next.dimensionsJson ?? {}),
+        anomalyScore: typeof next.anomalyScore === "number" ? next.anomalyScore : null,
+        baselineLower: typeof next.baselineLower === "number" ? next.baselineLower : null,
+        baselineUpper: typeof next.baselineUpper === "number" ? next.baselineUpper : null,
+      });
+
+      const retentionDays = db.prepare(`
+        SELECT retentionDays
+        FROM metric_series
+        WHERE id = ?
+      `).get(next.seriesId) as { retentionDays?: number } | undefined;
+      const cutoff = new Date(Date.now() - (Number(retentionDays?.retentionDays ?? 30) * 24 * 60 * 60 * 1000)).toISOString();
+      db.prepare(`
+        DELETE FROM metric_samples
+        WHERE seriesId = ? AND observedAt < ?
+      `).run(next.seriesId, cutoff);
+
+      return next;
+    });
+  }
+
+  getRecentMetricSamples(
+    scopeType: MetricScopeType,
+    scopeId: string,
+    metricKey: string,
+    limit = 50,
+  ): MetricSample[] {
+    return this.withDbRecovery("StateStore.getRecentMetricSamples", (db) => {
+      const rows = db.prepare(`
+        SELECT *
+        FROM metric_samples
+        WHERE scopeType = ? AND scopeId = ? AND metricKey = ?
+        ORDER BY observedAt DESC
+        LIMIT ?
+      `).all(scopeType, scopeId, metricKey, Math.max(1, Math.min(limit, 500))) as Record<string, unknown>[];
+      return rows.map(metricSampleFromRow);
+    });
+  }
+
   async setProviderConfig(config: ProviderConfig): Promise<void> {
     this.withDbRecovery("StateStore.setProviderConfig", (db) => {
       db.prepare(`
-        INSERT OR REPLACE INTO provider_configs (provider, enabled, model, apiKeyEnvVar, oauthTokenSecret, oauthClientIdEnvVar, oauthClientSecretEnvVar, oauthAuthUrl, oauthTokenUrl, oauthScopes, baseUrl, extraHeaders)
-        VALUES (@provider, @enabled, @model, @apiKeyEnvVar, @oauthTokenSecret, @oauthClientIdEnvVar, @oauthClientSecretEnvVar, @oauthAuthUrl, @oauthTokenUrl, @oauthScopes, @baseUrl, @extraHeaders)
+        INSERT OR REPLACE INTO provider_configs (provider, enabled, model, oauthTokenSecret, oauthAuthUrl, oauthTokenUrl, oauthScopes, baseUrl, extraHeaders, updatedAt)
+        VALUES (@provider, @enabled, @model, @oauthTokenSecret, @oauthAuthUrl, @oauthTokenUrl, @oauthScopes, @baseUrl, @extraHeaders, @updatedAt)
       `).run({
         provider: config.provider, enabled: config.enabled ? 1 : 0, model: config.model,
-        apiKeyEnvVar: config.apiKeyEnvVar ?? null, oauthTokenSecret: config.oauthTokenSecret ?? null,
-        oauthClientIdEnvVar: config.oauthClientIdEnvVar ?? null,
-        oauthClientSecretEnvVar: config.oauthClientSecretEnvVar ?? null,
+        oauthTokenSecret: config.oauthTokenSecret ?? null,
         oauthAuthUrl: config.oauthAuthUrl ?? null, oauthTokenUrl: config.oauthTokenUrl ?? null,
         oauthScopes: config.oauthScopes ? JSON.stringify(config.oauthScopes) : null,
         baseUrl: config.baseUrl ?? null,
         extraHeaders: config.extraHeaders ? JSON.stringify(config.extraHeaders) : null,
+        updatedAt: config.updatedAt ?? new Date().toISOString(),
       });
     });
   }
@@ -3366,8 +3723,8 @@ class StateStore {
   upsertPlaybookRun(run: PlaybookRun): void {
     this.withDbRecovery("StateStore.upsertPlaybookRun", (db) => {
       db.prepare(`
-        INSERT OR REPLACE INTO playbook_runs (id, playbookId, family, name, deviceId, incidentId, actionClass, status, policyEvaluation, steps, verificationSteps, rollbackSteps, evidence, createdAt, startedAt, completedAt, approvedBy, approvedAt, deniedBy, deniedAt, denialReason, expiresAt, failureCount)
-        VALUES (@id, @playbookId, @family, @name, @deviceId, @incidentId, @actionClass, @status, @policyEvaluation, @steps, @verificationSteps, @rollbackSteps, @evidence, @createdAt, @startedAt, @completedAt, @approvedBy, @approvedAt, @deniedBy, @deniedAt, @denialReason, @expiresAt, @failureCount)
+        INSERT OR REPLACE INTO playbook_runs (id, playbookId, family, name, deviceId, incidentId, actionClass, status, policyEvaluation, steps, verificationSteps, rollbackSteps, evidence, createdAt, startedAt, completedAt, approvedBy, approvedAt, deniedBy, deniedAt, denialReason, expiresAt, failureCount, updatedAt)
+        VALUES (@id, @playbookId, @family, @name, @deviceId, @incidentId, @actionClass, @status, @policyEvaluation, @steps, @verificationSteps, @rollbackSteps, @evidence, @createdAt, @startedAt, @completedAt, @approvedBy, @approvedAt, @deniedBy, @deniedAt, @denialReason, @expiresAt, @failureCount, @updatedAt)
       `).run({
         id: run.id, playbookId: run.playbookId, family: run.family, name: run.name,
         deviceId: run.deviceId, incidentId: run.incidentId ?? null,
@@ -3382,6 +3739,7 @@ class StateStore {
         approvedAt: run.approvedAt ?? null, deniedBy: run.deniedBy ?? null,
         deniedAt: run.deniedAt ?? null, denialReason: run.denialReason ?? null,
         expiresAt: run.expiresAt ?? null, failureCount: run.failureCount,
+        updatedAt: run.updatedAt ?? run.completedAt ?? run.deniedAt ?? run.approvedAt ?? run.startedAt ?? run.createdAt,
       });
     });
   }

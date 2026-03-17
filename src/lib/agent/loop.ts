@@ -15,7 +15,6 @@ import {
 import { buildManagementSurface } from "@/lib/protocols/negotiator";
 import { evaluatePolicy } from "@/lib/policy/engine";
 import { matchPlaybooksForIncident } from "@/lib/playbooks/registry";
-import { executePlaybook } from "@/lib/playbooks/runtime";
 import { getMissingCredentialProtocolsForPlaybook } from "@/lib/adoption/playbook-credentials";
 import {
   buildPlaybookRun,
@@ -23,6 +22,12 @@ import {
   criticalityForActionClass,
   isFamilyQuarantined,
 } from "@/lib/playbooks/factory";
+import {
+  executeQueuedPlaybookRun,
+  PLAYBOOK_EXECUTE_JOB_KIND,
+  queueApprovedPlaybookRuns,
+  queuePlaybookExecution,
+} from "@/lib/playbooks/orchestrator";
 import { createApproval, expireStale } from "@/lib/approvals/queue";
 import { adapterRegistry } from "@/lib/adapters/registry";
 import { mergeProtectedDeviceMetadata } from "@/lib/devices/protected-metadata";
@@ -42,6 +47,7 @@ import {
 } from "@/lib/discovery/enrichment-plane";
 import { routeFinding } from "@/lib/findings/router";
 import { localToolRuntime } from "@/lib/local-tools/runtime";
+import { recordAssuranceResultMetric, recordDeviceLatencyMetric } from "@/lib/metrics/service";
 import { getAdoptionRecord, getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
 import { processNotificationJobs } from "@/lib/notifications/manager";
 import { pollGatewayBindings } from "@/lib/gateway/worker";
@@ -229,7 +235,7 @@ const dedupeRecommendations = (recommendations: Recommendation[]): Recommendatio
 
 const ensureRecommendation = (
   recommendations: Recommendation[],
-  incoming: Omit<Recommendation, "id" | "createdAt" | "dismissed">,
+  incoming: Omit<Recommendation, "id" | "createdAt" | "updatedAt" | "dismissed">,
   options?: {
     matchesExisting?: (item: Recommendation) => boolean;
   },
@@ -263,15 +269,18 @@ const ensureRecommendation = (
     const updated: Recommendation = {
       ...existing,
       ...incoming,
+      updatedAt: new Date().toISOString(),
     };
     const next = [...recommendations];
     next[existingIndex] = updated;
     return { next, added: false };
   }
 
+  const createdAt = new Date().toISOString();
   const created: Recommendation = {
     id: randomUUID(),
-    createdAt: new Date().toISOString(),
+    createdAt,
+    updatedAt: createdAt,
     dismissed: false,
     ...incoming,
   };
@@ -1697,7 +1706,7 @@ const actPhase = async (devices: Device[]): Promise<{
 
   // --- Playbook orchestration sub-phase ---
   let playbooksTriggered = 0;
-  let playbooksCompleted = 0;
+  const playbooksCompleted = 0;
   let approvalsCreated = 0;
 
   const policyRules = stateStore.getPolicyRules();
@@ -1813,18 +1822,8 @@ const actPhase = async (devices: Device[]): Promise<{
         } else {
           // ALLOW_AUTO — execute immediately
           stateStore.upsertPlaybookRun(run);
-          const result = await executePlaybook(run, device);
-          stateStore.upsertPlaybookRun(result);
+          queuePlaybookExecution(run, "auto");
           activeRunKeys.add(runKey);
-
-          playbooksCompleted += result.status === "completed" ? 1 : 0;
-
-          void stateStore.addAction({
-            actor: "steward",
-            kind: "playbook",
-            message: `Playbook "${playbook.name}" on ${device.name}: ${result.status}`,
-            context: { playbookRunId: result.id, status: result.status },
-          });
         }
 
         playbooksTriggered++;
@@ -1833,34 +1832,7 @@ const actPhase = async (devices: Device[]): Promise<{
   }
 
   // Execute any previously approved runs that haven't started yet
-  const approvedRuns = stateStore.getPlaybookRuns({ status: "approved" });
-  for (const run of approvedRuns) {
-    const device = deviceMap.get(run.deviceId);
-    if (!device) continue;
-
-    const result = await executePlaybook(run, device);
-    stateStore.upsertPlaybookRun(result);
-    playbooksCompleted += result.status === "completed" ? 1 : 0;
-
-    void stateStore.addAction({
-      actor: "steward",
-      kind: "playbook",
-      message: `Playbook "${run.name}" on ${device.name}: ${result.status}`,
-      context: { playbookRunId: result.id, status: result.status },
-    });
-
-    if (run.policyEvaluation.inputs.lane === "B" && result.status === "completed") {
-      const promotion = ensureRecommendation(recommendations, {
-        title: `Promote adaptive run "${run.family}" to deterministic adapter playbook`,
-        rationale: "A Lane B Plan IR run completed successfully and is eligible for deterministic codification.",
-        impact: "Improves repeatability and expands Lane A autonomous coverage.",
-        priority: "medium",
-        relatedDeviceIds: [device.id],
-      });
-      recommendations = promotion.next;
-      recommendationsAdded += promotion.added ? 1 : 0;
-    }
-  }
+  queueApprovedPlaybookRuns();
 
   // Expire stale approvals
   expireStale();
@@ -1883,12 +1855,12 @@ const learnPhase = async (devices: Device[]): Promise<void> => {
   const latencyResults = await Promise.all(
     devices.slice(0, 50).map(async (device) => ({
       deviceId: device.id,
+      device,
       ip: device.ip,
       latencyMs: await measureLatency(device.ip),
     })),
   );
-  const state = await stateStore.getState();
-  const existingByDevice = new Map(state.baselines.map((baseline) => [baseline.deviceId, baseline]));
+  const existingByDevice = new Map(stateStore.getBaselines().map((baseline) => [baseline.deviceId, baseline]));
   const baselineUpdates: DeviceBaseline[] = [];
 
   for (const result of latencyResults) {
@@ -1898,6 +1870,7 @@ const learnPhase = async (devices: Device[]): Promise<void> => {
     const baseline = buildBaseline(existingByDevice.get(result.deviceId), result.latencyMs);
     baseline.deviceId = result.deviceId;
     baselineUpdates.push(baseline);
+    await recordDeviceLatencyMetric(result.device, result.latencyMs, existingByDevice.get(result.deviceId));
   }
 
   stateStore.upsertBaselines(baselineUpdates);
@@ -1927,7 +1900,7 @@ const AGENT_WAKE_JOB_KIND = "agent.wake";
 const AGENT_ASSURANCE_JOB_KIND = "agent.assurance";
 const SCANNER_JOB_KINDS = [SCANNER_DISCOVERY_JOB_KIND] as const;
 const DISCOVERY_JOB_KINDS = [...DISCOVERY_ENRICHMENT_JOB_KINDS] as const;
-const RUNTIME_JOB_KINDS = [MONITOR_EXECUTE_JOB_KIND, AGENT_WAKE_JOB_KIND, AGENT_ASSURANCE_JOB_KIND] as const;
+const RUNTIME_JOB_KINDS = [MONITOR_EXECUTE_JOB_KIND, AGENT_WAKE_JOB_KIND, AGENT_ASSURANCE_JOB_KIND, PLAYBOOK_EXECUTE_JOB_KIND] as const;
 const MIN_LEADER_LEASE_MS = 90_000;
 const MIN_CYCLE_LEASE_MS = 4 * 60 * 1000;
 const MIN_AGENT_WAKE_LEASE_MS = 60_000;
@@ -2260,6 +2233,9 @@ const persistAssuranceEvaluation = async (
   const latestRun = stateStore
     .getLatestAssuranceRuns(device.id)
     .find((run) => run.assuranceId === contract.id);
+  if (latestRun) {
+    recordAssuranceResultMetric(device, contract, latestRun.status, latestRun.evaluatedAt);
+  }
 
   return {
     status: latestRun?.status ?? "skipped",
@@ -2582,6 +2558,8 @@ const processRuntimeJobs = async (limit = 25): Promise<void> => {
           await runAgentWakeJob(job.payload, runtimeSettings);
         } else if (job.kind === AGENT_ASSURANCE_JOB_KIND) {
           await runAgentAssuranceJob(job.payload, runtimeSettings);
+        } else if (job.kind === PLAYBOOK_EXECUTE_JOB_KIND) {
+          await executeQueuedPlaybookRun(job.payload);
         }
         stateStore.completeDurableJob(job.id);
       } catch (error) {
@@ -2631,6 +2609,7 @@ const runControlPlaneTick = async (): Promise<void> => {
     await queueDueAssuranceJobs();
     await queueDueDiscoveryEnrichmentJobs();
     await queueDueMissionAutonomyJobs();
+    queueApprovedPlaybookRuns();
 
     const latestPeriodicAgentWake = stateStore.getLatestAgentRunByWakeReason("periodic_review");
     const agentWakeQueueBusy = stateStore.hasDurableJobsInFlight([AGENT_WAKE_JOB_KIND]);

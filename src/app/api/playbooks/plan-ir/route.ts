@@ -9,6 +9,7 @@ import { stateStore } from "@/lib/state/store";
 import { evaluatePolicy } from "@/lib/policy/engine";
 import { buildPlaybookRun, countRecentFamilyFailures, isFamilyQuarantined } from "@/lib/playbooks/factory";
 import { createApproval } from "@/lib/approvals/queue";
+import { queuePlaybookExecution } from "@/lib/playbooks/orchestrator";
 import type { PlaybookDefinition } from "@/lib/state/types";
 
 const BodySchema = z.object({
@@ -129,6 +130,7 @@ export async function POST(request: NextRequest) {
     createApproval(run, device);
   } else {
     stateStore.upsertPlaybookRun(run);
+    queuePlaybookExecution(run, "auto");
   }
 
   await stateStore.addAction({

@@ -7,6 +7,8 @@
     |
     <a href="#screenshots"><strong>Screenshots</strong></a>
     |
+    <a href="#documentation"><strong>Documentation</strong></a>
+    |
     <a href="#what-this-repo-actually-ships"><strong>What This Repo Ships</strong></a>
     |
     <a href="#api-surface"><strong>API Surface</strong></a>
@@ -30,7 +32,21 @@ The current repo also includes a first-class autonomy layer:
 - a Telegram-first `gateway` for briefings, approvals, and operator presence
 - mission-thread chat sessions that bind Telegram threads, chat history, and mission ownership together
 
-> Status: this repository already implements a substantial control plane. The implementation checklist lives in [tasks.md](./tasks.md).
+Current release highlights:
+
+- DB-backed configuration with no product env-var drift
+- durable job control plane for monitoring, remediation, and notifications
+- graph projections with temporal node and edge history
+- time-series persistence for latency and assurance evidence
+- section-based live state streaming instead of full-state SSE snapshots
+
+## Documentation
+
+- [Architecture](./docs/architecture.md)
+- [Operator Guide](./docs/operator-guide.md)
+- [Security](./docs/security.md)
+- [API Guide](./docs/api.md)
+- [Packs SDK](./docs/packs-sdk.md)
 
 ## Screenshots
 <table>
@@ -286,7 +302,7 @@ Steward stores local data under `.steward/`:
 - `vault.enc.json`
 - `vault.key`
 
-Runtime and product settings are persisted in SQLite. Provider secrets and device credentials are stored in the encrypted vault. API access can be gated by a DB-backed auth token, and operator access can be managed through local users, OIDC, or LDAP.
+Runtime and product settings are persisted in SQLite. Provider metadata is DB-backed, while provider secrets and device credentials are stored in the encrypted vault. API access can be gated by a DB-backed auth token, and operator access can be managed through local users, OIDC, or LDAP.
 
 ## Notification MVP
 
@@ -392,7 +408,7 @@ If you are contributing:
 
 - Keep runtime and product configuration DB-backed
 - Prefer deterministic execution paths and auditable state transitions
-- Read [tasks.md](./tasks.md) before picking a major change
+- Update public docs when product behavior changes
 
 ## License
 

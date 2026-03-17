@@ -15,6 +15,7 @@ import {
   criticalityForActionClass,
   isFamilyQuarantined,
 } from "@/lib/playbooks/factory";
+import { queuePlaybookExecution } from "@/lib/playbooks/orchestrator";
 
 const TriggerSchema = z.object({
   playbookId: z.string().min(1),
@@ -100,6 +101,7 @@ export async function POST(request: NextRequest) {
     createApproval(run, device);
   } else {
     stateStore.upsertPlaybookRun(run);
+    queuePlaybookExecution(run, "auto");
   }
 
   return NextResponse.json(run, { status: 201 });
