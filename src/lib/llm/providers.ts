@@ -278,7 +278,7 @@ const buildOpenAICompatible = async (
  *     - Sets the real OAuth Bearer token
  *     - Adds `ChatGPT-Account-Id` header
  *     - Rewrites any /v1/responses or /chat/completions URL to CODEX_API_ENDPOINT
- *     - Refreshes the token when expired
+ *     - Refreshes the token when the backend rejects it
  *  3. Use the Responses API (sdk.responses or sdk(model))
  */
 const buildOpenAICodexOAuth = async (model: string): Promise<LanguageModelV3> => {
@@ -286,17 +286,51 @@ const buildOpenAICodexOAuth = async (model: string): Promise<LanguageModelV3> =>
 
   // Load all tokens from vault upfront
   let accessToken = await vault.getSecret(oauthTokenSecret);
+  let refreshToken = await vault.getSecret("llm.oauth.openai.refresh_token");
+  let accountId: string | undefined =
+    (await vault.getSecret("llm.oauth.openai.account_id")) ?? undefined;
+
+  const refreshStoredOpenAIAccessToken = async (): Promise<boolean> => {
+    if (!refreshToken) {
+      return false;
+    }
+
+    try {
+      const tokens = await refreshOpenAIToken(refreshToken);
+      accessToken = tokens.access_token;
+      if (tokens.refresh_token) {
+        refreshToken = tokens.refresh_token;
+      }
+
+      const nextExpiresAt = Date.now() + (tokens.expires_in ?? 3600) * 1000;
+      const newAccountId = extractChatGPTAccountId(tokens.access_token);
+      if (newAccountId) {
+        accountId = newAccountId;
+      }
+
+      vault.setSecret(oauthTokenSecret, accessToken).catch(() => {});
+      vault.setSecret("llm.oauth.openai.expires_at", String(nextExpiresAt)).catch(() => {});
+      if (tokens.refresh_token) {
+        vault.setSecret("llm.oauth.openai.refresh_token", tokens.refresh_token).catch(() => {});
+      }
+      if (newAccountId) {
+        vault.setSecret("llm.oauth.openai.account_id", newAccountId).catch(() => {});
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  if (!accessToken) {
+    await refreshStoredOpenAIAccessToken();
+  }
+
   if (!accessToken) {
     throw new Error(
       "OpenAI provider requires credentials. Add an API key or connect via OAuth in Settings.",
     );
   }
-
-  const refreshToken = await vault.getSecret("llm.oauth.openai.refresh_token");
-  let accountId: string | undefined =
-    (await vault.getSecret("llm.oauth.openai.account_id")) ?? undefined;
-  const expiresAtStr = await vault.getSecret("llm.oauth.openai.expires_at");
-  let expiresAt = expiresAtStr ? Number(expiresAtStr) : 0;
 
   // If we never stored an account ID, try to extract it from the JWT now
   if (!accountId) {
@@ -312,23 +346,14 @@ const buildOpenAICodexOAuth = async (model: string): Promise<LanguageModelV3> =>
     init?: RequestInit,
   ): Promise<Response> => {
     // ── Token refresh (same as oneshot codex.ts) ──────────────────────
-    if (refreshToken && expiresAt > 0 && Date.now() >= expiresAt) {
-      try {
-        const tokens = await refreshOpenAIToken(refreshToken);
-        accessToken = tokens.access_token;
-        expiresAt = Date.now() + (tokens.expires_in ?? 3600) * 1000;
+    if (!accessToken) {
+      await refreshStoredOpenAIAccessToken();
+    }
 
-        const newAccountId = extractChatGPTAccountId(tokens.access_token);
-        if (newAccountId) accountId = newAccountId;
-
-        vault.setSecret(oauthTokenSecret, accessToken).catch(() => {});
-        vault.setSecret("llm.oauth.openai.expires_at", String(expiresAt)).catch(() => {});
-        if (newAccountId) {
-          vault.setSecret("llm.oauth.openai.account_id", newAccountId).catch(() => {});
-        }
-      } catch {
-        // Use existing token
-      }
+    if (!accessToken) {
+      throw new Error(
+        "OpenAI provider requires credentials. Add an API key or connect via OAuth in Settings.",
+      );
     }
 
     // ── Strip dummy Authorization header set by SDK ───────────────────
@@ -350,7 +375,6 @@ const buildOpenAICodexOAuth = async (model: string): Promise<LanguageModelV3> =>
     headers.delete("Authorization");
 
     // ── Set real OAuth Bearer token ───────────────────────────────────
-    headers.set("Authorization", `Bearer ${accessToken}`);
     headers.set("originator", "steward");
     headers.set("user-agent", "steward/0.1.0");
     if (!headers.get("session_id")) {
@@ -386,7 +410,16 @@ const buildOpenAICodexOAuth = async (model: string): Promise<LanguageModelV3> =>
       upgradedToStream = translated.upgradedToStream;
     }
 
-    const response = await globalThis.fetch(targetUrl, { ...init, headers, body });
+    const performFetch = async (token: string): Promise<Response> => {
+      headers.set("Authorization", `Bearer ${token}`);
+      return globalThis.fetch(targetUrl, { ...init, headers, body });
+    };
+
+    let response = await performFetch(accessToken);
+
+    if (response.status === 401 && await refreshStoredOpenAIAccessToken() && accessToken) {
+      response = await performFetch(accessToken);
+    }
 
     if (!upgradedToStream || !response.ok || targetUrl.toString() !== CODEX_API_ENDPOINT) {
       return response;

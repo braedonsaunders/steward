@@ -2,11 +2,18 @@ import Database from "better-sqlite3";
 import path from "node:path";
 import { existsSync, mkdirSync, renameSync } from "node:fs";
 
-const STANDALONE_PATH_SEGMENT = `${path.sep}.next${path.sep}standalone`;
-const STAGED_RUNTIME_BUILD_SEGMENT = `${path.sep}build${path.sep}`;
+type PathModule = Pick<typeof path.posix, "join" | "resolve" | "sep">;
 
-function resolveRepoRootFromStandaloneCwd(cwd: string): string | null {
-  const standaloneIdx = cwd.lastIndexOf(STANDALONE_PATH_SEGMENT);
+function selectPathModule(cwdInput: string): PathModule {
+  if (/^[A-Za-z]:[\\/]/.test(cwdInput) || cwdInput.startsWith("\\\\")) {
+    return path.win32;
+  }
+  return path.posix;
+}
+
+function resolveRepoRootFromStandaloneCwd(cwd: string, pathModule: PathModule): string | null {
+  const standalonePathSegment = `${pathModule.sep}.next${pathModule.sep}standalone`;
+  const standaloneIdx = cwd.lastIndexOf(standalonePathSegment);
 
   if (standaloneIdx === -1) {
     return null;
@@ -16,14 +23,15 @@ function resolveRepoRootFromStandaloneCwd(cwd: string): string | null {
   return repoRoot || null;
 }
 
-function resolveRepoRootFromStagedRuntimeCwd(cwd: string): string | null {
-  const buildIdx = cwd.lastIndexOf(STAGED_RUNTIME_BUILD_SEGMENT);
+function resolveRepoRootFromStagedRuntimeCwd(cwd: string, pathModule: PathModule): string | null {
+  const stagedRuntimeBuildSegment = `${pathModule.sep}build${pathModule.sep}`;
+  const buildIdx = cwd.lastIndexOf(stagedRuntimeBuildSegment);
   if (buildIdx === -1) {
     return null;
   }
 
-  const runtimeTail = cwd.slice(buildIdx + STAGED_RUNTIME_BUILD_SEGMENT.length);
-  const [runtimeSegment] = runtimeTail.split(path.sep);
+  const runtimeTail = cwd.slice(buildIdx + stagedRuntimeBuildSegment.length);
+  const [runtimeSegment] = runtimeTail.split(pathModule.sep);
   if (!runtimeSegment?.startsWith("standalone-runtime-")) {
     return null;
   }
@@ -33,15 +41,16 @@ function resolveRepoRootFromStagedRuntimeCwd(cwd: string): string | null {
 }
 
 export function resolveDataDirForCwd(cwdInput: string): string {
-  const cwd = path.resolve(cwdInput);
-  const repoRoot = resolveRepoRootFromStandaloneCwd(cwd)
-    ?? resolveRepoRootFromStagedRuntimeCwd(cwd);
+  const pathModule = selectPathModule(cwdInput);
+  const cwd = pathModule.resolve(cwdInput);
+  const repoRoot = resolveRepoRootFromStandaloneCwd(cwd, pathModule)
+    ?? resolveRepoRootFromStagedRuntimeCwd(cwd, pathModule);
 
   if (repoRoot) {
-    return path.join(repoRoot, ".steward");
+    return pathModule.join(repoRoot, ".steward");
   }
 
-  return path.join(cwd, ".steward");
+  return pathModule.join(cwd, ".steward");
 }
 
 const DATA_DIR = resolveDataDirForCwd(process.cwd());
