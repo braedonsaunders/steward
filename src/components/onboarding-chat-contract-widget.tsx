@@ -39,6 +39,7 @@ interface AdoptionSnapshot {
 interface ProposalPayload {
   synthesis: OnboardingSynthesis | null;
   source: "generated" | "stored" | "none";
+  warning?: string;
 }
 
 interface ResponsibilityRow {
@@ -156,6 +157,50 @@ function buildAssuranceRows(
   }));
 }
 
+export function buildDraftBackedSynthesis(
+  draft: OnboardingDraft | null | undefined,
+): OnboardingSynthesis | null {
+  if (!draft) {
+    return null;
+  }
+
+  const hasProposalContent = draft.workloads.length > 0
+    || draft.assurances.length > 0
+    || draft.summary.trim().length > 0;
+  if (!hasProposalContent) {
+    return null;
+  }
+
+  const responsibilities = draft.workloads.map((workload, idx) => ({
+    id: `draft_workload_${idx + 1}`,
+    displayName: workload.displayName,
+    workloadKey: workload.workloadKey,
+    category: workload.category ?? "unknown",
+    criticality: workload.criticality,
+    summary: workload.summary ?? "Imported from the current onboarding draft.",
+  }));
+  const assurances = draft.assurances.map((assurance, idx) => ({
+    id: `draft_assurance_${idx + 1}`,
+    displayName: assurance.displayName,
+    assuranceKey: assurance.assuranceKey,
+    serviceKey: assurance.workloadKey ?? assurance.assuranceKey,
+    criticality: assurance.criticality,
+    checkIntervalSec: assurance.checkIntervalSec,
+    requiredProtocols: assurance.requiredProtocols ?? [],
+    monitorType: assurance.monitorType ?? "health_check",
+    rationale: assurance.rationale ?? "Imported from the current onboarding draft.",
+  }));
+
+  return {
+    summary: draft.summary.trim() || "Imported from the current onboarding draft.",
+    responsibilities,
+    credentialRequests: draft.credentialRequests,
+    assurances,
+    contracts: assurances,
+    nextActions: draft.nextActions,
+  };
+}
+
 export function OnboardingChatContractWidget({
   deviceId,
   active = true,
@@ -186,15 +231,29 @@ export function OnboardingChatContractWidget({
     }
     try {
       const proposalSuffix = options?.refreshProposal ? "?refresh=1" : "";
-      const [nextSnapshot, proposal] = await Promise.all([
-        fetchClientJson<AdoptionSnapshot>(`/api/devices/${deviceId}/adoption`),
-        fetchClientJson<ProposalPayload>(`/api/devices/${deviceId}/onboarding/proposal${proposalSuffix}`),
-      ]);
+      const nextSnapshot = await fetchClientJson<AdoptionSnapshot>(`/api/devices/${deviceId}/adoption`);
+      let proposal: ProposalPayload | null = null;
+      let proposalError: Error | null = null;
+      try {
+        proposal = await fetchClientJson<ProposalPayload>(`/api/devices/${deviceId}/onboarding/proposal${proposalSuffix}`);
+      } catch (nextError) {
+        proposalError = nextError instanceof Error
+          ? nextError
+          : new Error("Failed to load onboarding proposal");
+      }
+
+      const nextSynthesis = proposal?.synthesis ?? buildDraftBackedSynthesis(nextSnapshot.draft);
       setSnapshot(nextSnapshot);
-      setSynthesis(proposal.synthesis);
-      const nextResponsibilities = buildResponsibilityRows(proposal.synthesis);
+      setSynthesis(nextSynthesis);
+      const nextResponsibilities = buildResponsibilityRows(nextSynthesis);
       setResponsibilities(nextResponsibilities);
-      setAssurances(buildAssuranceRows(proposal.synthesis, nextResponsibilities));
+      setAssurances(buildAssuranceRows(nextSynthesis, nextResponsibilities));
+      if (proposal?.warning) {
+        setStatusMessage(proposal.warning);
+      }
+      if (proposalError && !nextSynthesis) {
+        throw proposalError;
+      }
       setError(null);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Failed to load onboarding proposal");
@@ -211,11 +270,13 @@ export function OnboardingChatContractWidget({
     setAssurances([]);
     setError(null);
     setStatusMessage(null);
-    lastProposalRefreshIdRef.current = undefined;
     if (active) {
-      void load();
+      lastProposalRefreshIdRef.current = lastAssistantMessageId;
+      void load({ refreshProposal: true });
+    } else {
+      lastProposalRefreshIdRef.current = undefined;
     }
-  }, [active, deviceId, load]);
+  }, [active, deviceId, lastAssistantMessageId, load]);
 
   useEffect(() => {
     if (!active || !lastAssistantMessageId) {

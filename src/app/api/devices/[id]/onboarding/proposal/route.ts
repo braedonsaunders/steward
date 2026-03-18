@@ -75,9 +75,19 @@ export async function GET(
       { status: 400 },
     );
   }
-  const synthesis = await synthesizeOnboardingModel(device, session.id);
-  await saveSynthesis(id, synthesis);
-  return NextResponse.json({ synthesis, source: "generated" });
+  try {
+    const synthesis = await synthesizeOnboardingModel(device, session.id);
+    await saveSynthesis(id, synthesis);
+    return NextResponse.json({ synthesis, source: "generated" });
+  } catch (error) {
+    const stored = getStoredSynthesis(id);
+    const warning = error instanceof Error ? error.message : String(error);
+    return NextResponse.json({
+      synthesis: stored,
+      source: stored ? "stored" : "none",
+      warning,
+    });
+  }
 }
 
 export async function POST(

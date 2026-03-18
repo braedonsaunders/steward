@@ -70,10 +70,19 @@ export async function clearAnthropicOAuthTokens(): Promise<void> {
 export async function refreshStoredAnthropicAccessToken(
   refreshToken: string,
 ): Promise<AnthropicOAuthSession> {
-  const tokens = await refreshAnthropicToken(refreshToken);
-  return persistAnthropicOAuthTokens(tokens, {
-    fallbackRefreshToken: refreshToken,
-  });
+  try {
+    const tokens = await refreshAnthropicToken(refreshToken);
+    return persistAnthropicOAuthTokens(tokens, {
+      fallbackRefreshToken: refreshToken,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/invalid_grant/i.test(message)) {
+      await clearAnthropicOAuthTokens();
+      throw new Error(`Anthropic OAuth session refresh failed: ${message}. Stored Anthropic OAuth session was cleared; reconnect Anthropic in Settings.`);
+    }
+    throw new Error(`Anthropic OAuth session refresh failed: ${message}`);
+  }
 }
 
 export async function ensureFreshAnthropicOAuthSession(): Promise<AnthropicOAuthSession> {
@@ -85,12 +94,7 @@ export async function ensureFreshAnthropicOAuthSession(): Promise<AnthropicOAuth
     session.expiresAt > 0 &&
     Date.now() >= session.expiresAt
   ) {
-    try {
-      return await refreshStoredAnthropicAccessToken(session.refreshToken);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`Anthropic OAuth session refresh failed: ${message}`);
-    }
+    return refreshStoredAnthropicAccessToken(session.refreshToken);
   }
 
   return session;

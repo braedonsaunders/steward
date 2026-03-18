@@ -122,7 +122,23 @@ describe("anthropic oauth session helpers", () => {
     );
 
     await expect(ensureFreshAnthropicOAuthSession()).rejects.toThrow(
-      "Anthropic OAuth session refresh failed: Anthropic token refresh failed (400): invalid_grant",
+      "Anthropic OAuth session refresh failed: Anthropic token refresh failed (400): invalid_grant. Stored Anthropic OAuth session was cleared; reconnect Anthropic in Settings.",
     );
+    expect(mocks.deleteSecret).toHaveBeenCalledWith("llm.oauth.anthropic.access_token");
+    expect(mocks.deleteSecret).toHaveBeenCalledWith("llm.oauth.anthropic.refresh_token");
+    expect(mocks.deleteSecret).toHaveBeenCalledWith("llm.oauth.anthropic.expires_at");
+  });
+
+  it("clears the stored Anthropic OAuth session when a direct refresh returns invalid_grant", async () => {
+    mocks.refreshAnthropicToken.mockRejectedValue(
+      new Error("Anthropic token refresh failed (400): invalid_grant"),
+    );
+
+    await expect(refreshStoredAnthropicAccessToken("refresh-token")).rejects.toThrow(
+      "Anthropic OAuth session refresh failed: Anthropic token refresh failed (400): invalid_grant. Stored Anthropic OAuth session was cleared; reconnect Anthropic in Settings.",
+    );
+    expect(mocks.deleteSecret).toHaveBeenCalledWith("llm.oauth.anthropic.access_token");
+    expect(mocks.deleteSecret).toHaveBeenCalledWith("llm.oauth.anthropic.refresh_token");
+    expect(mocks.deleteSecret).toHaveBeenCalledWith("llm.oauth.anthropic.expires_at");
   });
 });

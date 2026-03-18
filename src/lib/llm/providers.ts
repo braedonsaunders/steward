@@ -16,7 +16,7 @@ import {
   refreshOpenAIToken,
 } from "@/lib/auth/oauth";
 import {
-  ensureFreshAnthropicOAuthSession,
+  loadAnthropicOAuthSession,
   refreshStoredAnthropicAccessToken,
 } from "@/lib/llm/anthropic-oauth";
 import { getProviderConfig } from "@/lib/llm/config";
@@ -566,9 +566,12 @@ async function rewriteAnthropicOAuthStream(response: Response): Promise<Response
 }
 
 const buildAnthropicOAuth = async (model: string): Promise<LanguageModelV3> => {
-  const session = await ensureFreshAnthropicOAuthSession();
+  const session = await loadAnthropicOAuthSession();
   let accessToken = session.accessToken;
-  let expiresAt = session.expiresAt;
+  if (!accessToken && session.refreshToken) {
+    const refreshed = await refreshStoredAnthropicAccessToken(session.refreshToken);
+    accessToken = refreshed.accessToken;
+  }
   if (!accessToken) {
     throw new Error(
       "Anthropic provider requires credentials. Add an API key or connect via OAuth in Settings.",
@@ -582,11 +585,10 @@ const buildAnthropicOAuth = async (model: string): Promise<LanguageModelV3> => {
     requestInput: RequestInfo | URL,
     init?: RequestInit,
   ): Promise<Response> => {
-    if ((!accessToken || (expiresAt > 0 && expiresAt < Date.now())) && refreshToken) {
+    if (!accessToken && refreshToken) {
       const refreshed = await refreshStoredAnthropicAccessToken(refreshToken);
       accessToken = refreshed.accessToken;
       refreshToken = refreshed.refreshToken;
-      expiresAt = refreshed.expiresAt;
     }
 
     if (!accessToken) {
@@ -662,11 +664,27 @@ const buildAnthropicOAuth = async (model: string): Promise<LanguageModelV3> => {
         : requestUrl;
     }
 
-    const response = await globalThis.fetch(finalInput, {
-      ...requestInit,
-      body: rewriteAnthropicOAuthBody(requestInit.body),
-      headers: requestHeaders,
-    });
+    const rewrittenBody = rewriteAnthropicOAuthBody(requestInit.body);
+
+    const performFetch = async (token: string): Promise<Response> => {
+      requestHeaders.set("authorization", `Bearer ${token}`);
+      return globalThis.fetch(finalInput, {
+        ...requestInit,
+        body: rewrittenBody,
+        headers: requestHeaders,
+      });
+    };
+
+    let response = await performFetch(accessToken);
+
+    if (response.status === 401 && refreshToken) {
+      const refreshed = await refreshStoredAnthropicAccessToken(refreshToken);
+      accessToken = refreshed.accessToken;
+      refreshToken = refreshed.refreshToken;
+      if (accessToken) {
+        response = await performFetch(accessToken);
+      }
+    }
 
     return rewriteAnthropicOAuthStream(response);
   };

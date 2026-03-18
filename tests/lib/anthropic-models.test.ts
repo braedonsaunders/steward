@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
   getProviderConfig: vi.fn(),
   getProviderMeta: vi.fn(),
   getSecret: vi.fn(),
-  ensureFreshAnthropicOAuthSession: vi.fn(),
+  loadAnthropicOAuthSession: vi.fn(),
   refreshStoredAnthropicAccessToken: vi.fn(),
 }));
 
@@ -23,7 +23,7 @@ vi.mock("@/lib/security/vault", () => ({
 }));
 
 vi.mock("@/lib/llm/anthropic-oauth", () => ({
-  ensureFreshAnthropicOAuthSession: mocks.ensureFreshAnthropicOAuthSession,
+  loadAnthropicOAuthSession: mocks.loadAnthropicOAuthSession,
   refreshStoredAnthropicAccessToken: mocks.refreshStoredAnthropicAccessToken,
 }));
 
@@ -41,7 +41,7 @@ describe("anthropic model listing", () => {
       defaultBaseUrl: "https://api.anthropic.com/v1",
     });
     mocks.getSecret.mockResolvedValue(undefined);
-    mocks.ensureFreshAnthropicOAuthSession.mockResolvedValue({
+    mocks.loadAnthropicOAuthSession.mockResolvedValue({
       accessToken: undefined,
       refreshToken: undefined,
       expiresAt: 0,
@@ -103,7 +103,7 @@ describe("anthropic model listing", () => {
       }
       return undefined;
     });
-    mocks.ensureFreshAnthropicOAuthSession.mockResolvedValue({
+    mocks.loadAnthropicOAuthSession.mockResolvedValue({
       accessToken: "oauth-session-token",
       refreshToken: "refresh-token",
       expiresAt: Date.now() + 60_000,
@@ -123,7 +123,39 @@ describe("anthropic model listing", () => {
         }),
       }),
     );
-    expect(mocks.ensureFreshAnthropicOAuthSession).not.toHaveBeenCalled();
+    expect(mocks.loadAnthropicOAuthSession).not.toHaveBeenCalled();
+  });
+
+  it("uses the stored Anthropic OAuth access token before refreshing on local expiry metadata", async () => {
+    const fetchMock = vi.mocked(global.fetch);
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ data: [{ id: "claude-opus-4-6" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    mocks.loadAnthropicOAuthSession.mockResolvedValue({
+      accessToken: "stored-access-token",
+      refreshToken: "refresh-token",
+      expiresAt: Date.now() - 60_000,
+    });
+
+    const models = await listProviderModelsFromApi("anthropic", {
+      forceRefresh: true,
+    });
+
+    expect(models).toEqual(["claude-opus-4-6"]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.anthropic.com/v1/models",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          authorization: "Bearer stored-access-token",
+          "anthropic-beta": "oauth-2025-04-20",
+          "anthropic-version": "2023-06-01",
+        }),
+      }),
+    );
+    expect(mocks.refreshStoredAnthropicAccessToken).not.toHaveBeenCalled();
   });
 
   it("falls back to the newest callable Anthropic model when the preferred model returns a 400", async () => {

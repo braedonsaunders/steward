@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { getProviderConfig } from "@/lib/llm/config";
 import {
   type AnthropicOAuthSession,
-  ensureFreshAnthropicOAuthSession,
+  loadAnthropicOAuthSession,
   refreshStoredAnthropicAccessToken,
 } from "@/lib/llm/anthropic-oauth";
 import { listOpenAIOAuthModels } from "@/lib/llm/openai-oauth-models";
@@ -249,8 +249,12 @@ async function fetchAnthropicModels(options?: {
   }
 
   if (!apiKey && !oauthToken) {
-    oauthSession = await ensureFreshAnthropicOAuthSession();
+    oauthSession = await loadAnthropicOAuthSession();
     oauthToken = oauthSession.accessToken;
+    if (!oauthToken && oauthSession.refreshToken) {
+      oauthSession = await refreshStoredAnthropicAccessToken(oauthSession.refreshToken);
+      oauthToken = oauthSession.accessToken;
+    }
   }
 
   if (!apiKey && !oauthToken) {
@@ -349,9 +353,15 @@ export async function resolveCallableAnthropicOAuthModel(
   const normalizedPreferred = normalizeProviderModel("anthropic", preferredModel) ?? preferredModel?.trim();
   const session = options?.oauthTokenOverride
     ? { accessToken: options.oauthTokenOverride, refreshToken: undefined, expiresAt: 0 }
-    : await ensureFreshAnthropicOAuthSession();
+    : await loadAnthropicOAuthSession();
   let accessToken = session.accessToken;
   let refreshToken = session.refreshToken;
+
+  if (!accessToken && refreshToken && !options?.oauthTokenOverride) {
+    const refreshed = await refreshStoredAnthropicAccessToken(refreshToken);
+    accessToken = refreshed.accessToken;
+    refreshToken = refreshed.refreshToken;
+  }
 
   if (!accessToken) {
     throw new Error("Anthropic OAuth credentials are required to validate callable models.");
@@ -401,7 +411,9 @@ export async function resolveCallableAnthropicOAuthModel(
 
   const availableModels = options?.models
     ? uniqueStable(options.models.map((model) => normalizeProviderModel("anthropic", model) ?? model))
-    : await fetchAnthropicModels({ oauthTokenOverride: accessToken });
+    : options?.oauthTokenOverride
+      ? await fetchAnthropicModels({ oauthTokenOverride: accessToken })
+      : await fetchAnthropicModels();
   const fallbackCandidates = sortAnthropicFallbackModels(
     availableModels.filter((model) => model !== normalizedPreferred),
   );

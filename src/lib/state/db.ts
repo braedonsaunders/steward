@@ -3,24 +3,48 @@ import path from "node:path";
 import { existsSync, mkdirSync, renameSync } from "node:fs";
 
 const STANDALONE_PATH_SEGMENT = `${path.sep}.next${path.sep}standalone`;
+const STAGED_RUNTIME_BUILD_SEGMENT = `${path.sep}build${path.sep}`;
 
-function resolveDataDir(): string {
-  const cwd = path.resolve(process.cwd());
+function resolveRepoRootFromStandaloneCwd(cwd: string): string | null {
   const standaloneIdx = cwd.lastIndexOf(STANDALONE_PATH_SEGMENT);
 
   if (standaloneIdx === -1) {
-    return path.join(cwd, ".steward");
+    return null;
   }
 
   const repoRoot = cwd.slice(0, standaloneIdx);
-  if (!repoRoot) {
-    return path.join(cwd, ".steward");
-  }
-
-  return path.join(repoRoot, ".steward");
+  return repoRoot || null;
 }
 
-const DATA_DIR = resolveDataDir();
+function resolveRepoRootFromStagedRuntimeCwd(cwd: string): string | null {
+  const buildIdx = cwd.lastIndexOf(STAGED_RUNTIME_BUILD_SEGMENT);
+  if (buildIdx === -1) {
+    return null;
+  }
+
+  const runtimeTail = cwd.slice(buildIdx + STAGED_RUNTIME_BUILD_SEGMENT.length);
+  const [runtimeSegment] = runtimeTail.split(path.sep);
+  if (!runtimeSegment?.startsWith("standalone-runtime-")) {
+    return null;
+  }
+
+  const repoRoot = cwd.slice(0, buildIdx);
+  return repoRoot || null;
+}
+
+export function resolveDataDirForCwd(cwdInput: string): string {
+  const cwd = path.resolve(cwdInput);
+  const repoRoot = resolveRepoRootFromStandaloneCwd(cwd)
+    ?? resolveRepoRootFromStagedRuntimeCwd(cwd);
+
+  if (repoRoot) {
+    return path.join(repoRoot, ".steward");
+  }
+
+  return path.join(cwd, ".steward");
+}
+
+const DATA_DIR = resolveDataDirForCwd(process.cwd());
 const STATE_DB_PATH = path.join(DATA_DIR, "steward_state.db");
 const AUDIT_DB_PATH = path.join(DATA_DIR, "steward_audit.db");
 const CORRUPT_ARCHIVE_DIR = path.join(DATA_DIR, "corrupt-db");

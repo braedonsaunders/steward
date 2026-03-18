@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 
@@ -58,6 +58,61 @@ function replaceDirectory(fromPath, toPath) {
   cpSync(fromPath, toPath, { recursive: true });
 }
 
+function latestMtimeMs(targetPath) {
+  if (!existsSync(targetPath)) {
+    return 0;
+  }
+
+  let latest = 0;
+  const stat = statSync(targetPath);
+  latest = Math.max(latest, stat.mtimeMs);
+
+  if (!stat.isDirectory()) {
+    return latest;
+  }
+
+  for (const entry of readdirSync(targetPath, { withFileTypes: true })) {
+    const candidatePath = path.resolve(targetPath, entry.name);
+    latest = Math.max(latest, latestMtimeMs(candidatePath));
+  }
+
+  return latest;
+}
+
+function syncLatestRuntimeStateToRepo(buildRootDir, repoDataDir) {
+  if (!existsSync(buildRootDir)) {
+    return;
+  }
+
+  let newestRuntimeStateDir = null;
+  let newestRuntimeMtime = 0;
+
+  for (const entry of readdirSync(buildRootDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith("standalone-runtime-")) {
+      continue;
+    }
+
+    const candidateStateDir = path.resolve(buildRootDir, entry.name, ".steward");
+    const candidateMtime = latestMtimeMs(candidateStateDir);
+    if (candidateMtime > newestRuntimeMtime) {
+      newestRuntimeMtime = candidateMtime;
+      newestRuntimeStateDir = candidateStateDir;
+    }
+  }
+
+  if (!newestRuntimeStateDir || newestRuntimeMtime === 0) {
+    return;
+  }
+
+  const repoStateMtime = latestMtimeMs(repoDataDir);
+  if (repoStateMtime >= newestRuntimeMtime) {
+    return;
+  }
+
+  mkdirSync(repoDataDir, { recursive: true });
+  cpSync(newestRuntimeStateDir, repoDataDir, { recursive: true, force: true });
+}
+
 function cleanupOldRuntimeDirectories(buildRootDir, currentRuntimeDir) {
   if (!existsSync(buildRootDir)) {
     return;
@@ -88,7 +143,9 @@ function cleanupOldRuntimeDirectories(buildRootDir, currentRuntimeDir) {
 function stageStandaloneRuntime() {
   const builtStandaloneDir = path.resolve(".next/standalone");
   const buildRootDir = path.resolve("build");
+  const repoDataDir = path.resolve(".steward");
   mkdirSync(buildRootDir, { recursive: true });
+  syncLatestRuntimeStateToRepo(buildRootDir, repoDataDir);
 
   const runtimeDir = path.resolve(buildRootDir, `standalone-runtime-${Date.now()}-${process.pid}`);
   cpSync(builtStandaloneDir, runtimeDir, { recursive: true });
