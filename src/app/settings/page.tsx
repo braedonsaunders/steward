@@ -206,7 +206,7 @@ function OpenAIOAuthSection({
   disabledReason?: string;
   initialConnected?: boolean;
   onDisconnect?: () => Promise<void>;
-  onConnected?: () => Promise<void>;
+  onConnected?: (message?: string) => Promise<void>;
 }) {
   const [status, setStatus] = useState<"idle" | "waiting" | "complete" | "error" | "disconnecting">(
     initialConnected ? "complete" : "idle",
@@ -347,6 +347,8 @@ function OpenAIOAuthSection({
 // Anthropic OAuth (code-paste flow)
 // ---------------------------------------------------------------------------
 
+type AnthropicConnectMode = "max" | "console";
+
 function AnthropicOAuthSection({
   disabled = false,
   disabledReason,
@@ -358,28 +360,36 @@ function AnthropicOAuthSection({
   disabledReason?: string;
   initialConnected?: boolean;
   onDisconnect?: () => Promise<void>;
-  onConnected?: () => Promise<void>;
+  onConnected?: (message?: string) => Promise<void>;
 }) {
   const [phase, setPhase] = useState<"idle" | "waiting" | "exchanging" | "complete" | "error" | "disconnecting">(
     initialConnected ? "complete" : "idle",
   );
 
   const [pastedCode, setPastedCode] = useState("");
+  const [pendingMode, setPendingMode] = useState<AnthropicConnectMode>("max");
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const effectivePhase = phase === "idle" && initialConnected ? "complete" : phase;
 
-  const startFlow = useCallback(async () => {
+  const startFlow = useCallback(async (mode: AnthropicConnectMode) => {
     if (disabled) {
       setPhase("error");
       setError(disabledReason ?? "Vault must be initialized and unlocked first.");
       return;
     }
 
+    setPendingMode(mode);
     setPhase("waiting");
     setError(null);
+    setNotice(null);
 
     try {
-      const res = await fetch("/api/providers/oauth/anthropic/start", withClientApiToken({ method: "POST" }));
+      const res = await fetch("/api/providers/oauth/anthropic/start", withClientApiToken({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mode }),
+      }));
       const data = (await res.json()) as { url?: string; error?: string };
 
       if (!res.ok || !data.url) {
@@ -404,6 +414,7 @@ function AnthropicOAuthSection({
     }
     setPhase("exchanging");
     setError(null);
+    setNotice(null);
 
     try {
       const res = await fetch("/api/providers/oauth/anthropic/exchange", withClientApiToken({
@@ -411,7 +422,11 @@ function AnthropicOAuthSection({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ code: pastedCode.trim() }),
       }));
-      const data = (await res.json()) as { ok?: boolean; error?: string };
+      const data = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        credentialMode?: "api-key" | "oauth-session";
+      };
 
       if (!res.ok || !data.ok) {
         setPhase("error");
@@ -419,9 +434,13 @@ function AnthropicOAuthSection({
         return;
       }
 
+      const successMessage = data.credentialMode === "api-key"
+        ? "Anthropic connected. Steward stored the API key created from Anthropic Console."
+        : "Anthropic connected via Claude Pro/Max OAuth.";
       setPhase("complete");
       setPastedCode("");
-      await onConnected?.();
+      setNotice(successMessage);
+      await onConnected?.(successMessage);
     } catch (err) {
       setPhase("error");
       setError(err instanceof Error ? err.message : "Code exchange failed");
@@ -431,6 +450,8 @@ function AnthropicOAuthSection({
   const handleDisconnect = useCallback(async () => {
     setPhase("disconnecting");
     setError(null);
+    setNotice(null);
+    setPendingMode("max");
     try {
       if (onDisconnect) await onDisconnect();
       setPhase("idle");
@@ -444,9 +465,9 @@ function AnthropicOAuthSection({
     <div className="space-y-3">
       <div className="flex items-center justify-between rounded-lg border bg-background/50 px-4 py-3">
         <div>
-          <p className="text-sm font-medium">OAuth (Claude Account)</p>
+          <p className="text-sm font-medium">Anthropic Browser Sign-In</p>
           <p className="text-xs text-muted-foreground">
-            Create an API key via your Anthropic account
+            Choose Claude Pro/Max for session-backed access, or Create an API Key to mint a durable Anthropic key.
           </p>
         </div>
         {effectivePhase === "disconnecting" ? (
@@ -458,7 +479,7 @@ function AnthropicOAuthSection({
           <div className="flex items-center gap-2">
             <Badge variant="default" className="text-xs">
               <CheckCircle2 className="mr-1 h-3 w-3" />
-              Key Created
+              Connected
             </Badge>
             <Button
               variant="ghost"
@@ -471,23 +492,37 @@ function AnthropicOAuthSection({
             </Button>
           </div>
         ) : effectivePhase !== "waiting" && effectivePhase !== "exchanging" ? (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void startFlow()}
-            disabled={disabled}
-            title={disabled ? disabledReason : undefined}
-          >
-            <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
-            Connect
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void startFlow("max")}
+              disabled={disabled}
+              title={disabled ? disabledReason : undefined}
+            >
+              <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
+              Claude Pro/Max
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void startFlow("console")}
+              disabled={disabled}
+              title={disabled ? disabledReason : undefined}
+            >
+              <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
+              Create API Key
+            </Button>
+          </div>
         ) : null}
       </div>
 
       {(effectivePhase === "waiting" || effectivePhase === "exchanging") && (
         <div className="space-y-2 rounded-lg border border-dashed bg-muted/30 px-4 py-3">
           <p className="text-xs text-muted-foreground">
-            Paste the authorization code from the Anthropic page:
+            {pendingMode === "console"
+              ? "Paste the authorization code from Anthropic Console:"
+              : "Paste the authorization code from the Claude Pro/Max page:"}
           </p>
           <div className="flex gap-2">
             <Input
@@ -510,6 +545,12 @@ function AnthropicOAuthSection({
             </Button>
           </div>
         </div>
+      )}
+
+      {notice && effectivePhase === "complete" && (
+        <Alert>
+          <AlertDescription className="text-xs">{notice}</AlertDescription>
+        </Alert>
       )}
 
       {effectivePhase === "error" && error && (
@@ -814,9 +855,14 @@ function ProvidersSection() {
     [refresh, refreshCredentialStatus],
   );
 
-  const handleConnected = useCallback(async () => {
+  const handleConnected = useCallback(async (message?: string) => {
     await refreshCredentialStatus();
     await refresh();
+    if (message) {
+      setFeedback({ type: "ok", message });
+    } else {
+      setFeedback(null);
+    }
   }, [refresh, refreshCredentialStatus]);
 
   const showBaseUrl = selectedMeta?.openaiCompatible || selectedMeta?.category === "local";

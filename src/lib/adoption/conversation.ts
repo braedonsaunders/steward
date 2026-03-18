@@ -5,7 +5,13 @@ import { getDefaultProvider } from "@/lib/llm/config";
 import { buildLanguageModel } from "@/lib/llm/providers";
 import { normalizeCredentialProtocol } from "@/lib/protocols/catalog";
 import { stateStore } from "@/lib/state/store";
-import type { ChatMessage, ChatSession, Device, DiscoveryObservation } from "@/lib/state/types";
+import type {
+  ChatMessage,
+  ChatSession,
+  Device,
+  DiscoveryObservation,
+  WorkloadCategory,
+} from "@/lib/state/types";
 
 export const ONBOARDING_TITLE_PREFIX = "[Onboarding]";
 
@@ -21,11 +27,20 @@ export interface OnboardingAssuranceProposal {
   rationale: string;
 }
 
+export interface OnboardingResponsibilityProposal {
+  id: string;
+  workloadKey: string;
+  displayName: string;
+  category: WorkloadCategory;
+  criticality: "low" | "medium" | "high";
+  summary: string;
+}
+
 export type OnboardingContractProposal = OnboardingAssuranceProposal;
 
 export interface OnboardingSynthesis {
   summary: string;
-  responsibilities: string[];
+  responsibilities: OnboardingResponsibilityProposal[];
   credentialRequests: Array<{ protocol: string; reason: string; priority: "high" | "medium" | "low" }>;
   assurances: OnboardingAssuranceProposal[];
   contracts: OnboardingAssuranceProposal[];
@@ -66,6 +81,23 @@ function toStringArray(value: unknown, limit = 12): string[] {
     .map((item) => (typeof item === "string" ? item.trim() : ""))
     .filter((item) => item.length > 0)
     .slice(0, limit);
+}
+
+function normalizeWorkloadCategory(value: unknown): WorkloadCategory {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  switch (normalized) {
+    case "application":
+    case "platform":
+    case "data":
+    case "network":
+    case "perimeter":
+    case "storage":
+    case "telemetry":
+    case "background":
+      return normalized as WorkloadCategory;
+    default:
+      return "unknown";
+  }
 }
 
 function credentialStatusRank(status: string): number {
@@ -115,6 +147,34 @@ function summarizeCredentialsForPrompt(deviceId: string): Array<Record<string, u
     .sort((a, b) => String(a.protocol).localeCompare(String(b.protocol)));
 }
 
+function normalizeResponsibilityProposal(raw: Record<string, unknown>, idx: number): OnboardingResponsibilityProposal | null {
+  const displayName = typeof raw.displayName === "string" && raw.displayName.trim().length > 0
+    ? raw.displayName.trim()
+    : typeof raw.name === "string" && raw.name.trim().length > 0
+      ? raw.name.trim()
+      : "";
+  if (!displayName) return null;
+
+  const workloadKey = typeof raw.workloadKey === "string" && raw.workloadKey.trim().length > 0
+    ? raw.workloadKey.trim()
+    : displayName.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  if (!workloadKey) return null;
+
+  const criticality = raw.criticality === "high" || raw.criticality === "low" ? raw.criticality : "medium";
+  const summary = typeof raw.summary === "string" && raw.summary.trim().length > 0
+    ? raw.summary.trim()
+    : "Proposed from onboarding evidence gathered during the conversation.";
+
+  return {
+    id: typeof raw.id === "string" && raw.id.trim().length > 0 ? raw.id.trim() : `${workloadKey}:${idx}`,
+    workloadKey,
+    displayName,
+    category: normalizeWorkloadCategory(raw.category),
+    criticality,
+    summary,
+  };
+}
+
 function normalizeProposal(raw: Record<string, unknown>, idx: number): OnboardingAssuranceProposal | null {
   const displayName = typeof raw.displayName === "string" ? raw.displayName.trim() : "";
   if (!displayName) return null;
@@ -139,7 +199,9 @@ function normalizeProposal(raw: Record<string, unknown>, idx: number): Onboardin
     id: typeof raw.id === "string" && raw.id.trim().length > 0 ? raw.id.trim() : `${assuranceKey}:${idx}`,
     displayName,
     assuranceKey,
-    serviceKey: assuranceKey,
+    serviceKey: typeof raw.serviceKey === "string" && raw.serviceKey.trim().length > 0
+      ? raw.serviceKey.trim()
+      : assuranceKey,
     criticality,
     checkIntervalSec,
     requiredProtocols,
@@ -539,6 +601,9 @@ export async function buildOnboardingSystemPrompt(device: Device): Promise<strin
     "3gaaa) Do not call WinRM 'blocked' when WSMan responds. Describe it as listener reachable but session startup or negotiation failed.",
     "3gaab) If a WinRM/WSMan error mentions 'local subnet' but Steward's interface evidence shows the target is on the same subnet, explicitly treat that text as generic Windows guidance rather than proof of a subnet mismatch.",
     "3gb) Treat manually entered credentials as trusted input. Describe transport failures as connection or protocol failures, not as proof that the stored secret is wrong.",
+    "3gb0) If the user says credentials are now saved or available in Steward, inspect the stored vault credentials first and try them before asking the user to repeat the username, password, or key details.",
+    "3gb0a) Never guess an SSH or WinRM username when a credential already exists in the vault for that protocol.",
+    "3gb0b) Never overwrite an existing stored credential unless the user explicitly provides replacement credential details or clearly asks Steward to replace the stored entry.",
     "3gb2) Do not claim credentials 'were never tested' when WinRM negotiation or remote session setup used them. Say only that Steward did not prove successful authentication or successful remote execution.",
     "3gb1) Never describe a transport or credential protocol named 'windows'. Valid Windows transports are winrm, powershell-ssh, wmi, smb, and rdp.",
     "3gc) For WinRM failures, avoid broad remediation like forcing a network profile change or opening firewall scope to Any unless evidence specifically supports it. Prefer FQDN/Kerberos, narrowly scoped firewall checks, and policy-aware guidance.",
@@ -557,11 +622,14 @@ export async function buildOnboardingSystemPrompt(device: Device): Promise<strin
     "3k) If no credible adapter exists yet, inspect existing packages with steward_list_adapters and steward_get_adapter_package, use steward_web_research for vendor facts, then create or extend a real adapter with steward_create_adapter_package, steward_update_adapter_package, or steward_add_adapter_tool.",
     "3ka) When using steward_list_adapters for an attached device, pass the device id so the result is device-scoped rather than a generic package inventory.",
     "4) Produce responsibility and assurance recommendations with rationale and monitoring approach when the user wants Steward to own ongoing outcomes.",
-    "5) Onboarding can wander, but it must eventually complete through the first-party tool steward_complete_onboarding.",
-    "6) Call steward_complete_onboarding once you have a credible adapter selection, accepted access methods, and any responsibilities or assurances Steward should own.",
-    "6a) If the user explicitly wants access-only onboarding with no committed responsibilities and no ongoing monitoring, complete onboarding with empty responsibilities and empty assurances instead of inventing placeholder responsibilities.",
-    "6b) Do not block completion on unknowns that only affect cosmetic naming or physical placement. Keep the name generic and record the uncertainty as a residual unknown instead.",
-    "6c) Tool-call arguments must be raw JSON objects. Never wrap tool arguments in quotes or pass stringified JSON.",
+    "5) Onboarding can wander, but it must eventually complete through Steward's first-party onboarding commit flow.",
+    "6) When you have responsibility and assurance recommendations, keep the prose summary brief and rely on the prebuilt onboarding contract review widget for detailed selection, editing, and final commit.",
+    "6a) Do not dump long responsibility/assurance tables in prose when the widget can present them interactively.",
+    "6b) The onboarding contract widget is not automatically visible. Call steward_manage_onboarding with action show_contract_review when you want that UI to appear in chat.",
+    "6c) Prefer letting the operator review and commit onboarding through the widget. Only call steward_complete_onboarding directly when the user explicitly asks Steward to complete onboarding in chat.",
+    "6d) If the user explicitly wants access-only onboarding with no committed responsibilities and no ongoing monitoring, complete onboarding with empty responsibilities and empty assurances instead of inventing placeholder responsibilities.",
+    "6e) Do not block completion on unknowns that only affect cosmetic naming or physical placement. Keep the name generic and record the uncertainty as a residual unknown instead.",
+    "6f) Tool-call arguments must be raw JSON objects. Never wrap tool arguments in quotes or pass stringified JSON.",
     "7) Never output fake <tool_call> blocks.",
     "8) Do not say widgets or remotes are outside Steward's scope when the user asks for them.",
     "9) If local evidence is ambiguous or conflicts with public research, state the leading hypotheses with confidence and ask for confirmation instead of asserting a product family.",
@@ -607,11 +675,15 @@ export async function synthesizeOnboardingModel(device: Device, sessionId: strin
     maxOutputTokens: 1400,
     prompt: [
       "Return ONLY a JSON object with keys:",
-      "summary (string), responsibilities (string[]), credentialRequests (array), assurances (array), nextActions (string[]).",
+      "summary (string), responsibilities (array), credentialRequests (array), assurances (array), nextActions (string[]).",
+      "responsibilities item shape: { id, displayName, workloadKey, category, criticality, summary }",
       "credentialRequests item shape: { protocol, reason, priority }",
-      "assurances item shape: { id, displayName, assuranceKey, criticality, checkIntervalSec, requiredProtocols, monitorType, rationale }",
+      "assurances item shape: { id, displayName, assuranceKey, serviceKey, criticality, checkIntervalSec, requiredProtocols, monitorType, rationale }",
       "Rules:",
+      "- responsibilities must be structured objects, not free-text strings.",
+      "- responsibilities should represent durable Steward-owned outcomes, not one-off tasks.",
       "- Assurance proposals must be concrete and tied to observed evidence from transcript.",
+      "- Every assurance should reference the responsibility it supports via serviceKey or assuranceKey.",
       "- Avoid duplicates by assuranceKey.",
       "- Keep assurance count between 1 and 12.",
       "",
@@ -632,6 +704,24 @@ export async function synthesizeOnboardingModel(device: Device, sessionId: strin
       contracts: [],
       nextActions: ["Continue onboarding conversation", "Validate credentials", "Regenerate assurance recommendations"],
     };
+  }
+
+  const responsibilitiesRaw = Array.isArray(parsed.responsibilities) ? parsed.responsibilities : [];
+  const responsibilityDedupe = new Set<string>();
+  const responsibilities: OnboardingResponsibilityProposal[] = [];
+  for (let idx = 0; idx < responsibilitiesRaw.length; idx++) {
+    const entry = responsibilitiesRaw[idx];
+    const normalized = isRecord(entry)
+      ? normalizeResponsibilityProposal(entry, idx)
+      : typeof entry === "string" && entry.trim().length > 0
+        ? normalizeResponsibilityProposal({ displayName: entry.trim() }, idx)
+        : null;
+    if (!normalized) continue;
+    const dedupeKey = normalized.workloadKey.toLowerCase();
+    if (responsibilityDedupe.has(dedupeKey)) continue;
+    responsibilityDedupe.add(dedupeKey);
+    responsibilities.push(normalized);
+    if (responsibilities.length >= 12) break;
   }
 
   const assurancesRaw = Array.isArray(parsed.assurances)
@@ -671,9 +761,33 @@ export async function synthesizeOnboardingModel(device: Device, sessionId: strin
     ? parsed.summary.trim()
     : "Onboarding synthesis generated.";
 
+  const responsibilitiesByKey = new Map(
+    responsibilities.map((responsibility) => [responsibility.workloadKey.toLowerCase(), responsibility]),
+  );
+  for (const assurance of assurances) {
+    const linkedKey = assurance.serviceKey.toLowerCase();
+    if (responsibilitiesByKey.has(linkedKey)) {
+      continue;
+    }
+    const inferred = normalizeResponsibilityProposal({
+      workloadKey: assurance.serviceKey,
+      displayName: assurance.displayName,
+      criticality: assurance.criticality,
+      summary: assurance.rationale,
+    }, responsibilities.length);
+    if (!inferred) {
+      continue;
+    }
+    responsibilitiesByKey.set(inferred.workloadKey.toLowerCase(), inferred);
+    responsibilities.push(inferred);
+    if (responsibilities.length >= 12) {
+      break;
+    }
+  }
+
   return {
     summary,
-    responsibilities: toStringArray(parsed.responsibilities, 12),
+    responsibilities,
     credentialRequests,
     assurances,
     contracts: assurances,

@@ -103,4 +103,26 @@ describe("anthropic oauth session helpers", () => {
     expect(session.refreshToken).toBe("refresh-token");
     expect(session.expiresAt).toBe(Date.now() + 1800 * 1000);
   });
+
+  it("surfaces refresh failures when the stored Anthropic session is already expired", async () => {
+    mocks.getSecret.mockImplementation(async (key: string) => {
+      switch (key) {
+        case "llm.oauth.anthropic.access_token":
+          return "expired-access-token";
+        case "llm.oauth.anthropic.refresh_token":
+          return "refresh-token";
+        case "llm.oauth.anthropic.expires_at":
+          return String(Date.now() - 60_000);
+        default:
+          return undefined;
+      }
+    });
+    mocks.refreshAnthropicToken.mockRejectedValue(
+      new Error("Anthropic token refresh failed (400): invalid_grant"),
+    );
+
+    await expect(ensureFreshAnthropicOAuthSession()).rejects.toThrow(
+      "Anthropic OAuth session refresh failed: Anthropic token refresh failed (400): invalid_grant",
+    );
+  });
 });

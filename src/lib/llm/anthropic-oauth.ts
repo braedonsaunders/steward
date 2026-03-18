@@ -59,6 +59,14 @@ export async function persistAnthropicOAuthTokens(
   };
 }
 
+export async function clearAnthropicOAuthTokens(): Promise<void> {
+  await Promise.all([
+    vault.deleteSecret(ANTHROPIC_ACCESS_TOKEN_SECRET).catch(() => {}),
+    vault.deleteSecret(ANTHROPIC_REFRESH_TOKEN_SECRET).catch(() => {}),
+    vault.deleteSecret(ANTHROPIC_EXPIRES_AT_SECRET).catch(() => {}),
+  ]);
+}
+
 export async function refreshStoredAnthropicAccessToken(
   refreshToken: string,
 ): Promise<AnthropicOAuthSession> {
@@ -79,8 +87,9 @@ export async function ensureFreshAnthropicOAuthSession(): Promise<AnthropicOAuth
   ) {
     try {
       return await refreshStoredAnthropicAccessToken(session.refreshToken);
-    } catch {
-      return session;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Anthropic OAuth session refresh failed: ${message}`);
     }
   }
 

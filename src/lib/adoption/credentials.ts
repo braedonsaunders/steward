@@ -93,15 +93,39 @@ function mergeCredentialScope(
   });
 }
 
+function normalizeAccountLabel(value?: string): string {
+  return value?.trim().toLowerCase() ?? "";
+}
+
+function scopeIdentityKey(protocol: string, scope?: Record<string, unknown>): string {
+  if (protocol !== "http-api") {
+    return "";
+  }
+
+  const auth = withHttpApiCredentialAuth(scope ?? {});
+  return JSON.stringify({
+    mode: auth.mode,
+    headerName: auth.headerName ?? null,
+    queryParamName: auth.queryParamName ?? null,
+    pathPrefix: auth.pathPrefix ?? null,
+  });
+}
+
 function findExistingCredential(
   credentials: DeviceCredential[],
   protocol: string,
+  accountLabel?: string,
+  scopeJson?: Record<string, unknown>,
   adapterId?: string,
 ): DeviceCredential | undefined {
   const normalizedAdapter = adapterId?.trim() || "";
+  const normalizedAccount = normalizeAccountLabel(accountLabel);
+  const normalizedScopeKey = scopeIdentityKey(protocol, scopeJson);
   return credentials.find((credential) => (
     normalizeCredentialProtocol(credential.protocol) === protocol &&
-    (credential.adapterId?.trim() || "") === normalizedAdapter
+    (credential.adapterId?.trim() || "") === normalizedAdapter &&
+    normalizeAccountLabel(credential.accountLabel) === normalizedAccount &&
+    scopeIdentityKey(protocol, credential.scopeJson) === normalizedScopeKey
   ));
 }
 
@@ -125,7 +149,13 @@ export async function storeDeviceCredential(input: StoreDeviceCredentialInput): 
     throw new Error("HTTP Basic credentials require an accountLabel username.");
   }
   const now = nowIso();
-  const existing = findExistingCredential(stateStore.getDeviceCredentials(input.deviceId), protocol, input.adapterId);
+  const existing = findExistingCredential(
+    stateStore.getDeviceCredentials(input.deviceId),
+    protocol,
+    accountLabel,
+    scopeJson,
+    input.adapterId,
+  );
   const credentialId = existing?.id ?? randomUUID();
   const vaultSecretRef = existing?.vaultSecretRef ?? `device.${input.deviceId}.credential.${credentialId}`;
 

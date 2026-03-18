@@ -4408,7 +4408,7 @@ export async function buildAdapterSkillTools(
   });
 
   tools.steward_complete_onboarding = dynamicTool({
-    description: "Commit onboarding for a device by selecting the adapter, accepted access methods, and any responsibilities or assurances Steward will own.",
+    description: "Commit onboarding for a device by selecting the adapter, accepted access methods, and any responsibilities or assurances Steward will own. Prefer revealing the onboarding contract review widget with steward_manage_onboarding first; use this tool directly only when the user explicitly asks Steward to complete onboarding in chat.",
     inputSchema: jsonSchema({
       type: "object",
       properties: {
@@ -4559,6 +4559,62 @@ export async function buildAdapterSkillTools(
         assurancesCommitted: snapshot.assurances.length,
         summary: snapshot.run?.summary ?? snapshot.draft?.summary ?? `Onboarding completed for ${device.name}.`,
         residualUnknowns: snapshot.draft?.residualUnknowns ?? [],
+      };
+    },
+  });
+
+  tools.steward_manage_onboarding = dynamicTool({
+    description: "Reveal the first-party onboarding contract review UI inside an onboarding chat so the operator can interactively review responsibilities, assurances, access methods, and then save. Use this instead of dumping long onboarding tables in prose.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        device_id: {
+          type: "string",
+          description: "Target device id, name, or IP. Optional when chat is attached to a device.",
+        },
+        action: {
+          type: "string",
+          enum: ["show_contract_review"],
+          description: "UI onboarding action to perform. Use show_contract_review to open the onboarding contract widget in chat.",
+        },
+      },
+      additionalProperties: false,
+    }),
+    execute: async (argsUnknown: unknown) => {
+      const args = isRecord(argsUnknown) ? argsUnknown : {};
+      const device = await resolveDeviceByTarget(
+        inputString(args, "device_id"),
+        options?.attachedDeviceId,
+      );
+      if (!device) {
+        return { ok: false, error: ATTACHED_DEVICE_REQUIRED_ERROR, retryable: false };
+      }
+
+      const action = inputString(args, "action") ?? "show_contract_review";
+      if (action !== "show_contract_review") {
+        return {
+          ok: false,
+          error: `Unsupported onboarding action: ${action}.`,
+          retryable: false,
+          deviceId: device.id,
+          deviceName: device.name,
+        };
+      }
+
+      const snapshot = await getDeviceAdoptionSnapshot(device.id);
+      return {
+        ok: true,
+        deviceId: device.id,
+        deviceName: device.name,
+        action: "show_contract_review",
+        runId: snapshot.run?.id ?? null,
+        onboardingStatus: snapshot.run?.status ?? null,
+        onboardingStage: snapshot.run?.stage ?? null,
+        selectedProfileCount: snapshot.draft?.selectedProfileIds.length ?? 0,
+        selectedAccessMethodCount: snapshot.draft?.selectedAccessMethodKeys.length ?? 0,
+        workloadDraftCount: snapshot.draft?.workloads.length ?? snapshot.workloads.length,
+        assuranceDraftCount: snapshot.draft?.assurances.length ?? snapshot.assurances.length,
+        summary: `Opened onboarding contract review for ${device.name}.`,
       };
     },
   });
@@ -6571,7 +6627,7 @@ export async function buildAdapterSkillTools(
   });
 
   tools.steward_manage_credentials = dynamicTool({
-    description: "List, store, update, validate, or delete first-party device credentials in Steward's vault-backed credential store. Use this during onboarding instead of telling the user to save credentials manually.",
+    description: "List, store, update, validate, or delete first-party device credentials in Steward's vault-backed credential store. Use this during onboarding instead of telling the user to save credentials manually. If the user says credentials are already saved or available, list or use the stored credential first. Do not guess account labels or overwrite an existing credential unless the user explicitly provides replacement details.",
     inputSchema: jsonSchema({
       type: "object",
       properties: {

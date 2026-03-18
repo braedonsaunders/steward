@@ -236,7 +236,6 @@ async function fetchAnthropicModels(options?: {
   apiKeyOverride?: string;
   oauthTokenOverride?: string;
 }): Promise<string[]> {
-  const config = await getProviderConfig("anthropic");
   let apiKey: string | undefined;
   let oauthSession: AnthropicOAuthSession | undefined;
   let oauthToken = options?.oauthTokenOverride;
@@ -245,15 +244,13 @@ async function fetchAnthropicModels(options?: {
     apiKey = undefined;
   } else if (options?.apiKeyOverride) {
     apiKey = options.apiKeyOverride;
-  } else if (config?.oauthTokenSecret) {
-    oauthSession = await ensureFreshAnthropicOAuthSession();
-    oauthToken = oauthSession.accessToken;
   } else {
     apiKey = await vault.getSecret("llm.api.anthropic.key");
-    if (!apiKey) {
-      oauthSession = await ensureFreshAnthropicOAuthSession();
-      oauthToken = oauthSession.accessToken;
-    }
+  }
+
+  if (!apiKey && !oauthToken) {
+    oauthSession = await ensureFreshAnthropicOAuthSession();
+    oauthToken = oauthSession.accessToken;
   }
 
   if (!apiKey && !oauthToken) {

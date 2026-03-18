@@ -429,19 +429,146 @@ const buildOpenAICodexOAuth = async (model: string): Promise<LanguageModelV3> =>
 
 /**
  * Build an Anthropic model that uses OAuth tokens from Claude Pro/Max.
- * Copied from oneshot's opencode-anthropic-auth plugin:
- *
- *  1. Pass an empty apiKey so the SDK doesn't complain
- *  2. Supply a custom `fetch` that:
- *     - Replaces x-api-key with Bearer token authorization
- *     - Sets required anthropic-beta headers (oauth-2025-04-20, etc.)
- *     - Sets user-agent to claude-cli
- *     - Adds ?beta=true to /v1/messages URLs
- *     - Refreshes the token when expired
+ * Mirrored from opencode's published opencode-anthropic-auth plugin.
  */
+const CLAUDE_CODE_SYSTEM_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude.";
+const ANTHROPIC_OAUTH_TOOL_PREFIX = "mcp_";
+
+function sanitizeAnthropicOAuthSystemText(text: string): string {
+  return text
+    .replace(/OpenCode/g, "Claude Code")
+    .replace(/opencode/gi, "Claude");
+}
+
+function rewriteAnthropicOAuthBody(body: BodyInit | null | undefined): BodyInit | null | undefined {
+  if (!body || typeof body !== "string") {
+    return body;
+  }
+
+  try {
+    const parsed = JSON.parse(body) as Record<string, unknown>;
+
+    if (typeof parsed.system === "string") {
+      parsed.system = sanitizeAnthropicOAuthSystemText(
+        `${CLAUDE_CODE_SYSTEM_PREFIX}\n\n${parsed.system}`,
+      );
+    } else if (Array.isArray(parsed.system)) {
+      const systemBlocks = parsed.system.map((item, index) => {
+        if (!item || typeof item !== "object") {
+          return item;
+        }
+
+        const block = item as Record<string, unknown>;
+        if (block.type === "text" && typeof block.text === "string") {
+          return {
+            ...block,
+            text: sanitizeAnthropicOAuthSystemText(
+              index === 0
+                ? `${CLAUDE_CODE_SYSTEM_PREFIX}\n\n${block.text}`
+                : block.text,
+            ),
+          };
+        }
+        return block;
+      });
+
+      if (systemBlocks.length === 0) {
+        systemBlocks.push({
+          type: "text",
+          text: CLAUDE_CODE_SYSTEM_PREFIX,
+        });
+      }
+
+      parsed.system = systemBlocks;
+    }
+
+    if (Array.isArray(parsed.tools)) {
+      parsed.tools = parsed.tools.map((item) => {
+        if (!item || typeof item !== "object") {
+          return item;
+        }
+
+        const tool = item as Record<string, unknown>;
+        return {
+          ...tool,
+          name: typeof tool.name === "string"
+            ? `${ANTHROPIC_OAUTH_TOOL_PREFIX}${tool.name}`
+            : tool.name,
+        };
+      });
+    }
+
+    if (Array.isArray(parsed.messages)) {
+      parsed.messages = parsed.messages.map((item) => {
+        if (!item || typeof item !== "object") {
+          return item;
+        }
+
+        const message = item as Record<string, unknown>;
+        if (!Array.isArray(message.content)) {
+          return message;
+        }
+
+        return {
+          ...message,
+          content: message.content.map((block) => {
+            if (!block || typeof block !== "object") {
+              return block;
+            }
+
+            const contentBlock = block as Record<string, unknown>;
+            if (contentBlock.type === "tool_use" && typeof contentBlock.name === "string") {
+              return {
+                ...contentBlock,
+                name: `${ANTHROPIC_OAUTH_TOOL_PREFIX}${contentBlock.name}`,
+              };
+            }
+            return contentBlock;
+          }),
+        };
+      });
+    }
+
+    return JSON.stringify(parsed);
+  } catch {
+    return body;
+  }
+}
+
+async function rewriteAnthropicOAuthStream(response: Response): Promise<Response> {
+  if (!response.body) {
+    return response;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) {
+        controller.close();
+        return;
+      }
+
+      let text = decoder.decode(value, { stream: true });
+      text = text.replace(/"name"\s*:\s*"mcp_([^"]+)"/g, "\"name\": \"$1\"");
+      controller.enqueue(encoder.encode(text));
+    },
+  });
+
+  return new Response(stream, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
 const buildAnthropicOAuth = async (model: string): Promise<LanguageModelV3> => {
   const session = await ensureFreshAnthropicOAuthSession();
   let accessToken = session.accessToken;
+  let expiresAt = session.expiresAt;
   if (!accessToken) {
     throw new Error(
       "Anthropic provider requires credentials. Add an API key or connect via OAuth in Settings.",
@@ -455,15 +582,11 @@ const buildAnthropicOAuth = async (model: string): Promise<LanguageModelV3> => {
     requestInput: RequestInfo | URL,
     init?: RequestInit,
   ): Promise<Response> => {
-    // Refresh proactively when the in-memory token is missing.
-    if (!accessToken && refreshToken) {
-      try {
-        const refreshed = await refreshStoredAnthropicAccessToken(refreshToken);
-        accessToken = refreshed.accessToken;
-        refreshToken = refreshed.refreshToken;
-      } catch {
-        // Use existing token
-      }
+    if ((!accessToken || (expiresAt > 0 && expiresAt < Date.now())) && refreshToken) {
+      const refreshed = await refreshStoredAnthropicAccessToken(refreshToken);
+      accessToken = refreshed.accessToken;
+      refreshToken = refreshed.refreshToken;
+      expiresAt = refreshed.expiresAt;
     }
 
     if (!accessToken) {
@@ -472,134 +595,80 @@ const buildAnthropicOAuth = async (model: string): Promise<LanguageModelV3> => {
       );
     }
 
-    const originalRequestInput = requestInput instanceof Request ? requestInput.clone() : requestInput;
-
-    const buildAnthropicRequest = (token: string): {
-      input: RequestInfo | URL;
-      headers: Headers;
-      target: string;
-    } => {
-      const requestHeaders = new Headers();
-
-      if (originalRequestInput instanceof Request) {
-        originalRequestInput.headers.forEach((value, key) => {
+    const requestInit = init ?? {};
+    const requestHeaders = new Headers();
+    if (requestInput instanceof Request) {
+      requestInput.headers.forEach((value, key) => {
+        requestHeaders.set(key, value);
+      });
+    }
+    if (requestInit.headers) {
+      if (requestInit.headers instanceof Headers) {
+        requestInit.headers.forEach((value, key) => {
           requestHeaders.set(key, value);
         });
-      }
-
-      if (init?.headers) {
-        if (init.headers instanceof Headers) {
-          init.headers.forEach((value, key) => {
-            requestHeaders.set(key, value);
-          });
-        } else if (Array.isArray(init.headers)) {
-          for (const [key, value] of init.headers) {
-            if (value !== undefined) requestHeaders.set(key, String(value));
+      } else if (Array.isArray(requestInit.headers)) {
+        for (const [key, value] of requestInit.headers) {
+          if (value !== undefined) {
+            requestHeaders.set(key, String(value));
           }
-        } else {
-          for (const [key, value] of Object.entries(init.headers)) {
-            if (value !== undefined) requestHeaders.set(key, String(value));
+        }
+      } else {
+        for (const [key, value] of Object.entries(requestInit.headers)) {
+          if (value !== undefined) {
+            requestHeaders.set(key, String(value));
           }
         }
       }
-
-      const incomingBeta = requestHeaders.get("anthropic-beta") || "";
-      const incomingBetasList = incomingBeta
-        .split(",")
-        .map((beta) => beta.trim())
-        .filter(Boolean);
-
-      const requiredBetas = [
-        "oauth-2025-04-20",
-        "interleaved-thinking-2025-05-14",
-      ];
-      const mergedBetas = [...new Set([...requiredBetas, ...incomingBetasList])].join(",");
-
-      requestHeaders.set("authorization", `Bearer ${token}`);
-      requestHeaders.set("anthropic-beta", mergedBetas);
-      requestHeaders.set("user-agent", "claude-cli/2.1.2 (external, cli)");
-      requestHeaders.delete("x-api-key");
-
-      let finalInput: RequestInfo | URL = originalRequestInput;
-      let requestUrl: URL | null = null;
-      try {
-        if (typeof originalRequestInput === "string" || originalRequestInput instanceof URL) {
-          requestUrl = new URL(originalRequestInput.toString());
-        } else if (originalRequestInput instanceof Request) {
-          requestUrl = new URL(originalRequestInput.url);
-        }
-      } catch {
-        requestUrl = null;
-      }
-
-      if (
-        requestUrl &&
-        requestUrl.pathname === "/v1/messages" &&
-        !requestUrl.searchParams.has("beta")
-      ) {
-        requestUrl.searchParams.set("beta", "true");
-        finalInput =
-          originalRequestInput instanceof Request
-            ? new Request(requestUrl.toString(), originalRequestInput.clone())
-            : requestUrl;
-      } else if (originalRequestInput instanceof Request) {
-        finalInput = originalRequestInput.clone();
-      }
-
-      const target = requestUrl?.toString()
-        ?? (typeof finalInput === "string" || finalInput instanceof URL
-          ? finalInput.toString()
-          : finalInput instanceof Request
-            ? finalInput.url
-            : "Anthropic request");
-
-      return {
-        input: finalInput,
-        headers: requestHeaders,
-        target,
-      };
-    };
-
-    const sendAnthropicRequest = async (token: string): Promise<{
-      response: Response;
-      body: string;
-      target: string;
-    }> => {
-      const request = buildAnthropicRequest(token);
-      const response = await globalThis.fetch(request.input, {
-        ...init,
-        headers: request.headers,
-      });
-      const body = response.ok ? "" : await response.clone().text().catch(() => "");
-
-      return {
-        response,
-        body,
-        target: request.target,
-      };
-    };
-
-    let attempt = await sendAnthropicRequest(accessToken);
-    if (!attempt.response.ok && attempt.response.status === 401 && refreshToken) {
-      try {
-        const refreshed = await refreshStoredAnthropicAccessToken(refreshToken);
-        accessToken = refreshed.accessToken;
-        refreshToken = refreshed.refreshToken;
-        if (accessToken) {
-          attempt = await sendAnthropicRequest(accessToken);
-        }
-      } catch {
-        // Fall through and report the original auth failure.
-      }
     }
 
-    if (!attempt.response.ok) {
-      throw new Error(
-        `Anthropic OAuth request failed (${attempt.response.status} ${attempt.response.statusText}) for ${attempt.target}${attempt.body ? `: ${attempt.body}` : ""}`,
-      );
+    const incomingBeta = requestHeaders.get("anthropic-beta") || "";
+    const incomingBetasList = incomingBeta
+      .split(",")
+      .map((beta) => beta.trim())
+      .filter(Boolean);
+
+    const requiredBetas = [
+      "oauth-2025-04-20",
+      "interleaved-thinking-2025-05-14",
+    ];
+    const mergedBetas = [...new Set([...requiredBetas, ...incomingBetasList])].join(",");
+
+    requestHeaders.set("authorization", `Bearer ${accessToken}`);
+    requestHeaders.set("anthropic-beta", mergedBetas);
+    requestHeaders.set("user-agent", "claude-cli/2.1.2 (external, cli)");
+    requestHeaders.delete("x-api-key");
+
+    let finalInput: RequestInfo | URL = requestInput;
+    let requestUrl: URL | null = null;
+    try {
+      if (typeof requestInput === "string" || requestInput instanceof URL) {
+        requestUrl = new URL(requestInput.toString());
+      } else if (requestInput instanceof Request) {
+        requestUrl = new URL(requestInput.url);
+      }
+    } catch {
+      requestUrl = null;
     }
 
-    return attempt.response;
+    if (
+      requestUrl &&
+      requestUrl.pathname === "/v1/messages" &&
+      !requestUrl.searchParams.has("beta")
+    ) {
+      requestUrl.searchParams.set("beta", "true");
+      finalInput = requestInput instanceof Request
+        ? new Request(requestUrl.toString(), requestInput.clone())
+        : requestUrl;
+    }
+
+    const response = await globalThis.fetch(finalInput, {
+      ...requestInit,
+      body: rewriteAnthropicOAuthBody(requestInit.body),
+      headers: requestHeaders,
+    });
+
+    return rewriteAnthropicOAuthStream(response);
   };
 
   const client = createAnthropic({
@@ -652,9 +721,13 @@ export const buildLanguageModel = async (
     }
     case "anthropic": {
       const anthropicModel = normalizeProviderModel("anthropic", model) ?? model;
-      const anthropicOauthTokenSecret = config?.oauthTokenSecret;
+      const apiKey = await vault.getSecret("llm.api.anthropic.key");
+      if (apiKey) {
+        const client = createAnthropic({ apiKey });
+        return withModelCapabilityGuards("anthropic", anthropicModel, client(anthropicModel));
+      }
 
-      // If Anthropic OAuth is configured, keep requests on that Bearer-token path.
+      const anthropicOauthTokenSecret = config?.oauthTokenSecret;
       const anthropicOAuthToken = await vault.getSecret(
         anthropicOauthTokenSecret ?? "llm.oauth.anthropic.access_token",
       );
@@ -678,13 +751,6 @@ export const buildLanguageModel = async (
           resolvedModel.model,
           await buildAnthropicOAuth(resolvedModel.model),
         );
-      }
-
-      // Priority 2: Real API key (from manual entry)
-      const apiKey = await vault.getSecret("llm.api.anthropic.key");
-      if (apiKey) {
-        const client = createAnthropic({ apiKey });
-        return withModelCapabilityGuards("anthropic", anthropicModel, client(anthropicModel));
       }
 
       throw new Error(

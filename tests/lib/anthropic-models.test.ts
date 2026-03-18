@@ -85,7 +85,7 @@ describe("anthropic model listing", () => {
     );
   });
 
-  it("prefers the configured Anthropic OAuth session over a stored API key", async () => {
+  it("prefers a stored Anthropic API key over a configured OAuth session", async () => {
     const fetchMock = vi.mocked(global.fetch);
     fetchMock.mockResolvedValue(
       new Response(JSON.stringify({ data: [{ id: "claude-sonnet-4-6" }] }), {
@@ -118,19 +118,12 @@ describe("anthropic model listing", () => {
       "https://api.anthropic.com/v1/models",
       expect.objectContaining({
         headers: expect.objectContaining({
-          authorization: "Bearer oauth-session-token",
-          "anthropic-beta": "oauth-2025-04-20",
-        }),
-      }),
-    );
-    expect(fetchMock).not.toHaveBeenCalledWith(
-      "https://api.anthropic.com/v1/models",
-      expect.objectContaining({
-        headers: expect.objectContaining({
           "x-api-key": "api-key-that-should-not-be-used",
+          "anthropic-version": "2023-06-01",
         }),
       }),
     );
+    expect(mocks.ensureFreshAnthropicOAuthSession).not.toHaveBeenCalled();
   });
 
   it("falls back to the newest callable Anthropic model when the preferred model returns a 400", async () => {

@@ -1732,6 +1732,13 @@ export interface ChatToolWidgetMutation {
   widgetSlug?: string;
 }
 
+export type ChatToolOnboardingMutationAction = "show_contract_review";
+
+export interface ChatToolOnboardingMutation {
+  action: ChatToolOnboardingMutationAction;
+  deviceId: string;
+}
+
 export interface ChatToolEvent {
   id: string;
   toolName: string;
@@ -1746,6 +1753,7 @@ export interface ChatToolEvent {
   outputPreview?: string;
   error?: string;
   widgetMutation?: ChatToolWidgetMutation;
+  onboardingMutation?: ChatToolOnboardingMutation;
 }
 
 export interface ChatMessageMetadata {

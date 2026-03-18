@@ -1,9 +1,18 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { z } from "zod";
 import { isAuthorized } from "@/lib/auth/guard";
-import { createPkcePair, buildAnthropicAuthorizeUrl } from "@/lib/auth/oauth";
+import {
+  createPkcePair,
+  buildAnthropicAuthorizeUrl,
+  type AnthropicOAuthMode,
+} from "@/lib/auth/oauth";
 import { ensureVaultReadyForProviders } from "@/lib/security/vault-gate";
 
 export const runtime = "nodejs";
+
+const bodySchema = z.object({
+  mode: z.enum(["max", "console"]).default("max"),
+});
 
 export async function POST(request: NextRequest) {
   if (!isAuthorized(request)) {
@@ -19,8 +28,18 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    let mode: AnthropicOAuthMode = "max";
+    const rawBody = await request.text();
+    if (rawBody.trim().length > 0) {
+      const payload = bodySchema.safeParse(JSON.parse(rawBody));
+      if (!payload.success) {
+        return NextResponse.json({ error: payload.error.flatten() }, { status: 400 });
+      }
+      mode = payload.data.mode;
+    }
+
     const { verifier, challenge } = createPkcePair();
-    const url = buildAnthropicAuthorizeUrl(challenge, verifier);
+    const url = buildAnthropicAuthorizeUrl(challenge, verifier, mode);
 
     // The verifier is embedded in the auth URL as the state parameter.
     // When the user pastes the code (format: code#state), the state IS the

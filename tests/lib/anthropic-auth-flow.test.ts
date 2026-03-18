@@ -31,16 +31,16 @@ describe("anthropic oauth flow", () => {
 
   it("builds the current Claude Code Anthropic authorize URL", () => {
     const url = new URL(
-      buildAnthropicAuthorizeUrl("pkce-challenge", "pkce-verifier"),
+      buildAnthropicAuthorizeUrl("pkce-challenge", "pkce-verifier", "max"),
     );
 
     expect(url.origin).toBe("https://claude.ai");
     expect(url.pathname).toBe("/oauth/authorize");
     expect(url.searchParams.get("client_id")).toBe("9d1c250a-e61b-44d9-88ed-5944d1962f5e");
     expect(url.searchParams.get("redirect_uri")).toBe(
-      "https://platform.claude.com/oauth/code/callback",
+      "https://console.anthropic.com/oauth/code/callback",
     );
-    expect(url.searchParams.get("login_method")).toBe("claudeai");
+    expect(url.searchParams.get("login_method")).toBeNull();
     expect(url.searchParams.get("state")).toBe("pkce-verifier");
     expect(url.searchParams.get("code_challenge")).toBe("pkce-challenge");
 
@@ -49,10 +49,19 @@ describe("anthropic oauth flow", () => {
       "org:create_api_key",
       "user:profile",
       "user:inference",
-      "user:sessions:claude_code",
-      "user:mcp_servers",
-      "user:file_upload",
     ]));
+  });
+
+  it("builds the Anthropic Console authorize URL for API-key creation", () => {
+    const url = new URL(
+      buildAnthropicAuthorizeUrl("pkce-challenge", "pkce-verifier", "console"),
+    );
+
+    expect(url.origin).toBe("https://console.anthropic.com");
+    expect(url.pathname).toBe("/oauth/authorize");
+    expect(url.searchParams.get("redirect_uri")).toBe(
+      "https://console.anthropic.com/oauth/code/callback",
+    );
   });
 
   it("exchanges Anthropic codes against the platform token endpoint", async () => {
@@ -72,7 +81,7 @@ describe("anthropic oauth flow", () => {
 
     expect(tokens.access_token).toBe("fresh-access-token");
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://platform.claude.com/v1/oauth/token",
+      "https://console.anthropic.com/v1/oauth/token",
       expect.objectContaining({
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -86,12 +95,12 @@ describe("anthropic oauth flow", () => {
       state: "oauth-state",
       grant_type: "authorization_code",
       client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
-      redirect_uri: "https://platform.claude.com/oauth/code/callback",
+      redirect_uri: "https://console.anthropic.com/oauth/code/callback",
       code_verifier: "pkce-verifier",
     });
   });
 
-  it("refreshes Anthropic tokens against the platform token endpoint with Claude AI scopes", async () => {
+  it("refreshes Anthropic tokens against the console token endpoint without extra scopes", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -107,7 +116,7 @@ describe("anthropic oauth flow", () => {
     await refreshAnthropicToken("refresh-token");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://platform.claude.com/v1/oauth/token",
+      "https://console.anthropic.com/v1/oauth/token",
       expect.objectContaining({
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -120,7 +129,6 @@ describe("anthropic oauth flow", () => {
       grant_type: "refresh_token",
       refresh_token: "refresh-token",
       client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
-      scope: "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload",
     });
   });
 });

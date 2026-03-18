@@ -31,6 +31,7 @@ import { getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
 import { stateStore } from "@/lib/state/store";
 import type {
   ChatMessageMetadata,
+  ChatToolOnboardingMutation,
   ChatToolEvent,
   ChatToolEventKind,
   ChatToolWidgetMutation,
@@ -337,6 +338,30 @@ function extractWidgetMutation(
   }
 
   return undefined;
+}
+
+function extractOnboardingMutation(
+  output: Record<string, unknown>,
+  toolName?: string,
+): ChatToolOnboardingMutation | undefined {
+  if (output.ok === false) {
+    return undefined;
+  }
+
+  if ((toolName ?? "") !== "steward_manage_onboarding") {
+    return undefined;
+  }
+
+  const deviceId = typeof output.deviceId === "string" ? output.deviceId : undefined;
+  const action = typeof output.action === "string" ? output.action.trim().toLowerCase() : "";
+  if (!deviceId || action !== "show_contract_review") {
+    return undefined;
+  }
+
+  return {
+    action: "show_contract_review",
+    deviceId,
+  };
 }
 
 function inferToolKind(toolName: string, inputPreview?: string, outputPreview?: string): ChatToolEventKind {
@@ -830,6 +855,27 @@ function summarizeToolExecution(output: unknown, toolName?: string): {
         return {
           status: "completed",
           summary,
+          outputPreview: previewValue(output, 1200),
+        };
+      }
+    }
+
+    if (toolName === "steward_manage_onboarding") {
+      const failedText = typeof output.error === "string" ? output.error.trim() : "";
+      const explicitSummary = typeof output.summary === "string" ? output.summary.trim() : "";
+      if (output.ok === false || failedText.length > 0) {
+        return {
+          status: "failed",
+          summary: failedText || explicitSummary || "Onboarding action failed.",
+          outputPreview: previewValue(output, 1200),
+        };
+      }
+
+      const action = typeof output.action === "string" ? output.action.trim().toLowerCase() : "";
+      if (action === "show_contract_review") {
+        return {
+          status: "completed",
+          summary: explicitSummary || "Opened onboarding contract review.",
           outputPreview: previewValue(output, 1200),
         };
       }
@@ -1690,6 +1736,9 @@ export async function POST(request: NextRequest) {
             const widgetMutation = isRecord(chunk.output)
               ? extractWidgetMutation(chunk.output, chunk.toolName)
               : undefined;
+            const onboardingMutation = isRecord(chunk.output)
+              ? extractOnboardingMutation(chunk.output, chunk.toolName)
+              : undefined;
             const inputPreview = previewValue(chunk.input, 700);
             const current = currentToolEvent(chunk.toolCallId);
             const label = current?.label
@@ -1710,6 +1759,7 @@ export async function POST(request: NextRequest) {
               outputPreview: execution.outputPreview,
               error: execution.status === "failed" ? execution.summary : undefined,
               widgetMutation,
+              onboardingMutation,
             });
             emitToolEvent(event);
             const line = `[tool] ${chunk.toolName}: ${execution.summary}\n`;

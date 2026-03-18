@@ -125,12 +125,11 @@ function secretIsMissing(secret: string | undefined | null): secret is undefined
   return secret === undefined || secret === null;
 }
 
-function getCredentialForBroker(
+function getCredentialCandidatesForBroker(
   deviceId: string,
   protocols: string[],
-  allowProvidedCredentials?: boolean,
   adapterId?: string,
-): { credential?: DeviceCredential; availableStatuses: string[] } {
+): { candidates: DeviceCredential[]; availableStatuses: string[] } {
   const normalizedProtocols = new Set(protocols.map((protocol) => normalizeCredentialProtocol(protocol)));
   const candidates = stateStore.getDeviceCredentials(deviceId)
     .filter((credential) => normalizedProtocols.has(normalizeCredentialProtocol(credential.protocol)));
@@ -162,10 +161,33 @@ function getCredentialForBroker(
   });
 
   return {
-    credential: sorted[0]
-      ?? (allowProvidedCredentials ? candidates.find((credential) => credential.status === "provided") : undefined),
+    candidates: sorted,
     availableStatuses: Array.from(new Set(candidates.map((credential) => credential.status))),
   };
+}
+
+function getCredentialForBroker(
+  deviceId: string,
+  protocols: string[],
+  allowProvidedCredentials?: boolean,
+  adapterId?: string,
+): { credential?: DeviceCredential; availableStatuses: string[] } {
+  const { candidates, availableStatuses } = getCredentialCandidatesForBroker(deviceId, protocols, adapterId);
+  return {
+    credential: candidates[0]
+      ?? (allowProvidedCredentials ? candidates.find((credential) => credential.status === "provided") : undefined),
+    availableStatuses,
+  };
+}
+
+function isSshAuthenticationFailure(result: Pick<BrokerExecutionResult, "summary" | "output">): boolean {
+  const text = `${result.summary}\n${result.output}`.toLowerCase();
+  return /permission denied/.test(text)
+    || /configured password was not accepted/.test(text)
+    || /password was not accepted/.test(text)
+    || /authentication failed/.test(text)
+    || /access denied/.test(text)
+    || /too many authentication failures/.test(text);
 }
 
 function readTrustedSshHostKeys(device: Device): TrustedSshHostKeyRecord[] {
@@ -1131,13 +1153,12 @@ async function executeSshBroker(
     });
   }
 
-  const { credential, availableStatuses } = getCredentialForBroker(
+  const { candidates, availableStatuses } = getCredentialCandidatesForBroker(
     device.id,
     ["ssh"],
-    context.allowProvidedCredentials,
     operation.adapterId,
   );
-  if (!credential) {
+  if (candidates.length === 0) {
     logCredentialAccess(
       context,
       operation,
@@ -1161,67 +1182,98 @@ async function executeSshBroker(
     });
   }
 
-  const secret = await vault.getSecret(credential.vaultSecretRef);
-  if (secretIsMissing(secret)) {
-    logCredentialAccess(context, operation, device, "ssh", "missing_secret", {
-      accountLabel: credential.accountLabel ?? null,
-      credentialStatus: credential.status,
-    }, credential.id);
-    return brokerResult({
-      status: "failed",
-      phase: "not-started",
-      proof: "none",
-      summary: "SSH secret missing",
-      output: context.allowProvidedCredentials
-        ? "Stored SSH credential is missing a usable secret"
-        : "Validated SSH credential is missing a usable secret",
-      details: { credentialId: credential.id },
-    });
-  }
-
-  const accountLabel = credential.accountLabel?.trim() ?? "";
-  if (accountLabel.length === 0) {
-    logCredentialAccess(context, operation, device, "ssh", "credential_unusable", {
-      credentialStatus: credential.status,
-      reason: "missing_account_label",
-    }, credential.id);
-    return brokerResult({
-      status: "failed",
-      phase: "not-started",
-      proof: "none",
-      summary: "SSH username is required",
-      output: "SSH broker requires a credential with an accountLabel username.",
-      details: { credentialId: credential.id },
-    });
-  }
-
   const remoteCommand = typeof broker.command === "string" && broker.command.trim().length > 0
     ? buildSshRemoteCommand(interpolateOperationValue(broker.command.trim(), device.ip, params))
     : undefined;
   const remoteArgv = remoteCommand
     ? []
     : (broker.argv ?? []).map((arg) => interpolateOperationValue(arg, device.ip, params));
+  let lastFailure: BrokerExecutionResult | null = null;
+  const attemptedCredentials: string[] = [];
 
-  logCredentialAccess(context, operation, device, "ssh", "granted", {
-    accountLabel,
-    argv: remoteArgv,
-    remoteCommand,
-    credentialStatus: credential.status,
-  }, credential.id);
+  for (const credential of candidates) {
+    attemptedCredentials.push(credential.id);
 
-  return runSshCommandWithCredential({
-    operation,
-    device,
-    context,
-    credential,
-    accountLabel,
-    secret,
-    host: device.ip,
-    argv: remoteArgv,
-    remoteCommand,
-    port: broker.port,
-    validationMethod: "ssh.command",
-    validationDetails: { adapterId: operation.adapterId, operationId: operation.id },
+    const secret = await vault.getSecret(credential.vaultSecretRef);
+    if (secretIsMissing(secret)) {
+      logCredentialAccess(context, operation, device, "ssh", "missing_secret", {
+        accountLabel: credential.accountLabel ?? null,
+        credentialStatus: credential.status,
+      }, credential.id);
+      lastFailure = brokerResult({
+        status: "failed",
+        phase: "not-started",
+        proof: "none",
+        summary: "SSH secret missing",
+        output: context.allowProvidedCredentials
+          ? "Stored SSH credential is missing a usable secret"
+          : "Validated SSH credential is missing a usable secret",
+        details: { credentialId: credential.id, attemptedCredentials },
+      });
+      continue;
+    }
+
+    const accountLabel = credential.accountLabel?.trim() ?? "";
+    if (accountLabel.length === 0) {
+      logCredentialAccess(context, operation, device, "ssh", "credential_unusable", {
+        credentialStatus: credential.status,
+        reason: "missing_account_label",
+      }, credential.id);
+      lastFailure = brokerResult({
+        status: "failed",
+        phase: "not-started",
+        proof: "none",
+        summary: "SSH username is required",
+        output: "SSH broker requires a credential with an accountLabel username.",
+        details: { credentialId: credential.id, attemptedCredentials },
+      });
+      continue;
+    }
+
+    logCredentialAccess(context, operation, device, "ssh", "granted", {
+      accountLabel,
+      argv: remoteArgv,
+      remoteCommand,
+      credentialStatus: credential.status,
+    }, credential.id);
+
+    const result = await runSshCommandWithCredential({
+      operation,
+      device,
+      context,
+      credential,
+      accountLabel,
+      secret,
+      host: device.ip,
+      argv: remoteArgv,
+      remoteCommand,
+      port: broker.port,
+      validationMethod: "ssh.command",
+      validationDetails: { adapterId: operation.adapterId, operationId: operation.id },
+    });
+    if (result.ok) {
+      return result;
+    }
+
+    lastFailure = {
+      ...result,
+      details: {
+        ...result.details,
+        attemptedCredentials,
+      },
+    };
+    if (!isSshAuthenticationFailure(result)) {
+      return lastFailure;
+    }
+  }
+
+  return lastFailure ?? brokerResult({
+    status: "failed",
+    phase: "not-started",
+    proof: "none",
+    summary: "SSH credential required",
+    output: "SSH broker requires a stored SSH credential",
+    details: { availableStatuses, attemptedCredentials },
   });
 }
 

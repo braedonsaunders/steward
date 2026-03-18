@@ -48,6 +48,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { OnboardingChatContractWidget } from "@/components/onboarding-chat-contract-widget";
 import { buildOnboardingKickoffPrompt } from "@/lib/adoption/kickoff";
 import { PROVIDER_REGISTRY } from "@/lib/llm/registry";
 import type {
@@ -1292,6 +1293,24 @@ function isOnboardingChatSession(session: ChatSession | undefined): boolean {
   return Boolean(session?.title?.startsWith("[Onboarding]"));
 }
 
+function hasOnboardingContractReviewRequest(
+  messages: ChatMessage[],
+  deviceId: string | undefined,
+): boolean {
+  if (!deviceId) {
+    return false;
+  }
+
+  return messages.some((message) => (
+    message.role === "assistant"
+    && (message.metadata?.toolEvents ?? []).some((event) => (
+      event.status === "completed"
+      && event.onboardingMutation?.action === "show_contract_review"
+      && event.onboardingMutation.deviceId === deviceId
+    ))
+  ));
+}
+
 export function ChatWorkspace({
   initialDeviceId,
   autostart,
@@ -1397,6 +1416,15 @@ export function ChatWorkspace({
     () => getSessionMessages(activeSessionId),
     [activeSessionId, getSessionMessages],
   );
+  const lastAssistantMessageId = useMemo(() => {
+    for (let idx = messages.length - 1; idx >= 0; idx -= 1) {
+      const message = messages[idx];
+      if (message.role === "assistant" && !message.streaming && !message.error) {
+        return message.id;
+      }
+    }
+    return undefined;
+  }, [messages]);
   const messagesLoading = activeSessionId ? isSessionLoading(activeSessionId) : false;
   const activeSessionLoaded = activeSessionId ? isSessionLoaded(activeSessionId) : false;
   const activeSessionIsStreaming = activeSessionId !== null && streamingSessionId === activeSessionId;
@@ -1404,6 +1432,10 @@ export function ChatWorkspace({
   const activeSessionDevice = activeSession?.deviceId
     ? deviceById.get(activeSession.deviceId)
     : undefined;
+  const onboardingContractRequested = useMemo(
+    () => hasOnboardingContractReviewRequest(messages, activeSessionDevice?.id),
+    [activeSessionDevice?.id, messages],
+  );
   const selectedDevice = composerDeviceId !== "__none__"
     ? deviceById.get(composerDeviceId)
     : undefined;
@@ -2257,6 +2289,14 @@ export function ChatWorkspace({
                 {messages.map((msg) => (
                   <ChatMessageBubble key={msg.id} msg={msg} narrow={compact && deviceScoped} />
                 ))}
+
+                {activeSessionDevice && activeSession && isOnboardingChatSession(activeSession) && onboardingContractRequested ? (
+                  <OnboardingChatContractWidget
+                    deviceId={activeSessionDevice.id}
+                    active={activeSessionLoaded}
+                    lastAssistantMessageId={lastAssistantMessageId}
+                  />
+                ) : null}
               </div>
             )}
           </div>
