@@ -14,10 +14,10 @@ import {
   Settings,
   Shield,
   Menu,
-  CheckSquare,
   ShieldCheck,
   FileText,
   Network,
+  ListTodo,
   Puzzle,
   UserRoundCog,
   Bot,
@@ -31,6 +31,7 @@ import { Sheet, SheetContent, SheetTrigger, SheetTitle } from "@/components/ui/s
 import { ThemeToggle } from "@/components/theme-toggle";
 import { ChatRuntimeProvider } from "@/lib/hooks/use-chat-runtime";
 import { StewardProvider, useSteward } from "@/lib/hooks/use-steward";
+import { countOpenJobs } from "@/lib/jobs";
 import { navItemVariants, pageVariants, quickSpring, staggerContainerVariants } from "@/lib/motion";
 
 type NavItem = {
@@ -65,7 +66,7 @@ const navGroups: { label: string; items: NavItem[] }[] = [
   {
     label: "Control",
     items: [
-      { href: "/approvals", label: "Approvals", icon: CheckSquare },
+      { href: "/jobs", label: "Jobs", icon: ListTodo },
       { href: "/policies", label: "Policies", icon: ShieldCheck },
     ],
   },
@@ -190,14 +191,14 @@ function VaultIndicator() {
 
 function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
-  const { overview } = useSteward();
+  const { overview, playbookRuns } = useSteward();
   const reduceMotion = useReducedMotion();
   const layoutGroupId = onNavigate ? "mobile-sidebar-nav" : "desktop-sidebar-nav";
   const isRouteActive = (href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
 
   const getBadge = (href: string) => {
     if (href === "/incidents") return overview.incidents;
-    if (href === "/approvals") return overview.pendingApprovals;
+    if (href === "/jobs") return countOpenJobs(playbookRuns);
     return undefined;
   };
 

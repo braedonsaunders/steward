@@ -522,13 +522,9 @@ async function runWidgetOperation(args: {
       quarantineActive: false,
     },
   );
-  const policyDecision = evaluatedPolicy.decision === "REQUIRE_APPROVAL"
-    ? "ALLOW_AUTO"
-    : evaluatedPolicy.decision;
-  const policyReason = evaluatedPolicy.decision === "REQUIRE_APPROVAL"
-    ? `Widget operations bypass manual approval. Original policy: ${evaluatedPolicy.reason}`
-    : evaluatedPolicy.reason;
-  const approved = false;
+  const policyDecision = evaluatedPolicy.decision;
+  const policyReason = evaluatedPolicy.reason;
+  const approved = args.approved === true;
 
   if (policyDecision === "DENY") {
     const result: WidgetOperationResult = {
@@ -562,6 +558,55 @@ async function runWidgetOperation(args: {
     return result;
   }
 
+  if (policyDecision === "REQUIRE_APPROVAL" && !approved) {
+    const result: WidgetOperationResult = {
+      ok: false,
+      status: "requires-approval",
+      phase: "blocked",
+      proof: "none",
+      summary: "Widget operation requires approval",
+      output: `Policy requires approval before this widget operation can run: ${policyReason}`,
+      details: {
+        nextStep: "Run this action through chat or Jobs so it enters the governed approval workflow.",
+      },
+      gateResults: [],
+      idempotencyKey: `${args.widget.id}:approval-required`,
+      policyDecision,
+      policyReason,
+      approvalRequired: true,
+      approved,
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+    };
+    if (args.persist) {
+      stateStore.addDeviceWidgetOperationRun(createWidgetOperationRun({
+        device: args.device,
+        widget: args.widget,
+        operation,
+        policyDecision,
+        policyReason,
+        approved,
+        result,
+      }));
+
+      await stateStore.addAction({
+        actor: "user",
+        kind: "policy",
+        message: `Widget operation on ${args.device.name} requires approval`,
+        context: {
+          deviceId: args.device.id,
+          widgetId: args.widget.id,
+          widgetSlug: args.widget.slug,
+          operationKind: operation.kind,
+          operationMode: operation.mode,
+          policyDecision,
+          policyReason,
+        },
+      });
+    }
+    return result;
+  }
+
   const execution = await executeOperationWithGates(operation, args.device, {
     actor: "user",
     lane: "A",
@@ -591,7 +636,7 @@ async function runWidgetOperation(args: {
     idempotencyKey: execution.idempotencyKey,
     policyDecision,
     policyReason,
-    approvalRequired: false,
+    approvalRequired: policyDecision === "REQUIRE_APPROVAL",
     approved,
     startedAt: execution.startedAt,
     completedAt: execution.completedAt,

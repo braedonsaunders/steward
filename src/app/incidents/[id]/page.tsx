@@ -551,7 +551,7 @@ export default function IncidentDetailPage() {
                       variant={
                         run.status === "completed" ? "default" :
                         run.status === "failed" || run.status === "denied" ? "destructive" :
-                        run.status === "pending_approval" ? "secondary" :
+                        run.status === "pending_approval" || run.status === "waiting" ? "secondary" :
                         "outline"
                       }
                       className="shrink-0 text-[10px]"

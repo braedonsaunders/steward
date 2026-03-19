@@ -10,6 +10,7 @@ import {
   releaseActiveChatStream,
 } from "@/lib/assistant/chat-stream-registry";
 import { buildAssistantContext } from "@/lib/assistant/context";
+import { tryHandleDeviceChatAction } from "@/lib/assistant/device-actions";
 import { maybeUpdateOperatorNotes } from "@/lib/assistant/operator-notes";
 import { buildStewardSystemPrompt } from "@/lib/assistant/prompt";
 import { buildAdapterSkillTools } from "@/lib/assistant/tool-skills";
@@ -18,7 +19,20 @@ import {
   shouldExposeWidgetManagementForTurn,
   type WidgetRoutePlan,
 } from "@/lib/assistant/widget-routing";
-import { buildOnboardingSystemPrompt, isOnboardingSession } from "@/lib/adoption/conversation";
+import {
+  buildOnboardingSystemPrompt,
+  isOnboardingSession,
+  type OnboardingSynthesis,
+  synthesizeOnboardingModel,
+} from "@/lib/adoption/conversation";
+import {
+  getDeviceAdoptionSnapshot,
+  updateDeviceOnboardingDraft,
+} from "@/lib/adoption/orchestrator";
+import {
+  buildDraftSeedFromSynthesis,
+  hasDraftProposalContent,
+} from "@/lib/adoption/onboarding-contract";
 import { normalizeChatError } from "@/lib/chat/errors";
 import { summarizeDeviceContractForPrompt } from "@/lib/devices/contract-management";
 import { getDefaultProvider } from "@/lib/llm/config";
@@ -35,6 +49,7 @@ import type {
   ChatToolEvent,
   ChatToolEventKind,
   ChatToolWidgetMutation,
+  Device,
   LLMProvider,
 } from "@/lib/state/types";
 import { generateAndStoreDeviceWidget } from "@/lib/widgets/generator";
@@ -362,6 +377,66 @@ function extractOnboardingMutation(
     action: "show_contract_review",
     deviceId,
   };
+}
+
+function hasOnboardingContractReviewMutation(
+  toolEvents: ChatToolEvent[] | undefined,
+  deviceId: string,
+): boolean {
+  return (toolEvents ?? []).some((event) => (
+    event.status === "completed"
+    && event.onboardingMutation?.action === "show_contract_review"
+    && event.onboardingMutation.deviceId === deviceId
+  ));
+}
+
+async function saveOnboardingSynthesis(deviceId: string, synthesis: OnboardingSynthesis): Promise<void> {
+  const run = stateStore.getLatestAdoptionRun(deviceId);
+  if (!run) {
+    return;
+  }
+
+  stateStore.upsertAdoptionRun({
+    ...run,
+    profileJson: {
+      ...run.profileJson,
+      onboardingSynthesis: synthesis,
+    },
+    summary: synthesis.summary,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+async function maybeSeedOnboardingContractReview(args: {
+  device: Device | null | undefined;
+  sessionId?: string;
+  toolEvents?: ChatToolEvent[];
+}): Promise<void> {
+  const { device, sessionId, toolEvents } = args;
+  if (!device || !sessionId || !hasOnboardingContractReviewMutation(toolEvents, device.id)) {
+    return;
+  }
+
+  const snapshot = await getDeviceAdoptionSnapshot(device.id);
+  if (snapshot.draft && hasDraftProposalContent(snapshot.draft)) {
+    return;
+  }
+
+  const synthesis = await synthesizeOnboardingModel(device, sessionId);
+  const draftSeed = buildDraftSeedFromSynthesis(synthesis);
+  if (!hasDraftProposalContent(draftSeed)) {
+    return;
+  }
+
+  await saveOnboardingSynthesis(device.id, synthesis);
+  await updateDeviceOnboardingDraft({
+    deviceId: device.id,
+    summary: draftSeed.summary,
+    workloads: draftSeed.workloads,
+    assurances: draftSeed.assurances,
+    nextActions: draftSeed.nextActions,
+    actor: "steward",
+  });
 }
 
 function inferToolKind(toolName: string, inputPreview?: string, outputPreview?: string): ChatToolEventKind {
@@ -1177,6 +1252,28 @@ function persistEarlySessionError(args: {
   });
 }
 
+function persistDirectAssistantResponse(args: {
+  sessionId?: string;
+  provider: LLMProvider;
+  text: string;
+  error?: boolean;
+  metadata?: ChatMessageMetadata;
+}): void {
+  if (!args.sessionId) {
+    return;
+  }
+  stateStore.addChatMessage({
+    id: randomUUID(),
+    sessionId: args.sessionId,
+    role: "assistant",
+    content: args.text,
+    provider: args.provider,
+    error: args.error === true,
+    createdAt: new Date().toISOString(),
+    ...(args.metadata ? { metadata: args.metadata } : {}),
+  });
+}
+
 async function autoContinueIfTruncated(args: {
   model: Awaited<ReturnType<typeof buildLanguageModel>>;
   systemPrompt: string;
@@ -1281,6 +1378,58 @@ export async function POST(request: NextRequest) {
     const historyExcludingCurrent = sessionId && !payload.data.suppressUserMessage
       ? persistedHistory.slice(0, -1)
       : persistedHistory;
+    const directDeviceAction = attachedDevice && !onboardingSession
+      ? await tryHandleDeviceChatAction({
+        input: payload.data.input,
+        provider,
+        model: payload.data.model,
+        attachedDevice,
+        history: historyExcludingCurrent,
+        sessionId,
+      })
+      : { handled: false };
+
+    if (directDeviceAction.handled && typeof directDeviceAction.response === "string") {
+      persistDirectAssistantResponse({
+        sessionId,
+        provider,
+        text: directDeviceAction.response,
+        error: directDeviceAction.error,
+        metadata: directDeviceAction.chatMessageMetadata,
+      });
+
+      if (attachedDevice) {
+        await maybeUpdateOperatorNotes({
+          device: attachedDevice,
+          provider,
+          model: payload.data.model,
+          userInput: payload.data.input,
+          assistantOutput: directDeviceAction.response,
+          sessionId,
+          onboarding: onboardingSession,
+          toolEvents: [],
+        });
+      }
+
+      if (payload.data.stream) {
+        return ndjsonStreamFromEvents([
+          { type: "start", provider },
+          { type: "text-delta", text: directDeviceAction.response },
+          {
+            type: "finish",
+            provider,
+            text: directDeviceAction.response,
+            metadata: directDeviceAction.chatMessageMetadata,
+          },
+        ]);
+      }
+
+      return NextResponse.json({
+        provider,
+        text: directDeviceAction.response,
+        metadata: directDeviceAction.chatMessageMetadata,
+      });
+    }
     const widgetTurnRequested = attachedDevice
       ? shouldExposeWidgetManagementForTurn({
         history: historyExcludingCurrent,
@@ -1829,6 +1978,12 @@ export async function POST(request: NextRequest) {
             });
           }
 
+          await maybeSeedOnboardingContractReview({
+            device: attachedDevice,
+            sessionId,
+            toolEvents,
+          }).catch(() => undefined);
+
           await stateStore.addAction({
             actor: "user",
             kind: "diagnose",
@@ -1958,6 +2113,12 @@ export async function POST(request: NextRequest) {
         createdAt: new Date().toISOString(),
       });
     }
+
+    await maybeSeedOnboardingContractReview({
+      device: attachedDevice,
+      sessionId,
+      toolEvents: undefined,
+    }).catch(() => undefined);
 
     await stateStore.addAction({
       actor: "user",

@@ -373,6 +373,7 @@ export type PlaybookFamily =
 export type PlaybookStepStatus =
   | "pending"
   | "running"
+  | "waiting"
   | "passed"
   | "failed"
   | "skipped"
@@ -384,11 +385,22 @@ export type PlaybookRunStatus =
   | "denied"
   | "preflight"
   | "executing"
+  | "waiting"
   | "verifying"
   | "rolling_back"
   | "completed"
   | "failed"
   | "quarantined";
+
+export type PlaybookWaitPhase = "execution" | "verification" | "rollback";
+
+export interface PlaybookWaitState {
+  phase: PlaybookWaitPhase;
+  stepId: string;
+  label: string;
+  nextWakeAt: string;
+  reason: string;
+}
 
 export type GraphNodeType =
   | "device"
@@ -1596,6 +1608,8 @@ export interface PlaybookStep {
   output?: string;
   startedAt?: string;
   completedAt?: string;
+  nextAttemptAt?: string;
+  attempts?: number;
   gateResults?: SafetyGateResult[];
 }
 
@@ -1636,6 +1650,7 @@ export interface PlaybookRun {
     preSnapshot?: Record<string, unknown> & { stateHash?: string };
     postSnapshot?: Record<string, unknown> & { stateHash?: string };
     logs: string[];
+    waiting?: PlaybookWaitState;
     gateResults?: SafetyGateResult[];
     auditBundle?: {
       actor: "steward" | "user";
@@ -1756,9 +1771,16 @@ export interface ChatToolEvent {
   onboardingMutation?: ChatToolOnboardingMutation;
 }
 
+export interface ChatMessagePlaybookRunLink {
+  runId: string;
+  deviceId: string;
+  status: PlaybookRunStatus;
+}
+
 export interface ChatMessageMetadata {
   toolEvents?: ChatToolEvent[];
   interrupted?: boolean;
+  playbookRun?: ChatMessagePlaybookRunLink;
 }
 
 export interface ChatMessage {

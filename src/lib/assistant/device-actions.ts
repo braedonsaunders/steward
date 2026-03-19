@@ -3,7 +3,7 @@ import { z } from "zod";
 import { buildLanguageModel } from "@/lib/llm/providers";
 import { stateStore } from "@/lib/state/store";
 import { evaluatePolicy } from "@/lib/policy/engine";
-import { createApproval } from "@/lib/approvals/queue";
+import { approveAction, createApproval, denyAction } from "@/lib/approvals/queue";
 import { buildPlaybookRun, countRecentFamilyFailures, isFamilyQuarantined } from "@/lib/playbooks/factory";
 import { queuePlaybookExecution } from "@/lib/playbooks/orchestrator";
 import { getMissingCredentialProtocolsForPlaybook } from "@/lib/adoption/playbook-credentials";
@@ -12,10 +12,13 @@ import {
   getRequiredProtocolsForServiceContract,
 } from "@/lib/monitoring/contracts";
 import type {
+  ChatMessage,
+  ChatMessageMetadata,
   Device,
   DeviceType,
   LLMProvider,
   OperationSpec,
+  PlaybookRun,
   PlaybookDefinition,
   PlaybookStep,
 } from "@/lib/state/types";
@@ -23,7 +26,11 @@ import type {
 const monitorIntentPattern = /\b(monitor|watch|track|observe|alert if|keep an eye|check every)\b/i;
 const uiIntentPattern = /\b(ui|gui|desktop|screen|window|rdp|vnc)\b/i;
 const uiCheckPattern = /\b(check|verify|watch|see|inspect)\b/i;
-const adhocTaskPattern = /\b(install|set up|setup|deploy|provision|configure|bootstrap)\b/i;
+const adhocTaskPattern = /\b(install|set up|setup|deploy|provision|configure|bootstrap|upgrade|update|patch|migrate|backup|restore|restart|reboot|harden|lock down|rotate|renew|facilitate|execute|run)\b/i;
+const adhocPlanningOnlyPattern = /\b(version|latest|current|upgrade path|maintenance plan|compatibility|status|why|how)\b/i;
+const adhocExecutionHintPattern = /\b(start|proceed|now|perform|execute|run|facilitate|carry out|apply|upgrade|backup|restore|restart|reboot|patch|migrate|harden)\b/i;
+const approvalIntentPattern = /^(?:yes|yeah|yep|approve|approved|go ahead|do it|please do|proceed|start it|run it|execute it|ship it)\b/i;
+const denialIntentPattern = /^(?:no|nope|deny|denied|cancel|stop|hold off|not now|don't|do not)\b/i;
 const renameIntentPattern = /\b(rename|name\s+this|call\s+it)\b/i;
 const categoryIntentPattern = /\b(category|device\s+type|type\s+to|mark\s+as)\b/i;
 
@@ -91,13 +98,42 @@ const DEVICE_TYPE_MAP: Record<string, DeviceType> = {
   unknown: "unknown",
 };
 
+const AdhocPlanStepSchema = z.object({
+  label: z.string().min(1).max(160),
+  commandTemplate: z.string().min(1).max(1_600),
+  mode: z.enum(["read", "mutate"]).optional(),
+  waitForCondition: z.boolean().optional(),
+  pollIntervalMs: z.number().int().min(5_000).max(60 * 60 * 1000).optional(),
+  maxWaitMs: z.number().int().min(30_000).max(72 * 60 * 60 * 1000).optional(),
+  successRegex: z.string().min(1).max(400).optional(),
+  failureRegex: z.string().min(1).max(400).optional(),
+}).superRefine((step, ctx) => {
+  if (!step.waitForCondition) {
+    return;
+  }
+  if (!step.pollIntervalMs) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["pollIntervalMs"],
+      message: "waitForCondition steps require pollIntervalMs.",
+    });
+  }
+  if (!step.maxWaitMs) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["maxWaitMs"],
+      message: "waitForCondition steps require maxWaitMs.",
+    });
+  }
+});
+
 const AdhocPlanSchema = z.object({
   family: z.string().min(1).max(80),
   rationale: z.string().min(1).max(1_200),
   requiredProtocol: z.enum(["ssh", "winrm", "powershell-ssh", "wmi", "smb", "rdp", "vnc", "docker", "http-api"]),
-  mutateCommandTemplates: z.array(z.string().min(1).max(800)).min(1).max(6),
-  verifyCommandTemplates: z.array(z.string().min(1).max(800)).min(1).max(6),
-  rollbackCommandTemplates: z.array(z.string().min(1).max(800)).max(6).default([]),
+  mutateSteps: z.array(AdhocPlanStepSchema).min(1).max(16),
+  verifySteps: z.array(AdhocPlanStepSchema).min(1).max(16),
+  rollbackSteps: z.array(AdhocPlanStepSchema).max(16).default([]),
 });
 
 type AdhocPlan = z.infer<typeof AdhocPlanSchema>;
@@ -106,6 +142,8 @@ export interface DeviceChatActionResult {
   handled: boolean;
   response?: string;
   metadata?: Record<string, unknown>;
+  chatMessageMetadata?: ChatMessageMetadata;
+  error?: boolean;
 }
 
 interface DeviceChatActionInput {
@@ -113,6 +151,7 @@ interface DeviceChatActionInput {
   provider: LLMProvider;
   model?: string;
   attachedDevice: Device | null;
+  history: ChatMessage[];
   sessionId?: string;
 }
 
@@ -146,7 +185,54 @@ function looksLikeMonitorIntent(input: string): boolean {
 }
 
 function looksLikeAdhocTaskIntent(input: string): boolean {
-  return adhocTaskPattern.test(input);
+  if (!adhocTaskPattern.test(input)) {
+    return false;
+  }
+  return !adhocPlanningOnlyPattern.test(input) || adhocExecutionHintPattern.test(input);
+}
+
+function buildPlaybookChatMetadata(run: PlaybookRun): ChatMessageMetadata {
+  return {
+    playbookRun: {
+      runId: run.id,
+      deviceId: run.deviceId,
+      status: run.status,
+    },
+  };
+}
+
+function mostRecentReferencedRunId(history: ChatMessage[], deviceId?: string): string | null {
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const candidate = history[index]?.metadata?.playbookRun;
+    if (!candidate?.runId) {
+      continue;
+    }
+    if (deviceId && candidate.deviceId !== deviceId) {
+      continue;
+    }
+    return candidate.runId;
+  }
+  return null;
+}
+
+function summarizeRunState(run: PlaybookRun): string {
+  if (run.status === "pending_approval") {
+    return `Run ${run.id} is pending approval.`;
+  }
+  if (run.status === "waiting" && run.evidence.waiting) {
+    return `Run ${run.id} is waiting on ${run.evidence.waiting.label}. Next wake: ${run.evidence.waiting.nextWakeAt}.`;
+  }
+  return `Run ${run.id} is ${run.status.replace(/_/g, " ")}.`;
+}
+
+function approvalIntent(input: string): "approve" | "deny" | null {
+  if (approvalIntentPattern.test(input.trim())) {
+    return "approve";
+  }
+  if (denialIntentPattern.test(input.trim())) {
+    return "deny";
+  }
+  return null;
 }
 
 function extractSuggestedName(input: string): string | null {
@@ -264,6 +350,60 @@ function inferDeviceCategory(device: Device): DeviceType | null {
   if (/(server|ubuntu|debian|windows server|rhel)/.test(hints)) return "server";
 
   return null;
+}
+
+async function handlePendingApprovalResponse(
+  input: string,
+  history: ChatMessage[],
+  device: Device | null,
+  sessionId?: string,
+): Promise<DeviceChatActionResult> {
+  const intent = approvalIntent(input);
+  if (!intent) {
+    return { handled: false };
+  }
+
+  const runId = mostRecentReferencedRunId(history, device?.id);
+  if (!runId) {
+    return { handled: false };
+  }
+
+  const run = stateStore.getPlaybookRunById(runId);
+  if (!run || run.status !== "pending_approval") {
+    return { handled: false };
+  }
+
+  if (intent === "approve") {
+    const approved = approveAction(run.id, "user_chat");
+    if (!approved) {
+      return {
+        handled: true,
+        response: `Approval could not be applied. ${summarizeRunState(run)}`,
+        metadata: { action: "playbook_approval", runId: run.id, sessionId, approved: false },
+      };
+    }
+    return {
+      handled: true,
+      response: `Approved ${approved.name}. Run ${approved.id} is queued and will continue in the background, including any wait checkpoints it needs.`,
+      metadata: { action: "playbook_approval", runId: approved.id, sessionId, approved: true },
+      chatMessageMetadata: buildPlaybookChatMetadata(approved),
+    };
+  }
+
+  const denied = denyAction(run.id, "user_chat", "Denied in chat");
+  if (!denied) {
+    return {
+      handled: true,
+      response: `Denial could not be applied. ${summarizeRunState(run)}`,
+      metadata: { action: "playbook_denial", runId: run.id, sessionId, denied: false },
+    };
+  }
+  return {
+    handled: true,
+    response: `Denied ${denied.name}. Run ${denied.id} will not execute.`,
+    metadata: { action: "playbook_denial", runId: denied.id, sessionId, denied: true },
+    chatMessageMetadata: buildPlaybookChatMetadata(denied),
+  };
 }
 
 async function handleDeviceSettingsRequest(
@@ -392,15 +532,28 @@ function fallbackPlanForDevice(device: Device, input: string): AdhocPlan | null 
       family: "custom-install",
       rationale: `Install and configure ${service} on ${device.name} via SSH.`,
       requiredProtocol: "ssh",
-      mutateCommandTemplates: [
-        `ssh {{host}} 'sudo apt-get update -y'`,
-        `ssh {{host}} 'sudo apt-get install -y ${service}'`,
+      mutateSteps: [
+        {
+          label: "Refresh package metadata",
+          commandTemplate: `ssh {{host}} 'sudo apt-get update -y'`,
+        },
+        {
+          label: `Install ${service}`,
+          commandTemplate: `ssh {{host}} 'sudo apt-get install -y ${service}'`,
+        },
       ],
-      verifyCommandTemplates: [
-        `ssh {{host}} 'systemctl is-active ${service} || pgrep -f ${service}'`,
+      verifySteps: [
+        {
+          label: `Verify ${service} is running`,
+          commandTemplate: `ssh {{host}} 'systemctl is-active ${service} || pgrep -f ${service}'`,
+          mode: "read",
+        },
       ],
-      rollbackCommandTemplates: [
-        `ssh {{host}} 'sudo apt-get remove -y ${service}'`,
+      rollbackSteps: [
+        {
+          label: `Remove ${service}`,
+          commandTemplate: `ssh {{host}} 'sudo apt-get remove -y ${service}'`,
+        },
       ],
     };
   }
@@ -410,13 +563,20 @@ function fallbackPlanForDevice(device: Device, input: string): AdhocPlan | null 
       family: "custom-install",
       rationale: `Install and configure ${service} on ${device.name} via WinRM.`,
       requiredProtocol: "winrm",
-      mutateCommandTemplates: [
-        `pwsh -NoLogo -NonInteractive -Command "Invoke-Command -ComputerName {{host}} -ScriptBlock { winget install --id ${service} -e --accept-package-agreements --accept-source-agreements }"`,
+      mutateSteps: [
+        {
+          label: `Install ${service}`,
+          commandTemplate: `pwsh -NoLogo -NonInteractive -Command "Invoke-Command -ComputerName {{host}} -ScriptBlock { winget install --id ${service} -e --accept-package-agreements --accept-source-agreements }"`,
+        },
       ],
-      verifyCommandTemplates: [
-        `pwsh -NoLogo -NonInteractive -Command "Invoke-Command -ComputerName {{host}} -ScriptBlock { Get-Service -Name '${service}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status }"`,
+      verifySteps: [
+        {
+          label: `Verify ${service} service state`,
+          commandTemplate: `pwsh -NoLogo -NonInteractive -Command "Invoke-Command -ComputerName {{host}} -ScriptBlock { Get-Service -Name '${service}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status }"`,
+          mode: "read",
+        },
       ],
-      rollbackCommandTemplates: [],
+      rollbackSteps: [],
     };
   }
 
@@ -425,13 +585,20 @@ function fallbackPlanForDevice(device: Device, input: string): AdhocPlan | null 
       family: "custom-install",
       rationale: `Install and configure ${service} on ${device.name} via PowerShell over SSH.`,
       requiredProtocol: "powershell-ssh",
-      mutateCommandTemplates: [
-        `ssh {{host}} "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"winget install --id ${service} -e --accept-package-agreements --accept-source-agreements\""`,
+      mutateSteps: [
+        {
+          label: `Install ${service}`,
+          commandTemplate: `ssh {{host}} "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"winget install --id ${service} -e --accept-package-agreements --accept-source-agreements\""`,
+        },
       ],
-      verifyCommandTemplates: [
-        `ssh {{host}} "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"Get-Service -Name '${service}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status\""`,
+      verifySteps: [
+        {
+          label: `Verify ${service} service state`,
+          commandTemplate: `ssh {{host}} "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"Get-Service -Name '${service}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status\""`,
+          mode: "read",
+        },
       ],
-      rollbackCommandTemplates: [],
+      rollbackSteps: [],
     };
   }
 
@@ -440,15 +607,28 @@ function fallbackPlanForDevice(device: Device, input: string): AdhocPlan | null 
       family: "custom-install",
       rationale: `Deploy ${service} as a container responsibility on ${device.name}.`,
       requiredProtocol: "docker",
-      mutateCommandTemplates: [
-        `docker -H tcp://{{host}} pull ${service}:latest`,
-        `docker -H tcp://{{host}} run -d --restart unless-stopped --name ${service} ${service}:latest`,
+      mutateSteps: [
+        {
+          label: `Pull ${service} image`,
+          commandTemplate: `docker -H tcp://{{host}} pull ${service}:latest`,
+        },
+        {
+          label: `Start ${service} container`,
+          commandTemplate: `docker -H tcp://{{host}} run -d --restart unless-stopped --name ${service} ${service}:latest`,
+        },
       ],
-      verifyCommandTemplates: [
-        `docker -H tcp://{{host}} ps --filter name=${service} --format '{{.Names}} {{.Status}}'`,
+      verifySteps: [
+        {
+          label: `Verify ${service} container state`,
+          commandTemplate: `docker -H tcp://{{host}} ps --filter name=${service} --format '{{.Names}} {{.Status}}'`,
+          mode: "read",
+        },
       ],
-      rollbackCommandTemplates: [
-        `docker -H tcp://{{host}} rm -f ${service}`,
+      rollbackSteps: [
+        {
+          label: `Remove ${service} container`,
+          commandTemplate: `docker -H tcp://{{host}} rm -f ${service}`,
+        },
       ],
     };
   }
@@ -457,13 +637,20 @@ function fallbackPlanForDevice(device: Device, input: string): AdhocPlan | null 
     family: "custom-task",
     rationale: `Execute HTTP/API-oriented setup checks on ${device.name}.`,
     requiredProtocol: "http-api",
-    mutateCommandTemplates: [
-      `curl -fsS --max-time 15 http://{{host}}/`,
+    mutateSteps: [
+      {
+        label: "Run API reachability check",
+        commandTemplate: `curl -fsS --max-time 15 http://{{host}}/`,
+      },
     ],
-    verifyCommandTemplates: [
-      `curl -fsS --max-time 15 http://{{host}}/`,
+    verifySteps: [
+      {
+        label: "Verify API reachability",
+        commandTemplate: `curl -fsS --max-time 15 http://{{host}}/`,
+        mode: "read",
+      },
     ],
-    rollbackCommandTemplates: [],
+    rollbackSteps: [],
   };
 }
 
@@ -482,13 +669,15 @@ async function llmAdhocPlanForDevice(
   const result = await generateText({
     model: modelClient,
     temperature: 0.1,
-    maxOutputTokens: 700,
+    maxOutputTokens: 1_200,
     system: [
       "You generate strict JSON for Steward ad-hoc infrastructure task plans.",
       "Return JSON only. No markdown.",
-      "All mutate/verify/rollback values must be shell command templates.",
+      "All steps must use shell command templates.",
       "Use {{host}} placeholder for the target host when needed.",
       "Prefer safe, reversible operations and include verification.",
+      "If the task may take a long time, add waitForCondition steps instead of sleeping inline.",
+      "Wait steps must be read-only condition checks with pollIntervalMs and maxWaitMs.",
       "If unsure, keep steps minimal and conservative.",
     ].join("\n"),
     prompt: [
@@ -501,10 +690,11 @@ async function llmAdhocPlanForDevice(
       '  "family": "custom-install",',
       '  "rationale": "string",',
       '  "requiredProtocol": "ssh|winrm|docker|http-api",',
-      '  "mutateCommandTemplates": ["..."],',
-      '  "verifyCommandTemplates": ["..."],',
-      '  "rollbackCommandTemplates": ["..."]',
+      '  "mutateSteps": [{"label":"string","commandTemplate":"string","mode":"mutate","waitForCondition":false}],',
+      '  "verifySteps": [{"label":"string","commandTemplate":"string","mode":"read","waitForCondition":false}],',
+      '  "rollbackSteps": [{"label":"string","commandTemplate":"string","mode":"mutate","waitForCondition":false}]',
       "}",
+      'Use waitForCondition=true only for polling checkpoints. Example wait step: {"label":"Wait for migrations","commandTemplate":"ssh {{host}} \'sudo gitlab-rake gitlab:background_migrations:status\'","mode":"read","waitForCondition":true,"pollIntervalMs":60000,"maxWaitMs":14400000,"successRegex":"finished|no pending"}',
       "",
       `User request: ${input}`,
     ].join("\n"),
@@ -515,19 +705,30 @@ async function llmAdhocPlanForDevice(
   return validated;
 }
 
-function operationForTemplate(
+function operationForPlannedStep(
   id: string,
   adapterId: string,
-  mode: OperationSpec["mode"],
-  commandTemplate: string,
+  defaultMode: OperationSpec["mode"],
+  step: AdhocPlan["mutateSteps"][number],
 ): PlaybookStep["operation"] {
+  const isWaitStep = step.waitForCondition === true;
+  const mode = isWaitStep ? "read" : (step.mode ?? defaultMode);
   return {
     id: `op:${id}`,
     adapterId,
     kind: "shell.command",
     mode,
-    timeoutMs: mode === "read" ? 30_000 : 180_000,
-    commandTemplate,
+    timeoutMs: isWaitStep ? 60_000 : mode === "read" ? 30_000 : 180_000,
+    commandTemplate: step.commandTemplate,
+    args: isWaitStep
+      ? {
+        waitForCondition: true,
+        ...(typeof step.pollIntervalMs === "number" ? { pollIntervalMs: step.pollIntervalMs } : {}),
+        ...(typeof step.maxWaitMs === "number" ? { maxWaitMs: step.maxWaitMs } : {}),
+        ...(typeof step.successRegex === "string" ? { successRegex: step.successRegex } : {}),
+        ...(typeof step.failureRegex === "string" ? { failureRegex: step.failureRegex } : {}),
+      }
+      : undefined,
     expectedSemanticTarget: "chat-adhoc-task",
     safety: {
       dryRunSupported: false,
@@ -539,20 +740,20 @@ function operationForTemplate(
 
 function toAdhocPlaybook(device: Device, request: string, plan: AdhocPlan): PlaybookDefinition {
   const safeFamily = plan.family.trim().toLowerCase().replace(/[^a-z0-9._-]/g, "-").slice(0, 50) || "custom-task";
-  const steps = plan.mutateCommandTemplates.map((template, idx) => ({
+  const steps = plan.mutateSteps.map((step, idx) => ({
     id: `step:mutate:${idx + 1}`,
-    label: `Mutate step ${idx + 1}`,
-    operation: operationForTemplate(`mutate:${idx + 1}`, plan.requiredProtocol, "mutate", template),
+    label: step.label,
+    operation: operationForPlannedStep(`mutate:${idx + 1}`, plan.requiredProtocol, "mutate", step),
   }));
-  const verificationSteps = plan.verifyCommandTemplates.map((template, idx) => ({
+  const verificationSteps = plan.verifySteps.map((step, idx) => ({
     id: `step:verify:${idx + 1}`,
-    label: `Verify step ${idx + 1}`,
-    operation: operationForTemplate(`verify:${idx + 1}`, plan.requiredProtocol, "read", template),
+    label: step.label,
+    operation: operationForPlannedStep(`verify:${idx + 1}`, plan.requiredProtocol, "read", step),
   }));
-  const rollbackSteps = plan.rollbackCommandTemplates.map((template, idx) => ({
+  const rollbackSteps = plan.rollbackSteps.map((step, idx) => ({
     id: `step:rollback:${idx + 1}`,
-    label: `Rollback step ${idx + 1}`,
-    operation: operationForTemplate(`rollback:${idx + 1}`, plan.requiredProtocol, "mutate", template),
+    label: step.label,
+    operation: operationForPlannedStep(`rollback:${idx + 1}`, plan.requiredProtocol, "mutate", step),
   }));
 
   return {
@@ -661,7 +862,7 @@ async function handleAdhocTaskRequest(
   if (!device) {
     return {
       handled: true,
-      response: "I can plan that install/setup task, but this chat is not attached to a device. Attach a device in chat and retry.",
+      response: "I can plan that device task, but this chat is not attached to a device. Attach a device in chat and retry.",
       metadata: { action: "adhoc_task", blocked: "missing_device", sessionId },
     };
   }
@@ -778,8 +979,9 @@ async function handleAdhocTaskRequest(
     lane: "A",
   });
 
+  let persistedRun = run;
   if (policyEvaluation.decision === "REQUIRE_APPROVAL") {
-    createApproval(run, device);
+    persistedRun = createApproval(run, device);
   } else {
     stateStore.upsertPlaybookRun(run);
     queuePlaybookExecution(run, "auto");
@@ -799,11 +1001,15 @@ async function handleAdhocTaskRequest(
     },
   });
 
-  const firstCommand = playbook.steps[0]?.operation.commandTemplate ?? "";
+  const firstStep = playbook.steps[0];
+  const firstCommand = firstStep?.operation.commandTemplate ?? "";
   const commandPreview = firstCommand.length > 140 ? `${firstCommand.slice(0, 137)}...` : firstCommand;
   const stateText = policyEvaluation.decision === "REQUIRE_APPROVAL"
-    ? `pending approval (run ${run.id})`
-    : `queued for execution (run ${run.id})`;
+    ? `pending approval (run ${persistedRun.id})`
+    : `queued for background execution (run ${persistedRun.id})`;
+  const approvalHint = policyEvaluation.decision === "REQUIRE_APPROVAL"
+    ? ` Reply "approve it" here or use Jobs > Pending.`
+    : " Steward will resume automatically across wait checkpoints until the run reaches a terminal state.";
 
   return {
     handled: true,
@@ -811,16 +1017,18 @@ async function handleAdhocTaskRequest(
       `Created an ad-hoc task plan for ${device.name} and ${stateText}.`,
       `Protocol: ${plan.requiredProtocol}.`,
       `Policy: ${policyEvaluation.decision}.`,
-      `First step: ${commandPreview}`,
-    ].join(" "),
+      `First step: ${firstStep?.label ?? commandPreview}`,
+      approvalHint,
+    ].join(" ").trim(),
     metadata: {
       action: "adhoc_task",
-      runId: run.id,
+      runId: persistedRun.id,
       deviceId: device.id,
       policyDecision: policyEvaluation.decision,
       requiredProtocol: plan.requiredProtocol,
       sessionId,
     },
+    chatMessageMetadata: buildPlaybookChatMetadata(persistedRun),
   };
 }
 
@@ -837,6 +1045,16 @@ export async function tryHandleDeviceChatAction(
     if (settingsResult.handled) {
       return settingsResult;
     }
+  }
+
+  const approvalResult = await handlePendingApprovalResponse(
+    text,
+    input.history,
+    input.attachedDevice,
+    input.sessionId,
+  );
+  if (approvalResult.handled) {
+    return approvalResult;
   }
 
   if (looksLikeMonitorIntent(text)) {

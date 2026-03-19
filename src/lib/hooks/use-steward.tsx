@@ -36,6 +36,7 @@ import type {
   UserRole,
 } from "@/lib/state/types";
 import type { DeviceAdoptionStatus } from "@/lib/state/device-adoption";
+import { countRunningPlaybookRuns } from "@/lib/jobs";
 import { filterActivePlaybookApprovals } from "@/lib/playbooks/approval-utils";
 import { defaultRuntimeSettings } from "@/lib/state/runtime-defaults";
 import { persistApiToken, withApiTokenQuery, withClientApiToken } from "@/lib/auth/client-token";
@@ -484,7 +485,7 @@ export function StewardProvider({ children }: { children: ReactNode }) {
       incidents: state.incidents.filter((i) => i.status !== "resolved").length,
       recommendations: state.recommendations.filter((r) => !r.dismissed).length,
       pendingApprovals: pendingApprovals.length,
-      playbooksRunning: (state.playbookRuns ?? []).filter((r) => ["preflight", "executing", "verifying"].includes(r.status)).length,
+      playbooksRunning: countRunningPlaybookRuns(state.playbookRuns ?? []),
     };
   }, [state, pendingApprovals]);
 

@@ -56,8 +56,6 @@ export const WidgetRoutePlanSchema = z.discriminatedUnion("route", [
 export type WidgetRoutePlan = z.infer<typeof WidgetRoutePlanSchema>;
 
 const DIRECT_WIDGET_KEYWORD_PATTERN = /\b(widget|dashboard|control panel|control surface|remote control)\b/i;
-const REMOTE_PANEL_HINT_PATTERN = /\b(remote|panel|ui|interface|screen)\b/i;
-const REMOTE_PANEL_ACTION_PATTERN = /\b(build|create|make|generate|design|open|show|fix|repair|update|edit|change|revise|modify|restyle|redesign|delete|remove|inspect|list|use)\b/i;
 const WIDGET_AUTHORING_ACTION_PATTERN = /\b(build|create|make|generate|design|fix|repair|update|edit|change|revise|modify|restyle|redesign|delete|remove|inspect|list|show|open)\b/i;
 const WIDGET_CONTROL_OR_AUTOMATION_PATTERN = /\b(press|click|trigger|run|execute|toggle|turn|set|enable|disable|automation|automate|schedule|scheduled|every|hourly|daily|recurring|repeat)\b/i;
 const WIDGET_CONTROL_SURFACE_PATTERN = /\b(control|controls|automation|automations)\b/i;
@@ -84,7 +82,7 @@ export function messageMentionsWidgetConcept(rawText: string): boolean {
   if (DIRECT_WIDGET_KEYWORD_PATTERN.test(text)) {
     return true;
   }
-  return REMOTE_PANEL_HINT_PATTERN.test(text) && REMOTE_PANEL_ACTION_PATTERN.test(text);
+  return false;
 }
 
 function recentHistoryHasWidgetContext(history: ChatMessage[]): boolean {

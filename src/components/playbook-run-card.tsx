@@ -9,10 +9,12 @@ import {
   Clock,
   Loader2,
   RotateCcw,
+  Shield,
   SkipForward,
   XCircle,
 } from "lucide-react";
 import type {
+  PolicyDecision,
   PlaybookRun,
   PlaybookRunStatus,
   PlaybookStep,
@@ -53,6 +55,7 @@ function statusBadgeVariant(
       return "destructive";
     case "executing":
     case "preflight":
+    case "waiting":
     case "verifying":
     case "rolling_back":
       return "secondary";
@@ -65,6 +68,34 @@ function statusLabel(status: PlaybookRunStatus): string {
   return status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+function decisionBadgeVariant(
+  decision: PolicyDecision,
+): "default" | "secondary" | "destructive" | "outline" {
+  switch (decision) {
+    case "ALLOW_AUTO":
+      return "default";
+    case "REQUIRE_APPROVAL":
+      return "secondary";
+    case "DENY":
+      return "destructive";
+    default:
+      return "outline";
+  }
+}
+
+function decisionLabel(decision: PolicyDecision): string {
+  switch (decision) {
+    case "ALLOW_AUTO":
+      return "Auto Allow";
+    case "REQUIRE_APPROVAL":
+      return "Require Approval";
+    case "DENY":
+      return "Deny";
+    default:
+      return decision;
+  }
+}
+
 function StepStatusIcon({ status }: { status: PlaybookStepStatus }) {
   switch (status) {
     case "passed":
@@ -72,6 +103,7 @@ function StepStatusIcon({ status }: { status: PlaybookStepStatus }) {
     case "failed":
       return <XCircle className="h-4 w-4 text-destructive" />;
     case "running":
+    case "waiting":
       return <Loader2 className="h-4 w-4 animate-spin text-blue-600 dark:text-blue-400" />;
     case "skipped":
       return <SkipForward className="h-4 w-4 text-muted-foreground" />;
@@ -125,9 +157,12 @@ function StepList({ steps, title }: { steps: PlaybookStep[]; title: string }) {
 
 export interface PlaybookRunCardProps {
   run: PlaybookRun;
+  deviceName?: string;
+  deviceIp?: string;
+  className?: string;
 }
 
-export function PlaybookRunCard({ run }: PlaybookRunCardProps) {
+export function PlaybookRunCard({ run, deviceName, deviceIp, className }: PlaybookRunCardProps) {
   const [evidenceOpen, setEvidenceOpen] = useState(false);
   const reduceMotion = useReducedMotion();
 
@@ -138,13 +173,18 @@ export function PlaybookRunCard({ run }: PlaybookRunCardProps) {
       animate={reduceMotion ? undefined : { opacity: 1, y: 0 }}
       transition={quickSpring}
     >
-      <Card>
+      <Card className={className}>
         <CardHeader className="pb-3">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
               <CardTitle className="text-base">{run.name}</CardTitle>
               <p className="mt-1 text-xs text-muted-foreground">
-                {run.family} &middot; Device {run.deviceId}
+                {run.family} &middot; {deviceName ?? `Device ${run.deviceId}`}
+                {deviceIp && (
+                  <span className="ml-1.5 font-mono text-[11px] text-muted-foreground/70">
+                    ({deviceIp})
+                  </span>
+                )}
                 {run.incidentId && <> &middot; Incident {run.incidentId}</>}
               </p>
             </div>
@@ -165,6 +205,29 @@ export function PlaybookRunCard({ run }: PlaybookRunCardProps) {
         </CardHeader>
 
         <CardContent className="space-y-4">
+          {run.status === "waiting" && run.evidence.waiting && (
+            <div className="rounded-md border border-blue-500/20 bg-blue-500/5 px-3 py-2 text-xs text-muted-foreground">
+              Waiting on <span className="font-medium text-foreground">{run.evidence.waiting.label}</span>.
+              {" "}Next wake: <span className="tabular-nums">{formatTimestamp(run.evidence.waiting.nextWakeAt)}</span>.
+            </div>
+          )}
+
+          <div className="rounded-md border bg-muted/20 px-3 py-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                <Shield className="h-3.5 w-3.5" />
+                Policy
+              </span>
+              <Badge variant={decisionBadgeVariant(run.policyEvaluation.decision)}>
+                {decisionLabel(run.policyEvaluation.decision)}
+              </Badge>
+              <span className="text-xs text-muted-foreground">
+                Risk {run.policyEvaluation.riskScore.toFixed(2)}
+              </span>
+            </div>
+            <p className="mt-2 text-sm text-muted-foreground">{run.policyEvaluation.reason}</p>
+          </div>
+
           {/* Steps */}
           <StepList steps={run.steps} title="Execution Steps" />
           <StepList steps={run.verificationSteps} title="Verification Steps" />

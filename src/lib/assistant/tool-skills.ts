@@ -35,6 +35,16 @@ import {
   updateDeviceOnboardingDraft,
 } from "@/lib/adoption/orchestrator";
 import {
+  getOnboardingSession,
+  synthesizeOnboardingModel,
+} from "@/lib/adoption/conversation";
+import {
+  buildDraftAssurancesFromProposals,
+  buildDraftSeedFromSynthesis,
+  buildDraftWorkloadsFromResponsibilities,
+  hasDraftProposalContent,
+} from "@/lib/adoption/onboarding-contract";
+import {
   computeDeviceStateHash,
   executeOperationWithGates,
 } from "@/lib/adapters/execution-kernel";
@@ -1679,11 +1689,20 @@ function normalizeShellReadCommand(
   };
 }
 
+const SHELL_READ_MUTATION_PATTERN = /\b(?:sudo\s+)?(?:apt(?:-get)?\s+(?:install|upgrade|dist-upgrade|remove|purge)|yum\s+(?:install|update|upgrade|remove)|dnf\s+(?:install|upgrade|remove)|zypper\s+(?:install|update|remove)|pacman\s+-S|systemctl\s+(?:start|stop|restart|enable|disable)|service\s+\S+\s+(?:start|stop|restart)|reboot\b|shutdown\b|poweroff\b|halt\b|rm\s+-[^\n]*\b|mv\s+\S+\s+\S+|cp\s+\S+\s+\S+|tee\s+\S+|sed\s+-i\b|chmod\s+\d|chown\s+\S+:\S+|touch\s+\S+|mkdir\s+\S+|user(?:add|mod|del)\b|passwd\b|docker\s+(?:run|restart|stop|rm|compose\s+(?:up|down|restart))|kubectl\s+apply\b|helm\s+upgrade\b|gitlab-backup\b|gitlab-ctl\s+(?:restart|reconfigure))\b/i;
+
 function validateShellReadCommandForAdapter(
   adapterId: string,
   command: string,
 ): { ok: true } | { ok: false; error: string; hint: string } {
   const normalized = command.trim().toLowerCase();
+  if (adapterId !== "smb" && SHELL_READ_MUTATION_PATTERN.test(normalized)) {
+    return {
+      ok: false,
+      error: "steward_shell_read is read-only. This command appears to mutate the target device.",
+      hint: "Use a durable device task/playbook path for upgrades, restarts, installs, backups, or config changes instead of shell read.",
+    };
+  }
   if (adapterId === "wmi") {
     const usesRemoteSession = normalized.includes("$session")
       || normalized.includes("-cimsession")
@@ -4564,7 +4583,7 @@ export async function buildAdapterSkillTools(
   });
 
   tools.steward_manage_onboarding = dynamicTool({
-    description: "Reveal the first-party onboarding contract review UI inside an onboarding chat so the operator can interactively review responsibilities, assurances, access methods, and then save. Use this instead of dumping long onboarding tables in prose.",
+    description: "Reveal the first-party onboarding contract review UI inside an onboarding chat so the operator can interactively review responsibilities, assurances, access methods, and then save. When possible, pass the proposed summary, responsibilities, assurances, and next actions so the widget opens with concrete rows instead of an empty draft.",
     inputSchema: jsonSchema({
       type: "object",
       properties: {
@@ -4576,6 +4595,60 @@ export async function buildAdapterSkillTools(
           type: "string",
           enum: ["show_contract_review"],
           description: "UI onboarding action to perform. Use show_contract_review to open the onboarding contract widget in chat.",
+        },
+        summary: {
+          type: "string",
+          description: "Short onboarding contract summary to prefill in the widget.",
+        },
+        responsibilities: {
+          type: "array",
+          description: "Responsibility proposals to prefill into the onboarding contract review widget.",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              workloadKey: { type: "string" },
+              displayName: { type: "string" },
+              category: { type: "string" },
+              criticality: { type: "string", enum: ["low", "medium", "high"] },
+              summary: { type: "string" },
+            },
+            required: ["displayName"],
+            additionalProperties: false,
+          },
+        },
+        assurances: {
+          type: "array",
+          description: "Assurance proposals to prefill into the onboarding contract review widget.",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              displayName: { type: "string" },
+              assuranceKey: { type: "string" },
+              serviceKey: { type: "string" },
+              criticality: { type: "string", enum: ["low", "medium", "high"] },
+              checkIntervalSec: { type: "number" },
+              requiredProtocols: {
+                type: "array",
+                items: { type: "string" },
+              },
+              monitorType: { type: "string" },
+              rationale: { type: "string" },
+            },
+            required: ["displayName"],
+            additionalProperties: false,
+          },
+        },
+        next_actions: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional next actions to store in the onboarding draft.",
+        },
+        residual_unknowns: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional unresolved unknowns to store in the onboarding draft.",
         },
       },
       additionalProperties: false,
@@ -4601,7 +4674,97 @@ export async function buildAdapterSkillTools(
         };
       }
 
-      const snapshot = await getDeviceAdoptionSnapshot(device.id);
+      let snapshot = await getDeviceAdoptionSnapshot(device.id);
+      let proposalSeedSource: "existing" | "provided" | "synthesized" | "none" = "none";
+      let warning: string | undefined;
+
+      const providedResponsibilities = Array.isArray(args.responsibilities)
+        ? buildDraftWorkloadsFromResponsibilities(
+          args.responsibilities
+            .filter(isRecord)
+            .map((entry, idx) => ({
+              id: inputString(entry, "id") ?? `responsibility_${idx + 1}`,
+              workloadKey: inputString(entry, "workloadKey") ?? inputString(entry, "workload_key") ?? "",
+              displayName: inputString(entry, "displayName") ?? inputString(entry, "display_name") ?? "",
+              category: (inputString(entry, "category") ?? "unknown") as WorkloadCategory,
+              criticality: (inputString(entry, "criticality") ?? "medium") as "low" | "medium" | "high",
+              summary: inputString(entry, "summary") ?? "",
+            })),
+        )
+        : [];
+
+      const providedAssurances = Array.isArray(args.assurances)
+        ? buildDraftAssurancesFromProposals({
+          assurances: args.assurances
+            .filter(isRecord)
+            .map((entry, idx) => ({
+              id: inputString(entry, "id") ?? `assurance_${idx + 1}`,
+              displayName: inputString(entry, "displayName") ?? inputString(entry, "display_name") ?? "",
+              assuranceKey: inputString(entry, "assuranceKey") ?? inputString(entry, "assurance_key") ?? "",
+              serviceKey: inputString(entry, "serviceKey") ?? inputString(entry, "service_key") ?? "",
+              criticality: (inputString(entry, "criticality") ?? "medium") as "low" | "medium" | "high",
+              checkIntervalSec: typeof entry.checkIntervalSec === "number"
+                ? entry.checkIntervalSec
+                : typeof entry.check_interval_sec === "number"
+                  ? entry.check_interval_sec
+                  : 120,
+              requiredProtocols: inputStringArray(entry, "requiredProtocols", "required_protocols") ?? [],
+              monitorType: inputString(entry, "monitorType", "monitor_type") ?? "health_check",
+              rationale: inputString(entry, "rationale") ?? "",
+            })),
+          workloads: providedResponsibilities,
+        })
+        : [];
+
+      const nextActions = inputStringArray(args, "next_actions") ?? snapshot.draft?.nextActions ?? [];
+      const residualUnknowns = inputStringArray(args, "residual_unknowns") ?? snapshot.draft?.residualUnknowns ?? [];
+      const draftSeed = {
+        summary: inputString(args, "summary") ?? snapshot.draft?.summary ?? "",
+        workloads: providedResponsibilities,
+        assurances: providedAssurances,
+        nextActions,
+        residualUnknowns,
+      };
+
+      if (hasDraftProposalContent(draftSeed)) {
+        snapshot = await updateDeviceOnboardingDraft({
+          deviceId: device.id,
+          summary: draftSeed.summary,
+          workloads: draftSeed.workloads,
+          assurances: draftSeed.assurances,
+          nextActions: draftSeed.nextActions,
+          residualUnknowns: draftSeed.residualUnknowns,
+          actor: "steward",
+        });
+        proposalSeedSource = "provided";
+      } else if (
+        (snapshot.draft?.workloads.length ?? snapshot.workloads.length) > 0
+        || (snapshot.draft?.assurances.length ?? snapshot.assurances.length) > 0
+      ) {
+        proposalSeedSource = "existing";
+      } else {
+        const session = getOnboardingSession(device.id);
+        if (session) {
+          try {
+            const synthesis = await synthesizeOnboardingModel(device, session.id);
+            const synthesizedDraft = buildDraftSeedFromSynthesis(synthesis);
+            if (hasDraftProposalContent(synthesizedDraft)) {
+              snapshot = await updateDeviceOnboardingDraft({
+                deviceId: device.id,
+                summary: synthesizedDraft.summary,
+                workloads: synthesizedDraft.workloads,
+                assurances: synthesizedDraft.assurances,
+                nextActions: synthesizedDraft.nextActions,
+                actor: "steward",
+              });
+              proposalSeedSource = "synthesized";
+            }
+          } catch (error) {
+            warning = error instanceof Error ? error.message : String(error);
+          }
+        }
+      }
+
       return {
         ok: true,
         deviceId: device.id,
@@ -4614,6 +4777,8 @@ export async function buildAdapterSkillTools(
         selectedAccessMethodCount: snapshot.draft?.selectedAccessMethodKeys.length ?? 0,
         workloadDraftCount: snapshot.draft?.workloads.length ?? snapshot.workloads.length,
         assuranceDraftCount: snapshot.draft?.assurances.length ?? snapshot.assurances.length,
+        proposalSeedSource,
+        ...(warning ? { warning } : {}),
         summary: `Opened onboarding contract review for ${device.name}.`,
       };
     },

@@ -984,7 +984,7 @@ export default function DeviceDetailPage() {
                                   ? "default"
                                   : run.status === "failed" || run.status === "denied"
                                     ? "destructive"
-                                    : run.status === "pending_approval"
+                                    : run.status === "pending_approval" || run.status === "waiting"
                                       ? "secondary"
                                       : "outline"
                               }

@@ -48,10 +48,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { ChatPlaybookRunWidget } from "@/components/chat-playbook-run-widget";
 import { OnboardingChatContractWidget } from "@/components/onboarding-chat-contract-widget";
 import { buildOnboardingKickoffPrompt } from "@/lib/adoption/kickoff";
 import { PROVIDER_REGISTRY } from "@/lib/llm/registry";
 import type {
+  ChatMessagePlaybookRunLink,
   ChatToolEvent,
   ChatToolEventKind,
   ChatToolWidgetMutation,
@@ -1197,6 +1199,7 @@ const ChatMessageBubble = memo(function ChatMessageBubble({
 }) {
   const rawToolEvents = msg.metadata?.toolEvents;
   const toolEvents = useMemo(() => rawToolEvents ?? [], [rawToolEvents]);
+  const playbookRunLink: ChatMessagePlaybookRunLink | undefined = msg.metadata?.playbookRun;
   const showWidgets = msg.role === "assistant" && toolEvents.length > 0;
   const messageContent = msg.content || (msg.streaming ? "Steward is working..." : "");
   const orderedBlocks = useMemo(
@@ -1260,6 +1263,9 @@ const ChatMessageBubble = memo(function ChatMessageBubble({
             : (
               <MarkdownMessageContent content={messageContent} />
             )}
+          {msg.role === "assistant" && playbookRunLink && (
+            <ChatPlaybookRunWidget runLink={playbookRunLink} />
+          )}
           {msg.streaming && (
             <span className="mt-2 inline-flex items-center gap-1.5 align-middle text-xs text-muted-foreground">
               <Globe className="h-3 w-3" />

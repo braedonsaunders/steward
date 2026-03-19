@@ -5,7 +5,7 @@ import type { Device, PlaybookRun } from "@/lib/state/types";
 export const PLAYBOOK_EXECUTE_JOB_KIND = "playbook.execute";
 
 function executionStamp(run: PlaybookRun): string {
-  return run.approvedAt ?? run.createdAt;
+  return run.updatedAt ?? run.approvedAt ?? run.createdAt;
 }
 
 function terminalStatus(status: PlaybookRun["status"]): boolean {
@@ -22,7 +22,8 @@ function runWithTimestamp(run: PlaybookRun): PlaybookRun {
 
 export function queuePlaybookExecution(
   run: PlaybookRun,
-  reason: "auto" | "approval" | "reconcile" = "reconcile",
+  reason: "auto" | "approval" | "reconcile" | "resume" = "reconcile",
+  runAfter?: string,
 ): void {
   stateStore.enqueueDurableJob(
     PLAYBOOK_EXECUTE_JOB_KIND,
@@ -33,15 +34,24 @@ export function queuePlaybookExecution(
       requestedAt: new Date().toISOString(),
     },
     `${PLAYBOOK_EXECUTE_JOB_KIND}:${run.id}:${executionStamp(run)}`,
+    runAfter ?? run.evidence.waiting?.nextWakeAt,
   );
 }
 
 export function queueApprovedPlaybookRuns(): number {
-  const runs = stateStore.getPlaybookRuns({ status: "approved" });
-  for (const run of runs) {
+  const approvedRuns = stateStore.getPlaybookRuns({ status: "approved" });
+  const waitingRuns = stateStore.getPlaybookRuns({ status: "waiting" })
+    .filter((run) => {
+      const nextWakeAt = run.evidence.waiting?.nextWakeAt;
+      return typeof nextWakeAt === "string" && nextWakeAt <= new Date().toISOString();
+    });
+  for (const run of approvedRuns) {
     queuePlaybookExecution(run, "reconcile");
   }
-  return runs.length;
+  for (const run of waitingRuns) {
+    queuePlaybookExecution(run, "resume");
+  }
+  return approvedRuns.length + waitingRuns.length;
 }
 
 export async function executeQueuedPlaybookRun(payload: Record<string, unknown>): Promise<{
@@ -74,7 +84,7 @@ export async function executeQueuedPlaybookRun(payload: Record<string, unknown>)
     };
   }
 
-  if (run.status !== "approved") {
+  if (!["approved", "preflight", "executing", "waiting", "verifying", "rolling_back"].includes(run.status)) {
     return {
       status: "skipped",
       summary: `Playbook run ${run.id} is ${run.status}, not executable.`,
@@ -107,6 +117,9 @@ export async function executeQueuedPlaybookRun(payload: Record<string, unknown>)
 
   const result = runWithTimestamp(await executePlaybook(executing, device));
   stateStore.upsertPlaybookRun(result);
+  if (result.status === "waiting" && result.evidence.waiting?.nextWakeAt) {
+    queuePlaybookExecution(result, "resume", result.evidence.waiting.nextWakeAt);
+  }
   await stateStore.addAction({
     actor: "steward",
     kind: "playbook",

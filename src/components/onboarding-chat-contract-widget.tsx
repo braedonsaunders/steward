@@ -100,6 +100,21 @@ function readSelectedAccessMethodKeys(snapshot: AdoptionSnapshot | null): string
     .map((method) => method.key);
 }
 
+export function getOnboardingContractCommitState(snapshot: AdoptionSnapshot | null): {
+  onboardingCompleted: boolean;
+  canCommit: boolean;
+  showProfileSelectionWarning: boolean;
+} {
+  const onboardingCompleted = snapshot?.run?.status === "completed";
+  const selectedProfiles = readSelectedProfileIds(snapshot);
+  const hasRequiredProfileSelection = selectedProfiles.length > 0 || (snapshot?.profiles.length ?? 0) === 0;
+  return {
+    onboardingCompleted,
+    canCommit: !onboardingCompleted && hasRequiredProfileSelection,
+    showProfileSelectionWarning: !onboardingCompleted && !hasRequiredProfileSelection,
+  };
+}
+
 function buildResponsibilityRows(synthesis: OnboardingSynthesis | null): ResponsibilityRow[] {
   const rawResponsibilities = Array.isArray(synthesis?.responsibilities)
     ? synthesis.responsibilities as Array<OnboardingSynthesis["responsibilities"][number] | string>
@@ -303,13 +318,7 @@ export function OnboardingChatContractWidget({
     )));
   }, [enabledResponsibilities]);
 
-  const canCommit = useMemo(() => {
-    if (snapshot?.run?.status === "completed") {
-      return false;
-    }
-    const selectedProfiles = readSelectedProfileIds(snapshot);
-    return selectedProfiles.length > 0 || (snapshot?.profiles.length ?? 0) === 0;
-  }, [snapshot]);
+  const commitState = useMemo(() => getOnboardingContractCommitState(snapshot), [snapshot]);
 
   const commitOnboarding = useCallback(async () => {
     setCommitting(true);
@@ -418,8 +427,15 @@ export function OnboardingChatContractWidget({
         ) : null}
 
         {!loading && !error && proposalCount === 0 ? (
-          <div className="rounded-md border border-dashed px-4 py-6 text-sm text-muted-foreground">
-            Steward has not produced a responsibility or assurance proposal yet. Continue the onboarding chat and refresh once the device purpose is clearer.
+          <div className="space-y-2">
+            {statusMessage ? (
+              <p className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-primary">
+                {statusMessage}
+              </p>
+            ) : null}
+            <div className="rounded-md border border-dashed px-4 py-6 text-sm text-muted-foreground">
+              Steward has not produced a responsibility or assurance proposal yet. Continue the onboarding chat and refresh once the device purpose is clearer.
+            </div>
           </div>
         ) : null}
 
@@ -643,7 +659,7 @@ export function OnboardingChatContractWidget({
               </Table>
             </div>
 
-            {!canCommit ? (
+            {commitState.showProfileSelectionWarning ? (
               <p className="rounded-md border border-amber-300/60 bg-amber-50/70 px-3 py-2 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-950/20 dark:text-amber-100">
                 Select at least one profile in onboarding before committing this contract.
               </p>
@@ -655,19 +671,21 @@ export function OnboardingChatContractWidget({
               </p>
             ) : null}
 
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-background/55 px-3 py-3">
-              <div className="text-xs text-muted-foreground">
-                Committing here applies the selected responsibilities and assurances and marks onboarding complete.
+            {!commitState.onboardingCompleted ? (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-background/55 px-3 py-3">
+                <div className="text-xs text-muted-foreground">
+                  Committing here applies the selected responsibilities and assurances and marks onboarding complete.
+                </div>
+                <Button
+                  type="button"
+                  onClick={() => void commitOnboarding()}
+                  disabled={committing || refreshing || !commitState.canCommit}
+                >
+                  {committing ? <Loader2 className="mr-2 size-4 animate-spin" /> : <ShieldCheck className="mr-2 size-4" />}
+                  Save and Complete
+                </Button>
               </div>
-              <Button
-                type="button"
-                onClick={() => void commitOnboarding()}
-                disabled={committing || refreshing || !canCommit}
-              >
-                {committing ? <Loader2 className="mr-2 size-4 animate-spin" /> : <ShieldCheck className="mr-2 size-4" />}
-                Save and Complete
-              </Button>
-            </div>
+            ) : null}
           </>
         ) : null}
       </CardContent>

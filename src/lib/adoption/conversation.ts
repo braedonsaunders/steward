@@ -626,6 +626,7 @@ export async function buildOnboardingSystemPrompt(device: Device): Promise<strin
     "6) When you have responsibility and assurance recommendations, keep the prose summary brief and rely on the prebuilt onboarding contract review widget for detailed selection, editing, and final commit.",
     "6a) Do not dump long responsibility/assurance tables in prose when the widget can present them interactively.",
     "6b) The onboarding contract widget is not automatically visible. Call steward_manage_onboarding with action show_contract_review when you want that UI to appear in chat.",
+    "6b1) When calling steward_manage_onboarding, include the current summary, responsibilities, assurances, and next_actions in the tool arguments so the widget opens prepopulated instead of empty.",
     "6c) Prefer letting the operator review and commit onboarding through the widget. Only call steward_complete_onboarding directly when the user explicitly asks Steward to complete onboarding in chat.",
     "6d) If the user explicitly wants access-only onboarding with no committed responsibilities and no ongoing monitoring, complete onboarding with empty responsibilities and empty assurances instead of inventing placeholder responsibilities.",
     "6e) Do not block completion on unknowns that only affect cosmetic naming or physical placement. Keep the name generic and record the uncertainty as a residual unknown instead.",
