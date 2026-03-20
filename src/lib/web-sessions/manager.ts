@@ -195,6 +195,33 @@ function clampText(value: string, maxChars: number): string {
   return `${value.slice(0, Math.max(0, maxChars - 1)).trimEnd()}...`;
 }
 
+function extractExplicitVersionHints(value: string): string[] {
+  const matches = value.match(/\b(?:v)?\d+\.\d+(?:\.\d+){0,3}(?:-[0-9a-z.-]+)?\b/gi) ?? [];
+  return Array.from(new Set(matches.map((entry) => entry.replace(/^v/i, "")))).slice(0, 8);
+}
+
+function summarizeProtocolSession(session: ProtocolSessionRecord): Record<string, unknown> {
+  return {
+    id: session.id,
+    deviceId: session.deviceId,
+    protocol: session.protocol,
+    adapterId: session.adapterId ?? null,
+    desiredState: session.desiredState,
+    status: session.status,
+    arbitrationMode: session.arbitrationMode,
+    singleConnectionHint: session.singleConnectionHint,
+    keepaliveAllowed: session.keepaliveAllowed,
+    summary: session.summary ?? null,
+    activeLeaseId: session.activeLeaseId ?? null,
+    lastConnectedAt: session.lastConnectedAt ?? null,
+    lastDisconnectedAt: session.lastDisconnectedAt ?? null,
+    lastMessageAt: session.lastMessageAt ?? null,
+    lastError: session.lastError ?? null,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+  };
+}
+
 function extractCsrfHints(value: unknown): Record<string, string> {
   if (!Array.isArray(value)) {
     return {};
@@ -975,6 +1002,7 @@ class WebSessionManager {
       const title = await page.title();
       const text = await page.evaluate(() => document.body?.innerText ?? "");
       const contentPreview = clampText(text.trim().replace(/\s+/g, " "), 900);
+      const explicitVersionHints = extractExplicitVersionHints(text);
       const htmlPreview = args.includeHtml ? clampText(await page.content(), 1_800) : undefined;
       const nextStorageState = (await context.storageState()) as PlaywrightStorageState;
       const csrfHints = await evaluatePageCsrfHints(page);
@@ -1038,13 +1066,24 @@ class WebSessionManager {
         ok: true,
         deviceId: args.device?.id,
         deviceName: args.device?.name,
-        session: persistSession ? (stateStore.getProtocolSessionById(persisted.id) ?? persisted) : persisted,
+        session: summarizeProtocolSession(
+          persistSession
+            ? (stateStore.getProtocolSessionById(persisted.id) ?? persisted)
+            : persisted,
+        ),
         url: parsedUrl.toString(),
         finalUrl,
         title,
         usedStoredCredential: Boolean(args.credentialId),
         credentialId: args.credentialId,
         contentPreview,
+        versionSignals: {
+          explicitVersionHints,
+          versionVisible: explicitVersionHints.length > 0,
+          note: explicitVersionHints.length > 0
+            ? undefined
+            : "No explicit version string detected in the extracted page text.",
+        },
         htmlPreview,
         stepsExecuted: stepResults.length,
         stepResults,
@@ -1076,7 +1115,11 @@ class WebSessionManager {
       return {
         ok: false,
         error: `Playwright browser flow failed: ${message}`,
-        session: persistSession ? (stateStore.getProtocolSessionById(session.id) ?? session) : session,
+        session: summarizeProtocolSession(
+          persistSession
+            ? (stateStore.getProtocolSessionById(session.id) ?? session)
+            : session,
+        ),
         url: parsedUrl.toString(),
         deviceId: args.device?.id,
         deviceName: args.device?.name,

@@ -1882,6 +1882,7 @@ let coordinatorRunning = false;
 let scannerWorkerRunning = false;
 let discoveryEnrichmentWorkerRunning = false;
 let runtimeWorkerRunning = false;
+let autonomyWorkerRunning = false;
 let scannerCycleRunning = false;
 let sessionSweepHandle: NodeJS.Timeout | undefined;
 let currentSessionSweepIntervalMs: number | undefined;
@@ -1889,10 +1890,12 @@ let leadershipHandle: NodeJS.Timeout | undefined;
 let currentLeadershipRefreshMs: number | undefined;
 let leaderActive = false;
 let leadershipRefreshRunning = false;
+let legacyInvestigationQueueCleanupScheduled = false;
 
 const LOOP_LEASE_NAME = "control-plane.leader";
 const CYCLE_LEASE_NAME = "scanner.cycle";
 const AGENT_WAKE_LEASE_NAME = "agent.wake";
+const LEGACY_INVESTIGATION_QUEUE_PURGE_BATCH_SIZE = 50_000;
 const PROCESS_HOLDER_ID = `control-plane:${process.pid}:${randomUUID()}`;
 const SCANNER_DISCOVERY_JOB_KIND = "scanner.discovery";
 const MONITOR_EXECUTE_JOB_KIND = "monitor.execute";
@@ -1907,6 +1910,7 @@ const MIN_AGENT_WAKE_LEASE_MS = 60_000;
 const MANUAL_SCANNER_DEDUPE_WINDOW_MS = 30_000;
 const MIN_RUNTIME_JOB_STALE_MS = 60_000;
 const MIN_DISCOVERY_JOB_STALE_MS = 5 * 60_000;
+const BACKGROUND_QUEUE_TIMEOUT_MS = 30_000;
 
 const emptyCycleSummary = (): StewardCycleSummary => ({
   discovered: 0,
@@ -2486,6 +2490,23 @@ const processScannerJobs = async (limit = 1): Promise<void> => {
   }
 };
 
+const reportBackgroundLaneFailure = (lane: string, error: unknown): void => {
+  console.error(`${lane} worker failed`, error);
+};
+
+const yieldToEventLoop = (): Promise<void> => new Promise((resolve) => {
+  setImmediate(resolve);
+});
+
+const launchBackgroundLane = (
+  lane: string,
+  runner: () => Promise<void>,
+): void => {
+  void runner().catch((error) => {
+    reportBackgroundLaneFailure(lane, error);
+  });
+};
+
 const processDiscoveryEnrichmentJobs = async (limit = 4): Promise<void> => {
   if (discoveryEnrichmentWorkerRunning || scannerCycleRunning) {
     return;
@@ -2526,13 +2547,16 @@ const processDiscoveryEnrichmentJobs = async (limit = 4): Promise<void> => {
         );
       }
       processed += 1;
+      if (processed < limit) {
+        await yieldToEventLoop();
+      }
     }
   } finally {
     discoveryEnrichmentWorkerRunning = false;
   }
 };
 
-const processRuntimeJobs = async (limit = 25): Promise<void> => {
+const processRuntimeJobs = async (limit = 4): Promise<void> => {
   if (runtimeWorkerRunning) {
     return;
   }
@@ -2545,7 +2569,7 @@ const processRuntimeJobs = async (limit = 25): Promise<void> => {
     });
     let agentWakeProcessed = false;
 
-    for (const job of jobs) {
+    for (const [index, job] of jobs.entries()) {
       try {
         if (job.kind === MONITOR_EXECUTE_JOB_KIND) {
           await runMonitorJob(job.payload, runtimeSettings);
@@ -2570,9 +2594,25 @@ const processRuntimeJobs = async (limit = 25): Promise<void> => {
           Math.min(15 * 60_000, 15_000 * Math.max(1, job.attempts + 1)),
         );
       }
+      if (index < jobs.length - 1) {
+        await yieldToEventLoop();
+      }
     }
   } finally {
     runtimeWorkerRunning = false;
+  }
+};
+
+const processMissionAutonomyJobsSafely = async (limit = 4): Promise<void> => {
+  if (autonomyWorkerRunning) {
+    return;
+  }
+
+  autonomyWorkerRunning = true;
+  try {
+    await processMissionAutonomyJobs(limit);
+  } finally {
+    autonomyWorkerRunning = false;
   }
 };
 
@@ -2606,10 +2646,31 @@ const runControlPlaneTick = async (): Promise<void> => {
       enqueueScannerJob("interval", settings);
     }
 
-    await queueDueAssuranceJobs();
-    await queueDueDiscoveryEnrichmentJobs();
-    await queueDueMissionAutonomyJobs();
     queueApprovedPlaybookRuns();
+    await Promise.allSettled([
+      withPhaseTimeout(
+        queueDueAssuranceJobs(),
+        BACKGROUND_QUEUE_TIMEOUT_MS,
+        "Assurance queueing timed out.",
+      ),
+      withPhaseTimeout(
+        queueDueDiscoveryEnrichmentJobs(),
+        BACKGROUND_QUEUE_TIMEOUT_MS,
+        "Discovery enrichment queueing timed out.",
+      ),
+      withPhaseTimeout(
+        queueDueMissionAutonomyJobs(),
+        BACKGROUND_QUEUE_TIMEOUT_MS,
+        "Mission autonomy queueing timed out.",
+      ),
+    ]).then((results) => {
+      const lanes = ["assurance queue", "discovery enrichment queue", "mission autonomy queue"];
+      results.forEach((result, index) => {
+        if (result.status === "rejected") {
+          reportBackgroundLaneFailure(lanes[index] ?? "background queue", result.reason);
+        }
+      });
+    });
 
     const latestPeriodicAgentWake = stateStore.getLatestAgentRunByWakeReason("periodic_review");
     const agentWakeQueueBusy = stateStore.hasDurableJobsInFlight([AGENT_WAKE_JOB_KIND]);
@@ -2617,12 +2678,10 @@ const runControlPlaneTick = async (): Promise<void> => {
       enqueueAgentWakeJob(settings, "periodic_review");
     }
 
-    await Promise.all([
-      processScannerJobs(),
-      processDiscoveryEnrichmentJobs(),
-      processRuntimeJobs(),
-      processMissionAutonomyJobs(),
-    ]);
+    launchBackgroundLane("scanner", () => processScannerJobs());
+    launchBackgroundLane("discovery enrichment", () => processDiscoveryEnrichmentJobs());
+    launchBackgroundLane("runtime", () => processRuntimeJobs());
+    launchBackgroundLane("mission autonomy", () => processMissionAutonomyJobsSafely());
   } finally {
     coordinatorRunning = false;
   }
@@ -2676,9 +2735,11 @@ const startLeaderWorkers = (settings: RuntimeSettings, options?: { immediate?: b
   }
 
   if (options?.immediate) {
-    void runControlPlaneTick().catch((error) => {
-      console.error("Control-plane bootstrap failed", error);
-    });
+    setTimeout(() => {
+      void runControlPlaneTick().catch((error) => {
+        console.error("Control-plane bootstrap failed", error);
+      });
+    }, 0);
   }
 
   void processNotificationJobs().catch((error) => {
@@ -2704,6 +2765,32 @@ const stopLeaderWorkers = (): void => {
 
   currentCoordinatorIntervalMs = undefined;
   currentSessionSweepIntervalMs = undefined;
+};
+
+const scheduleLegacyInvestigationQueueCleanup = (): void => {
+  if (legacyInvestigationQueueCleanupScheduled) {
+    return;
+  }
+
+  legacyInvestigationQueueCleanupScheduled = true;
+  setTimeout(() => {
+    legacyInvestigationQueueCleanupScheduled = false;
+    if (!leaderActive) {
+      return;
+    }
+
+    try {
+      const purgedLegacyInvestigationJobs = stateStore.purgeLegacyInvestigationDurableJobs(
+        LEGACY_INVESTIGATION_QUEUE_PURGE_BATCH_SIZE,
+      );
+      if (purgedLegacyInvestigationJobs > 0) {
+        console.warn(`Purged ${purgedLegacyInvestigationJobs} legacy investigation queue entries.`);
+        scheduleLegacyInvestigationQueueCleanup();
+      }
+    } catch (error) {
+      console.error("Legacy investigation queue cleanup failed", error);
+    }
+  }, 0);
 };
 
 const refreshLeadership = async (): Promise<void> => {
@@ -2744,6 +2831,7 @@ const refreshLeadership = async (): Promise<void> => {
           ...Array.from(AUTONOMY_JOB_KINDS),
         ],
       });
+      scheduleLegacyInvestigationQueueCleanup();
     }
     startLeaderWorkers(settings, { immediate: becameLeader });
   } finally {
@@ -2924,6 +3012,12 @@ export const requestScannerCycle = (trigger: "manual" | "interval" = "manual"): 
   void processScannerJobs().catch((error) => {
     console.error("Manual scanner request failed", error);
   });
+};
+
+export const requestRuntimeJobProcessing = (): void => {
+  ensureStewardLoop();
+  queueApprovedPlaybookRuns();
+  launchBackgroundLane("runtime", () => processRuntimeJobs());
 };
 
 export const ensureStewardLoop = (): void => {

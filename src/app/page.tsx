@@ -26,6 +26,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { DashboardWidgetsPanel } from "@/components/dashboard-widgets-panel";
+import { countMissionTrackedSignals, listTrackedMissionInvestigations } from "@/lib/missions/tracking";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 
@@ -67,10 +68,12 @@ const priorityVariant = (p: string) => {
 interface DashboardMissionItem {
   id: string;
   title: string;
+  kind: string;
   status: "active" | "paused" | "completed" | "archived";
   priority: "low" | "medium" | "high";
   nextRunAt?: string;
   lastSummary?: string;
+  stateJson?: Record<string, unknown>;
   subagent?: {
     name: string;
   };
@@ -79,10 +82,16 @@ interface DashboardMissionItem {
 
 interface DashboardInvestigationItem {
   id: string;
+  missionId?: string;
+  subagentId?: string;
+  parentInvestigationId?: string;
   title: string;
   status: "open" | "monitoring" | "resolved" | "closed";
   severity: "critical" | "warning" | "info";
   stage: string;
+  sourceType?: string;
+  sourceId?: string;
+  deviceId?: string;
   updatedAt: string;
 }
 
@@ -144,6 +153,13 @@ export default function DashboardPage() {
     .slice(0, 3);
   const healthyShare = overview.devices > 0 ? Math.round((overview.online / overview.devices) * 100) : 0;
   const topIncident = openIncidents[0];
+  const activeMissionInvestigations = missions
+    .filter((mission) => mission.status === "active")
+    .reduce((sum, mission) => sum + countMissionTrackedSignals(mission), 0);
+  const trackedInvestigations = listTrackedMissionInvestigations(
+    missions.filter((mission) => mission.status === "active"),
+    investigations,
+  );
   const todaysBriefings = briefings.filter((briefing) => {
     const date = new Date(briefing.createdAt);
     const today = new Date();
@@ -269,7 +285,7 @@ export default function DashboardPage() {
                   </div>
                   <div>
                     <p className="steward-kicker">Investigations</p>
-                    <p className="mt-1 text-2xl font-semibold">{investigations.length}</p>
+                    <p className="mt-1 text-2xl font-semibold">{activeMissionInvestigations}</p>
                     <p className="text-xs text-muted-foreground">Open or monitoring</p>
                   </div>
                 </CardContent>
@@ -355,7 +371,7 @@ export default function DashboardPage() {
                         <div className="min-w-0 flex-1">
                           <p className="text-sm font-medium">{mission.title}</p>
                           <p className="mt-0.5 text-xs text-muted-foreground line-clamp-1">
-                            {mission.subagent?.name ?? "Unassigned"} · {mission.openInvestigations.length} open investigation(s)
+                            {mission.subagent?.name ?? "Unassigned"} | {countMissionTrackedSignals(mission)} item(s) in flight
                           </p>
                         </div>
                         <Badge variant={priorityVariant(mission.priority)} className="shrink-0">{mission.priority}</Badge>
@@ -379,7 +395,7 @@ export default function DashboardPage() {
                   </Button>
                 </CardHeader>
                 <CardContent>
-                  {investigations.length === 0 ? <p className="py-8 text-center text-sm text-muted-foreground">No active investigations.</p> : <div className="space-y-3">{investigations.slice(0, 5).map((investigation) => (
+                  {trackedInvestigations.length === 0 ? <p className="py-8 text-center text-sm text-muted-foreground">No active investigations.</p> : <div className="space-y-3">{trackedInvestigations.slice(0, 5).map((investigation) => (
                     <div key={investigation.id} className="rounded-lg border p-3">
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0 flex-1">

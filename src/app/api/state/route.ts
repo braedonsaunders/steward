@@ -1,5 +1,4 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { ensureStewardLoop } from "@/lib/agent/loop";
 import { expireStale } from "@/lib/approvals/queue";
 import { isAuthorized } from "@/lib/auth/guard";
 import { stateStore } from "@/lib/state/store";
@@ -11,7 +10,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  ensureStewardLoop();
   expireStale();
   const state = await stateStore.getState();
   const controlPlane = stateStore.getControlPlaneHealth();

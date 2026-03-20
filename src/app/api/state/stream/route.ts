@@ -1,6 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { isAuthorized } from "@/lib/auth/guard";
-import { ensureStewardLoop } from "@/lib/agent/loop";
 import { expireStale } from "@/lib/approvals/queue";
 import { stateStore } from "@/lib/state/store";
 import type { StateStreamSection } from "@/lib/state/types";
@@ -14,7 +13,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  ensureStewardLoop();
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {

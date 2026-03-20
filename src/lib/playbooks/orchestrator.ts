@@ -12,6 +12,16 @@ function terminalStatus(status: PlaybookRun["status"]): boolean {
   return ["completed", "failed", "denied", "quarantined"].includes(status);
 }
 
+function kickRuntimeExecutionPlane(): void {
+  void import("@/lib/agent/loop")
+    .then(({ requestRuntimeJobProcessing }) => {
+      requestRuntimeJobProcessing();
+    })
+    .catch((error) => {
+      console.error("Failed to kick runtime execution plane", error);
+    });
+}
+
 function runWithTimestamp(run: PlaybookRun): PlaybookRun {
   const now = new Date().toISOString();
   return {
@@ -36,6 +46,7 @@ export function queuePlaybookExecution(
     `${PLAYBOOK_EXECUTE_JOB_KIND}:${run.id}:${executionStamp(run)}`,
     runAfter ?? run.evidence.waiting?.nextWakeAt,
   );
+  kickRuntimeExecutionPlane();
 }
 
 export function queueApprovedPlaybookRuns(): number {

@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   getMissionById: vi.fn(),
   getDueInvestigations: vi.fn(),
   getPendingApprovals: vi.fn(),
+  countDurableJobsInFlight: vi.fn(),
   enqueueDurableJob: vi.fn(),
 }));
 
@@ -21,6 +22,7 @@ vi.mock("@/lib/autonomy/store", () => ({
 vi.mock("@/lib/state/store", () => ({
   stateStore: {
     getPendingApprovals: mocks.getPendingApprovals,
+    countDurableJobsInFlight: mocks.countDurableJobsInFlight,
     enqueueDurableJob: mocks.enqueueDurableJob,
   },
 }));
@@ -63,10 +65,13 @@ describe("autonomy runtime job queueing", () => {
         expiresAt: "2026-03-17T13:00:00.000Z",
       },
     ]);
+    mocks.countDurableJobsInFlight.mockReturnValue(0);
 
     await queueDueAutonomyJobs("2026-03-17T12:00:00.000Z");
 
     expect(mocks.ensureBootstrap).toHaveBeenCalled();
+    expect(mocks.countDurableJobsInFlight).toHaveBeenCalledWith(["investigation.step"], 200);
+    expect(mocks.getDueInvestigations).toHaveBeenCalledWith("2026-03-17T12:00:00.000Z", 200);
     expect(mocks.enqueueDurableJob).toHaveBeenCalledTimes(4);
     expect(mocks.enqueueDurableJob).toHaveBeenCalledWith(
       "mission.tick",
@@ -76,12 +81,31 @@ describe("autonomy runtime job queueing", () => {
     expect(mocks.enqueueDurableJob).toHaveBeenCalledWith(
       "investigation.step",
       expect.objectContaining({ investigationId: "investigation-1" }),
-      expect.stringContaining("investigation.step:investigation-1"),
+      "investigation.step:investigation-1",
     );
     expect(mocks.enqueueDurableJob).toHaveBeenCalledWith(
       "approval.followup",
       expect.objectContaining({ requestedAt: "2026-03-17T12:00:00.000Z" }),
       "approval.followup:all:2026-03-17T12",
+    );
+  });
+
+  it("caps queued due investigations to the remaining queue budget", async () => {
+    mocks.getDueMissions.mockReturnValue([]);
+    mocks.getPendingApprovals.mockReturnValue([]);
+    mocks.countDurableJobsInFlight.mockReturnValue(199);
+    mocks.getDueInvestigations.mockReturnValue([
+      { id: "investigation-1" },
+    ]);
+
+    await queueDueAutonomyJobs("2026-03-17T12:00:00.000Z");
+
+    expect(mocks.getDueInvestigations).toHaveBeenCalledWith("2026-03-17T12:00:00.000Z", 1);
+    expect(mocks.enqueueDurableJob).toHaveBeenCalledTimes(1);
+    expect(mocks.enqueueDurableJob).toHaveBeenCalledWith(
+      "investigation.step",
+      expect.objectContaining({ investigationId: "investigation-1" }),
+      "investigation.step:investigation-1",
     );
   });
 

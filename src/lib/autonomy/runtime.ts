@@ -19,9 +19,16 @@ export const CHANNEL_DELIVERY_JOB_KIND = "channel.delivery";
 export const AUTONOMY_JOB_KINDS = [MISSION_JOB_KIND, INVESTIGATION_JOB_KIND, BRIEFING_JOB_KIND, APPROVAL_FOLLOWUP_JOB_KIND, CHANNEL_DELIVERY_JOB_KIND] as const;
 
 const AVAILABILITY_OFFLINE_INCIDENT_TYPE = "availability.offline";
+const MAX_PENDING_INVESTIGATION_JOBS = 200;
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function addMinutes(baseIso: string, minutes: number): string {
@@ -38,8 +45,8 @@ function dedupeKeyForMissionRun(mission: MissionRecord, runAt: string): string {
   return `${MISSION_JOB_KIND}:${mission.id}:${runAt.slice(0, 16)}`;
 }
 
-function dedupeKeyForInvestigation(investigationId: string, runAt: string): string {
-  return `${INVESTIGATION_JOB_KIND}:${investigationId}:${runAt.slice(0, 16)}`;
+function dedupeKeyForInvestigation(investigationId: string): string {
+  return `${INVESTIGATION_JOB_KIND}:${investigationId}`;
 }
 
 function dedupeKeyForBriefing(input: {
@@ -174,11 +181,23 @@ async function ensureInvestigationForSignal(input: {
     sourceType: input.sourceType,
     sourceId: input.sourceId,
     deviceId: input.deviceId,
-  });
+  }) ?? (
+    input.mission.subagentId
+      ? autonomyStore.listInvestigations({
+          subagentId: input.mission.subagentId,
+          sourceType: input.sourceType,
+          sourceId: input.sourceId,
+          deviceId: input.deviceId,
+          status: ["open", "monitoring"],
+        }).find((candidate) => !candidate.missionId)
+      : undefined
+  );
 
   const next: InvestigationRecord = existing
     ? {
         ...existing,
+        missionId: input.mission.id,
+        subagentId: input.mission.subagentId,
         title: input.title,
         status: "monitoring",
         severity: input.severity,
@@ -1170,7 +1189,7 @@ export function enqueueInvestigationJob(investigationId: string, requestedAt = n
       investigationId,
       requestedAt,
     },
-    dedupeKeyForInvestigation(investigationId, requestedAt),
+    dedupeKeyForInvestigation(investigationId),
   );
 }
 
@@ -1266,9 +1285,16 @@ export async function queueDueAutonomyJobs(referenceIso = nowIso()): Promise<voi
     enqueueMissionJob(mission.id, referenceIso);
   }
 
-  const dueInvestigations = autonomyStore.getDueInvestigations(referenceIso);
-  for (const investigation of dueInvestigations) {
-    enqueueInvestigationJob(investigation.id, referenceIso);
+  const queuedInvestigationJobs = stateStore.countDurableJobsInFlight(
+    [INVESTIGATION_JOB_KIND],
+    MAX_PENDING_INVESTIGATION_JOBS,
+  );
+  const availableInvestigationSlots = Math.max(0, MAX_PENDING_INVESTIGATION_JOBS - queuedInvestigationJobs);
+  if (availableInvestigationSlots > 0) {
+    const dueInvestigations = autonomyStore.getDueInvestigations(referenceIso, availableInvestigationSlots);
+    for (const investigation of dueInvestigations) {
+      enqueueInvestigationJob(investigation.id, referenceIso);
+    }
   }
 
   if (stateStore.getPendingApprovals().length > 0) {
@@ -1278,12 +1304,12 @@ export async function queueDueAutonomyJobs(referenceIso = nowIso()): Promise<voi
   }
 }
 
-export async function processAutonomyJobs(limit = 25): Promise<void> {
+export async function processAutonomyJobs(limit = 4): Promise<void> {
   const jobs = stateStore.claimDurableJobs(limit, {
     kinds: Array.from(AUTONOMY_JOB_KINDS),
   });
 
-  for (const job of jobs) {
+  for (const [index, job] of jobs.entries()) {
     try {
       if (job.kind === MISSION_JOB_KIND) {
         const missionId = typeof job.payload.missionId === "string" ? job.payload.missionId : "";
@@ -1299,7 +1325,9 @@ export async function processAutonomyJobs(limit = 25): Promise<void> {
         await runGatewayDeliveryJob(job.payload);
       }
 
-      stateStore.completeDurableJob(job.id);
+      stateStore.completeDurableJob(job.id, {
+        clearIdempotencyKey: job.kind === INVESTIGATION_JOB_KIND,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       stateStore.failDurableJob(
@@ -1307,6 +1335,9 @@ export async function processAutonomyJobs(limit = 25): Promise<void> {
         message,
         Math.min(30 * 60_000, 60_000 * Math.max(1, job.attempts + 1)),
       );
+    }
+    if (index < jobs.length - 1) {
+      await yieldToEventLoop();
     }
   }
 }

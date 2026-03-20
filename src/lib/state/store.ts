@@ -112,6 +112,10 @@ const LOCAL_TOOL_APPROVAL_POLICY_VALUES: RuntimeSettings["localToolInstallPolicy
   "deny",
 ];
 
+const COMPLETED_DURABLE_JOB_RETENTION_MS = 7 * 24 * 60 * 60_000;
+const DURABLE_JOB_PRUNE_BATCH_SIZE = 5_000;
+const DURABLE_JOB_PRUNE_INTERVAL_MS = 5 * 60_000;
+
 /* ---------- Row <-> Domain helpers ---------- */
 
 function deviceFromRow(row: Record<string, unknown>): Device {
@@ -999,6 +1003,7 @@ function settingsHistoryFromRow<T = Record<string, unknown>>(row: Record<string,
 
 class StateStore {
   private initialized = false;
+  private lastDurableJobPruneAt = 0;
 
   private normalizeLegacyCredentialProtocols(db: Database.Database): void {
     db.prepare(`
@@ -1086,6 +1091,28 @@ class StateStore {
       `).all(limit) as Record<string, unknown>[];
       return rows.map(actionFromRow);
     });
+  }
+
+  private maybePruneCompletedDurableJobs(nowMs = Date.now()): void {
+    if ((nowMs - this.lastDurableJobPruneAt) < DURABLE_JOB_PRUNE_INTERVAL_MS) {
+      return;
+    }
+
+    const cutoffIso = new Date(nowMs - COMPLETED_DURABLE_JOB_RETENTION_MS).toISOString();
+    this.withAuditDbRecovery("StateStore.pruneCompletedDurableJobs", (auditDb) => {
+      auditDb.prepare(`
+        DELETE FROM durable_jobs
+        WHERE id IN (
+          SELECT id
+          FROM durable_jobs
+          WHERE status = 'completed'
+            AND updatedAt < ?
+          ORDER BY updatedAt ASC
+          LIMIT ?
+        )
+      `).run(cutoffIso, DURABLE_JOB_PRUNE_BATCH_SIZE);
+    });
+    this.lastDurableJobPruneAt = nowMs;
   }
 
   private getVersion(db: Database.Database): number {
@@ -3018,56 +3045,49 @@ class StateStore {
     this.cleanupExpiredRuntimeLeases();
     const leases = this.getRuntimeLeases();
     const longRunningThresholdMs = 5 * 60_000;
+    const longRunningCutoffIso = new Date(Date.now() - longRunningThresholdMs).toISOString();
     const queueSnapshot = this.withAuditDbRecovery("StateStore.getControlPlaneHealth.queue", (auditDb) => {
       const rows = auditDb.prepare(`
-        SELECT kind, status, runAfter, updatedAt
+        SELECT
+          kind,
+          SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
+          SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) AS processing,
+          MIN(CASE WHEN status = 'pending' THEN runAfter END) AS oldestPendingRunAfter,
+          MIN(CASE WHEN status = 'processing' THEN updatedAt END) AS oldestProcessingUpdatedAt,
+          MAX(updatedAt) AS newestUpdatedAt,
+          SUM(CASE WHEN status = 'processing' AND updatedAt <= ? THEN 1 ELSE 0 END) AS longRunningProcessing
         FROM durable_jobs
         WHERE kind <> 'action_log'
-      `).all() as Array<Record<string, unknown>>;
-      const lanes = new Map<string, ControlPlaneQueueLane>();
-      let longRunningProcessing = 0;
+          AND status IN ('pending', 'processing')
+        GROUP BY kind
+        ORDER BY kind ASC
+      `).all(longRunningCutoffIso) as Array<Record<string, unknown>>;
 
-      for (const row of rows) {
-        const kind = String(row.kind);
-        const status = String(row.status);
-        const lane = lanes.get(kind) ?? {
-          kind,
-          pending: 0,
-          processing: 0,
+      const queue = rows.map((row) => {
+        const lane: ControlPlaneQueueLane = {
+          kind: String(row.kind),
+          pending: Number(row.pending ?? 0),
+          processing: Number(row.processing ?? 0),
           completed: 0,
         };
-
-        if (status === "pending") {
-          lane.pending += 1;
-          const runAfter = row.runAfter ? String(row.runAfter) : undefined;
-          if (runAfter && (!lane.oldestPendingRunAfter || runAfter < lane.oldestPendingRunAfter)) {
-            lane.oldestPendingRunAfter = runAfter;
-          }
-        } else if (status === "processing") {
-          lane.processing += 1;
-          const updatedAt = row.updatedAt ? String(row.updatedAt) : undefined;
-          if (updatedAt && (!lane.oldestProcessingUpdatedAt || updatedAt < lane.oldestProcessingUpdatedAt)) {
-            lane.oldestProcessingUpdatedAt = updatedAt;
-          }
-          const updatedAtMs = updatedAt ? Date.parse(updatedAt) : Number.NaN;
-          if (Number.isFinite(updatedAtMs) && (Date.now() - updatedAtMs) > longRunningThresholdMs) {
-            longRunningProcessing += 1;
-          }
-        } else if (status === "completed") {
-          lane.completed += 1;
+        if (row.oldestPendingRunAfter) {
+          lane.oldestPendingRunAfter = String(row.oldestPendingRunAfter);
         }
-
-        const updatedAt = row.updatedAt ? String(row.updatedAt) : undefined;
-        if (updatedAt && (!lane.newestUpdatedAt || updatedAt > lane.newestUpdatedAt)) {
-          lane.newestUpdatedAt = updatedAt;
+        if (row.oldestProcessingUpdatedAt) {
+          lane.oldestProcessingUpdatedAt = String(row.oldestProcessingUpdatedAt);
         }
-
-        lanes.set(kind, lane);
-      }
+        if (row.newestUpdatedAt) {
+          lane.newestUpdatedAt = String(row.newestUpdatedAt);
+        }
+        return lane;
+      });
 
       return {
-        queue: Array.from(lanes.values()).sort((a, b) => a.kind.localeCompare(b.kind)),
-        longRunningProcessing,
+        queue,
+        longRunningProcessing: rows.reduce(
+          (total, row) => total + Number(row.longRunningProcessing ?? 0),
+          0,
+        ),
       };
     });
 
@@ -3504,7 +3524,7 @@ class StateStore {
           SELECT id, kind, payload, attempts, idempotencyKey
           FROM durable_jobs
           WHERE status = 'pending' AND runAfter <= ? AND kind IN (${kinds.map(() => "?").join(", ")})
-          ORDER BY createdAt ASC
+          ORDER BY runAfter ASC, createdAt ASC
           LIMIT ?
         `).all(
           now,
@@ -3515,7 +3535,7 @@ class StateStore {
           SELECT id, kind, payload, attempts, idempotencyKey
           FROM durable_jobs
           WHERE status = 'pending' AND runAfter <= ?
-          ORDER BY createdAt ASC
+          ORDER BY runAfter ASC, createdAt ASC
           LIMIT ?
         `).all(now, Math.max(1, Math.min(500, limit))) as Array<Record<string, unknown>>;
 
@@ -3586,14 +3606,25 @@ class StateStore {
     });
   }
 
-  completeDurableJob(id: string): void {
+  completeDurableJob(id: string, options?: { clearIdempotencyKey?: boolean }): void {
     this.withAuditDbRecovery("StateStore.completeDurableJob", (auditDb) => {
+      const completedAt = new Date().toISOString();
+      if (options?.clearIdempotencyKey) {
+        auditDb.prepare(`
+          UPDATE durable_jobs
+          SET status = 'completed', updatedAt = ?, idempotencyKey = NULL
+          WHERE id = ?
+        `).run(completedAt, id);
+        return;
+      }
+
       auditDb.prepare(`
         UPDATE durable_jobs
         SET status = 'completed', updatedAt = ?
         WHERE id = ?
-      `).run(new Date().toISOString(), id);
+      `).run(completedAt, id);
     });
+    this.maybePruneCompletedDurableJobs();
   }
 
   failDurableJob(id: string, errorMessage: string, retryAfterMs = 60_000): void {
@@ -3620,12 +3651,63 @@ class StateStore {
 
     return this.withAuditDbRecovery("StateStore.hasDurableJobsInFlight", (auditDb) => {
       const row = auditDb.prepare(`
-        SELECT COUNT(*) AS total
+        SELECT 1 AS present
         FROM durable_jobs
         WHERE status IN ('pending', 'processing')
           AND kind IN (${normalizedKinds.map(() => "?").join(", ")})
-      `).get(...normalizedKinds) as { total?: number } | undefined;
-      return Number(row?.total ?? 0) > 0;
+        LIMIT 1
+      `).get(...normalizedKinds) as { present?: number } | undefined;
+      return Number(row?.present ?? 0) === 1;
+    });
+  }
+
+  countDurableJobsInFlight(kinds: string[], maxCount?: number): number {
+    const normalizedKinds = Array.from(new Set(kinds.map((kind) => kind.trim()).filter(Boolean)));
+    if (normalizedKinds.length === 0) {
+      return 0;
+    }
+
+    return this.withAuditDbRecovery("StateStore.countDurableJobsInFlight", (auditDb) => {
+      const boundedMaxCount = typeof maxCount === "number" && Number.isFinite(maxCount)
+        ? Math.max(1, Math.min(Math.floor(maxCount), 10_000))
+        : undefined;
+      const row = boundedMaxCount
+        ? auditDb.prepare(`
+          SELECT COUNT(*) AS total
+          FROM (
+            SELECT 1
+            FROM durable_jobs
+            WHERE status IN ('pending', 'processing')
+              AND kind IN (${normalizedKinds.map(() => "?").join(", ")})
+            LIMIT ?
+          )
+        `).get(...normalizedKinds, boundedMaxCount) as { total?: number } | undefined
+        : auditDb.prepare(`
+          SELECT COUNT(*) AS total
+          FROM durable_jobs
+          WHERE status IN ('pending', 'processing')
+            AND kind IN (${normalizedKinds.map(() => "?").join(", ")})
+        `).get(...normalizedKinds) as { total?: number } | undefined;
+      return Number(row?.total ?? 0);
+    });
+  }
+
+  purgeLegacyInvestigationDurableJobs(limit = 50_000): number {
+    return this.withAuditDbRecovery("StateStore.purgeLegacyInvestigationDurableJobs", (auditDb) => {
+      const batchSize = Math.max(1, Math.min(Math.floor(limit), 200_000));
+      const result = auditDb.prepare(`
+        DELETE FROM durable_jobs
+        WHERE id IN (
+          SELECT id
+          FROM durable_jobs
+          WHERE kind = 'investigation.step'
+            AND status = 'pending'
+            AND idempotencyKey LIKE 'investigation.step:%:%'
+          ORDER BY runAfter ASC, createdAt ASC
+          LIMIT ?
+        )
+      `).run(batchSize);
+      return Number(result.changes ?? 0);
     });
   }
 

@@ -1,4 +1,4 @@
-import { generateText } from "ai";
+import { generateObject, generateText, NoObjectGeneratedError, parsePartialJson } from "ai";
 import { z } from "zod";
 import { buildLanguageModel } from "@/lib/llm/providers";
 import { stateStore } from "@/lib/state/store";
@@ -7,11 +7,13 @@ import { approveAction, createApproval, denyAction } from "@/lib/approvals/queue
 import { buildPlaybookRun, countRecentFamilyFailures, isFamilyQuarantined } from "@/lib/playbooks/factory";
 import { queuePlaybookExecution } from "@/lib/playbooks/orchestrator";
 import { getMissingCredentialProtocolsForPlaybook } from "@/lib/adoption/playbook-credentials";
+import { DEVICE_TYPE_VALUES } from "@/lib/state/types";
 import {
   buildCustomMonitorContractFromPrompt,
   getRequiredProtocolsForServiceContract,
 } from "@/lib/monitoring/contracts";
 import type {
+  ActionLog,
   ChatMessage,
   ChatMessageMetadata,
   Device,
@@ -22,17 +24,6 @@ import type {
   PlaybookDefinition,
   PlaybookStep,
 } from "@/lib/state/types";
-
-const monitorIntentPattern = /\b(monitor|watch|track|observe|alert if|keep an eye|check every)\b/i;
-const uiIntentPattern = /\b(ui|gui|desktop|screen|window|rdp|vnc)\b/i;
-const uiCheckPattern = /\b(check|verify|watch|see|inspect)\b/i;
-const adhocTaskPattern = /\b(install|set up|setup|deploy|provision|configure|bootstrap|upgrade|update|patch|migrate|backup|restore|restart|reboot|harden|lock down|rotate|renew|facilitate|execute|run)\b/i;
-const adhocPlanningOnlyPattern = /\b(version|latest|current|upgrade path|maintenance plan|compatibility|status|why|how)\b/i;
-const adhocExecutionHintPattern = /\b(start|proceed|now|perform|execute|run|facilitate|carry out|apply|upgrade|backup|restore|restart|reboot|patch|migrate|harden)\b/i;
-const approvalIntentPattern = /^(?:yes|yeah|yep|approve|approved|go ahead|do it|please do|proceed|start it|run it|execute it|ship it)\b/i;
-const denialIntentPattern = /^(?:no|nope|deny|denied|cancel|stop|hold off|not now|don't|do not)\b/i;
-const renameIntentPattern = /\b(rename|name\s+this|call\s+it)\b/i;
-const categoryIntentPattern = /\b(category|device\s+type|type\s+to|mark\s+as)\b/i;
 
 const INVALID_NAME_TOKENS = new Set([
   "this",
@@ -98,13 +89,43 @@ const DEVICE_TYPE_MAP: Record<string, DeviceType> = {
   unknown: "unknown",
 };
 
+const DeviceTypeSchema = z.enum(DEVICE_TYPE_VALUES);
+const DeviceSettingsIntentSchema = z.object({
+  renameRequested: z.boolean().default(false),
+  categoryRequested: z.boolean().default(false),
+  suggestedName: z.string().trim().min(2).max(128).nullable().default(null),
+  suggestedType: DeviceTypeSchema.nullable().default(null),
+}).default({
+  renameRequested: false,
+  categoryRequested: false,
+  suggestedName: null,
+  suggestedType: null,
+});
+
+const DeviceChatIntentSchema = z.object({
+  intent: z.enum(["none", "approval_response", "device_settings", "monitor_request", "adhoc_task"]),
+  rationale: z.string().min(1).max(600),
+  approvalDecision: z.enum(["approve", "deny"]).nullable().default(null),
+  deviceSettings: DeviceSettingsIntentSchema,
+});
+
+type DeviceChatIntent = z.infer<typeof DeviceChatIntentSchema>;
+
+const AdhocTaskRequestResolutionSchema = z.object({
+  normalizedRequest: z.string().trim().min(1).max(2_000).nullable().default(null),
+  source: z.enum(["latest_message", "conversation_context", "ambiguous"]),
+  rationale: z.string().min(1).max(600),
+});
+
+type AdhocTaskRequestResolution = z.infer<typeof AdhocTaskRequestResolutionSchema>;
+
 const AdhocPlanStepSchema = z.object({
   label: z.string().min(1).max(160),
   commandTemplate: z.string().min(1).max(1_600),
   mode: z.enum(["read", "mutate"]).optional(),
   waitForCondition: z.boolean().optional(),
-  pollIntervalMs: z.number().int().min(5_000).max(60 * 60 * 1000).optional(),
-  maxWaitMs: z.number().int().min(30_000).max(72 * 60 * 60 * 1000).optional(),
+  pollIntervalMs: z.number().optional(),
+  maxWaitMs: z.number().optional(),
   successRegex: z.string().min(1).max(400).optional(),
   failureRegex: z.string().min(1).max(400).optional(),
 }).superRefine((step, ctx) => {
@@ -130,13 +151,35 @@ const AdhocPlanStepSchema = z.object({
 const AdhocPlanSchema = z.object({
   family: z.string().min(1).max(80),
   rationale: z.string().min(1).max(1_200),
+  actionClass: z.enum(["B", "C", "D"]),
+  criticality: z.enum(["low", "medium", "high"]),
+  blastRadius: z.enum(["single-service", "single-device", "multi-device"]),
   requiredProtocol: z.enum(["ssh", "winrm", "powershell-ssh", "wmi", "smb", "rdp", "vnc", "docker", "http-api"]),
-  mutateSteps: z.array(AdhocPlanStepSchema).min(1).max(16),
-  verifySteps: z.array(AdhocPlanStepSchema).min(1).max(16),
-  rollbackSteps: z.array(AdhocPlanStepSchema).max(16).default([]),
+  mutateSteps: z.array(AdhocPlanStepSchema).min(1),
+  verifySteps: z.array(AdhocPlanStepSchema).min(1),
+  rollbackSteps: z.array(AdhocPlanStepSchema).default([]),
 });
 
 type AdhocPlan = z.infer<typeof AdhocPlanSchema>;
+
+const MAX_ADHOC_PLAN_STEPS = 16;
+const MIN_WAIT_POLL_INTERVAL_MS = 5_000;
+const MAX_WAIT_POLL_INTERVAL_MS = 60 * 60 * 1000;
+const MIN_WAIT_DURATION_MS = 30_000;
+const MAX_WAIT_DURATION_MS = 72 * 60 * 60 * 1000;
+const ADHOC_PLAN_JSON_SHAPE_LINES = [
+  "{",
+  '  "family": "custom-install",',
+  '  "rationale": "string",',
+  '  "actionClass": "B|C|D",',
+  '  "criticality": "low|medium|high",',
+  '  "blastRadius": "single-service|single-device|multi-device",',
+  '  "requiredProtocol": "ssh|winrm|powershell-ssh|wmi|smb|rdp|vnc|docker|http-api",',
+  '  "mutateSteps": [{"label":"string","commandTemplate":"string","mode":"mutate","waitForCondition":false}],',
+  '  "verifySteps": [{"label":"string","commandTemplate":"string","mode":"read","waitForCondition":false}],',
+  '  "rollbackSteps": [{"label":"string","commandTemplate":"string","mode":"mutate","waitForCondition":false}]',
+  "}",
+] as const;
 
 export interface DeviceChatActionResult {
   handled: boolean;
@@ -155,10 +198,431 @@ interface DeviceChatActionInput {
   sessionId?: string;
 }
 
+const MAX_DEVICE_CHAT_CONTEXT_MESSAGES = 40;
+
 function trimTo(value: string, max = 120): string {
   const trimmed = value.trim();
   if (trimmed.length <= max) return trimmed;
   return `${trimmed.slice(0, max - 3)}...`;
+}
+
+function trimForContext(value: string, max = 320): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= max) return trimmed;
+  const head = Math.max(40, Math.floor(max * 0.65));
+  const tail = Math.max(30, max - head - 5);
+  return `${trimmed.slice(0, head)} ... ${trimmed.slice(-tail)}`;
+}
+
+function normalizeAdhocPlan(plan: AdhocPlan): AdhocPlan {
+  const normalizeStep = (step: AdhocPlan["mutateSteps"][number]): AdhocPlan["mutateSteps"][number] => {
+    if (!step.waitForCondition) {
+      return step;
+    }
+
+    return {
+      ...step,
+      pollIntervalMs: typeof step.pollIntervalMs === "number"
+        ? Math.min(MAX_WAIT_POLL_INTERVAL_MS, Math.max(MIN_WAIT_POLL_INTERVAL_MS, Math.floor(step.pollIntervalMs)))
+        : step.pollIntervalMs,
+      maxWaitMs: typeof step.maxWaitMs === "number"
+        ? Math.min(MAX_WAIT_DURATION_MS, Math.max(MIN_WAIT_DURATION_MS, Math.floor(step.maxWaitMs)))
+        : step.maxWaitMs,
+    };
+  };
+
+  return {
+    ...plan,
+    mutateSteps: plan.mutateSteps.slice(0, MAX_ADHOC_PLAN_STEPS).map(normalizeStep),
+    verifySteps: plan.verifySteps.slice(0, MAX_ADHOC_PLAN_STEPS).map(normalizeStep),
+    rollbackSteps: plan.rollbackSteps.slice(0, MAX_ADHOC_PLAN_STEPS).map(normalizeStep),
+  };
+}
+
+async function parseAdhocPlanCandidate(text: string | undefined): Promise<AdhocPlan | null> {
+  const trimmed = text?.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const parsed = await parsePartialJson(trimmed);
+  const candidate = AdhocPlanSchema.safeParse(parsed.value);
+  if (!candidate.success) {
+    return null;
+  }
+
+  return candidate.data;
+}
+
+async function repairAdhocPlanText(args: {
+  rawText: string;
+  errorMessage: string;
+  provider: LLMProvider;
+  model?: string;
+  device: Device;
+  input: string;
+}): Promise<AdhocPlan | null> {
+  const modelClient = await buildLanguageModel(args.provider, args.model);
+  const repaired = await generateText({
+    model: modelClient,
+    temperature: 0,
+    maxOutputTokens: 2_000,
+    prompt: [
+      "Rewrite the raw draft below into a valid JSON object for a Steward ad-hoc execution plan.",
+      "Return JSON only. No markdown. No code fences. No explanations.",
+      "Preserve the requested task, target, and intent.",
+      "Keep the plan conservative and executable.",
+      "mutateSteps and verifySteps must be non-empty arrays.",
+      "waitForCondition steps must be read-only and include pollIntervalMs and maxWaitMs.",
+      "",
+      `Device: ${args.device.name} (${args.device.ip}) type=${args.device.type}`,
+      `Resolved execution request: ${args.input}`,
+      `Parse failure: ${args.errorMessage}`,
+      "",
+      "Required JSON shape:",
+      ...ADHOC_PLAN_JSON_SHAPE_LINES,
+      "",
+      "Raw draft:",
+      args.rawText,
+    ].join("\n"),
+  });
+
+  return parseAdhocPlanCandidate(repaired.text);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function summarizeDeviceForIntent(device: Device | null): string {
+  if (!device) {
+    return JSON.stringify({ attached: false });
+  }
+
+  return JSON.stringify({
+    attached: true,
+    id: device.id,
+    name: device.name,
+    ip: device.ip,
+    type: device.type,
+    autonomyTier: device.autonomyTier,
+    environmentLabel: device.environmentLabel ?? "lab",
+    protocols: device.protocols,
+    os: device.os ?? null,
+    vendor: device.vendor ?? null,
+  }, null, 2);
+}
+
+function summarizeReferencedRuns(history: ChatMessage[], deviceId?: string): Array<Record<string, unknown>> {
+  const runIds = new Set<string>();
+  const runs: Array<Record<string, unknown>> = [];
+
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const candidate = history[index]?.metadata?.playbookRun;
+    if (!candidate?.runId || runIds.has(candidate.runId)) {
+      continue;
+    }
+    if (deviceId && candidate.deviceId !== deviceId) {
+      continue;
+    }
+    const run = stateStore.getPlaybookRunById(candidate.runId);
+    if (!run) {
+      continue;
+    }
+    runIds.add(candidate.runId);
+    runs.push({
+      id: run.id,
+      name: run.name,
+      status: run.status,
+      actionClass: run.actionClass,
+      normalizedRequest: run.evidence.preSnapshot?.normalizedRequest ?? null,
+      waiting: run.evidence.waiting ?? null,
+      steps: run.steps.slice(0, 6).map((step) => ({
+        label: step.label,
+        status: step.status,
+      })),
+    });
+    if (runs.length >= 3) {
+      break;
+    }
+  }
+
+  return runs;
+}
+
+function summarizeConversationContext(
+  history: ChatMessage[],
+  options?: { maxMessages?: number; maxCharsPerMessage?: number; deviceId?: string },
+): string {
+  const maxMessages = Math.max(1, options?.maxMessages ?? MAX_DEVICE_CHAT_CONTEXT_MESSAGES);
+  const maxCharsPerMessage = Math.max(80, options?.maxCharsPerMessage ?? 320);
+  const messages = history.slice(-maxMessages).map((message) => ({
+    role: message.role,
+    content: trimForContext(message.content, maxCharsPerMessage),
+    playbookRun: message.metadata?.playbookRun ?? null,
+  }));
+  const referencedRuns = summarizeReferencedRuns(history, options?.deviceId);
+  return JSON.stringify({
+    messages,
+    referencedRuns,
+  }, null, 2);
+}
+
+function summarizeRecentTaskSignals(sessionId?: string, deviceId?: string): string {
+  if (!sessionId && !deviceId) {
+    return "[]";
+  }
+
+  const signals = stateStore.getRecentActions(400)
+    .filter((action): action is ActionLog => action.kind === "playbook")
+    .filter((action) => {
+      const context = isRecord(action.context) ? action.context : {};
+      const actionSessionId = typeof context.sessionId === "string" ? context.sessionId : null;
+      const actionDeviceId = typeof context.deviceId === "string" ? context.deviceId : null;
+      if (sessionId && actionSessionId !== sessionId) {
+        return false;
+      }
+      if (deviceId && actionDeviceId !== deviceId) {
+        return false;
+      }
+      return true;
+    })
+    .map((action) => {
+      const context = isRecord(action.context) ? action.context : {};
+      const resolution = isRecord(context.requestResolution) ? context.requestResolution : null;
+      return {
+        at: action.at,
+        message: trimForContext(action.message, 160),
+        sourceRequest: typeof context.sourceRequest === "string"
+          ? trimForContext(context.sourceRequest, 160)
+          : null,
+        normalizedRequest: typeof context.normalizedRequest === "string"
+          ? trimForContext(context.normalizedRequest, 900)
+          : null,
+        requestResolutionSource: resolution && typeof resolution.source === "string"
+          ? resolution.source
+          : null,
+        requestResolutionRationale: resolution && typeof resolution.rationale === "string"
+          ? trimForContext(resolution.rationale, 220)
+          : null,
+      };
+    })
+    .filter((signal) => signal.sourceRequest || signal.normalizedRequest)
+    .slice(0, 6);
+
+  return JSON.stringify(signals, null, 2);
+}
+
+function buildAdhocTaskResolutionPrompt(args: {
+  input: string;
+  attachedDevice: Device | null;
+  history: ChatMessage[];
+  sessionId?: string;
+  priorResolution?: AdhocTaskRequestResolution | null;
+  recoveryMode?: boolean;
+}): string {
+  return [
+    "You resolve the latest attached-device execution request into a self-contained task brief for Steward.",
+    "Return JSON only. No markdown.",
+    "Use recent chat history when the latest message is shorthand or a retry/continuation request.",
+    "If the latest message is something like 'try again', 'do it', 'same task', or similar shorthand, restate the concrete task from the conversation if it is clear.",
+    "Do not invent tasks or targets that are not clearly grounded in the conversation.",
+    "Treat the request as clear when the underlying infrastructure change is identifiable, even if approvals, maintenance windows, exact timing, backup confirmation, rollback confirmation, or exact patch numbers still need to be handled later.",
+    "Those operational controls belong to policy, approvals, and plan generation, not request resolution.",
+    "Only return ambiguous when the actual software/service/change Steward should perform cannot be identified from the conversation.",
+    "Example: after discussing a GitLab upgrade path, 'create a job to get this done' should resolve to the GitLab upgrade request, not ambiguous.",
+    ...(args.recoveryMode
+      ? [
+        "The previous resolution was too conservative. Recover the concrete requested change if it is identifiable from the conversation.",
+        `Previous resolution: ${JSON.stringify(args.priorResolution ?? null)}`,
+      ]
+      : []),
+    "",
+    "Attached device:",
+    summarizeDeviceForIntent(args.attachedDevice),
+    "",
+    "Recent task signals:",
+    summarizeRecentTaskSignals(args.sessionId, args.attachedDevice?.id),
+    "",
+    "Conversation context:",
+    summarizeConversationContext(args.history, {
+      maxMessages: MAX_DEVICE_CHAT_CONTEXT_MESSAGES,
+      maxCharsPerMessage: 900,
+      deviceId: args.attachedDevice?.id,
+    }),
+    "",
+    `Latest user message: ${args.input}`,
+    "",
+    "Return JSON with this exact shape:",
+    "{",
+    '  "normalizedRequest": "string or null",',
+    '  "source": "latest_message|conversation_context|ambiguous",',
+    '  "rationale": "short string"',
+    "}",
+  ].join("\n");
+}
+
+async function classifyDeviceChatIntent(args: {
+  input: string;
+  provider: LLMProvider;
+  model?: string;
+  attachedDevice: Device | null;
+  history: ChatMessage[];
+  sessionId?: string;
+}): Promise<DeviceChatIntent> {
+  const modelClient = await buildLanguageModel(args.provider, args.model);
+  const recentTaskSignals = summarizeRecentTaskSignals(args.sessionId, args.attachedDevice?.id);
+  const result = await generateObject({
+    model: modelClient,
+    temperature: 0,
+    maxOutputTokens: 700,
+    schema: DeviceChatIntentSchema,
+    schemaName: "device_chat_intent",
+    schemaDescription: "Structured intent classification for an attached-device Steward chat turn.",
+    prompt: [
+      "You classify the latest attached-device Steward chat turn into a structured intent.",
+      "Return JSON only. No markdown.",
+      "Intent options:",
+      '- "none": informational/research/planning-only conversation. This includes version checks, latest-version questions, upgrade-path research, compatibility questions, explanations, advice, or any turn that explicitly says not to create a task/job yet.',
+      '- "approval_response": the user is explicitly approving or denying an already-proposed pending run.',
+      '- "device_settings": the user wants to rename the device or change its device type/category metadata.',
+      '- "monitor_request": the user wants Steward to create or update an ongoing monitor/assurance/watch.',
+      '- "adhoc_task": the user is delegating execution now and wants Steward to create/run a governed mutation job on the device.',
+      'A "job" in Steward means a governed background execution run, not an automation, checklist, or maintenance-window draft.',
+      "Be conservative: do not classify as adhoc_task unless the user clearly wants execution now.",
+      "If the user is only asking for research, planning, upgrade paths, or status, choose none.",
+      "If the user says not to make a task/job yet, choose none.",
+      "If the latest message asks to create a job/run/task for a concrete infrastructure change already established in the thread, choose adhoc_task.",
+      "Do not reinterpret a request for a job as an automation, runbook, checklist, or scheduling request unless the user explicitly asks for those.",
+      "Use the recent chat history and any referenced playbook run metadata when deciding.",
+      "When classifying device_settings, set renameRequested/categoryRequested plus any concrete suggestedName/suggestedType that are explicitly or clearly implied by the message.",
+      "When classifying approval_response, set approvalDecision to approve or deny.",
+      "",
+      "Attached device:",
+      summarizeDeviceForIntent(args.attachedDevice),
+      "",
+      "Recent task signals:",
+      recentTaskSignals,
+      "",
+      "Conversation context:",
+      summarizeConversationContext(args.history, {
+        maxMessages: MAX_DEVICE_CHAT_CONTEXT_MESSAGES,
+        maxCharsPerMessage: 280,
+        deviceId: args.attachedDevice?.id,
+      }),
+      "",
+      `Latest user message: ${args.input}`,
+      "",
+      "Return JSON with this exact shape:",
+      "{",
+      '  "intent": "none|approval_response|device_settings|monitor_request|adhoc_task",',
+      '  "rationale": "short string",',
+      '  "approvalDecision": "approve|deny|null",',
+      '  "deviceSettings": {',
+      '    "renameRequested": false,',
+      '    "categoryRequested": false,',
+      '    "suggestedName": null,',
+      '    "suggestedType": null',
+      "  }",
+      "}",
+    ].join("\n"),
+  });
+  const initial = result.object;
+  if (initial.intent !== "none") {
+    return initial;
+  }
+
+  try {
+    const recovered = await generateObject({
+      model: modelClient,
+      temperature: 0,
+      maxOutputTokens: 700,
+      schema: DeviceChatIntentSchema,
+      schemaName: "device_chat_intent_recovery",
+      schemaDescription: "Recovery pass for overly conservative attached-device intent classification.",
+      prompt: [
+        "The previous classification may have been too conservative.",
+        "Re-evaluate whether the latest attached-device message is delegating execution of a concrete task already established in the thread.",
+        "If the latest message asks to create a job/run/task or otherwise get the previously discussed change done now, choose adhoc_task.",
+        "A Steward job is a governed mutation run on the attached device. It is not an automation or a runbook unless the user explicitly asks for those.",
+        `Previous classification: ${JSON.stringify(initial)}`,
+        "",
+        "Attached device:",
+        summarizeDeviceForIntent(args.attachedDevice),
+        "",
+        "Recent task signals:",
+        recentTaskSignals,
+        "",
+        "Conversation context:",
+        summarizeConversationContext(args.history, {
+          maxMessages: MAX_DEVICE_CHAT_CONTEXT_MESSAGES,
+          maxCharsPerMessage: 280,
+          deviceId: args.attachedDevice?.id,
+        }),
+        "",
+        `Latest user message: ${args.input}`,
+        "",
+        "Return JSON with this exact shape:",
+        "{",
+        '  "intent": "none|approval_response|device_settings|monitor_request|adhoc_task",',
+        '  "rationale": "short string",',
+        '  "approvalDecision": "approve|deny|null",',
+        '  "deviceSettings": {',
+        '    "renameRequested": false,',
+        '    "categoryRequested": false,',
+        '    "suggestedName": null,',
+        '    "suggestedType": null',
+        "  }",
+        "}",
+      ].join("\n"),
+    });
+    return recovered.object;
+  } catch {
+    return initial;
+  }
+}
+
+async function resolveAdhocTaskRequest(args: {
+  input: string;
+  provider: LLMProvider;
+  model?: string;
+  attachedDevice: Device | null;
+  history: ChatMessage[];
+  sessionId?: string;
+}): Promise<AdhocTaskRequestResolution> {
+  const modelClient = await buildLanguageModel(args.provider, args.model);
+  const result = await generateObject({
+    model: modelClient,
+    temperature: 0,
+    maxOutputTokens: 700,
+    schema: AdhocTaskRequestResolutionSchema,
+    schemaName: "adhoc_task_request_resolution",
+    schemaDescription: "Self-contained normalized execution request for an attached-device ad-hoc task.",
+    prompt: buildAdhocTaskResolutionPrompt(args),
+  });
+  const initial = result.object;
+  if (initial.source !== "ambiguous" || initial.normalizedRequest) {
+    return initial;
+  }
+
+  try {
+    const recovered = await generateObject({
+      model: modelClient,
+      temperature: 0,
+      maxOutputTokens: 700,
+      schema: AdhocTaskRequestResolutionSchema,
+      schemaName: "adhoc_task_request_resolution_recovery",
+      schemaDescription: "Recovery pass for overly conservative ad-hoc task request resolution.",
+      prompt: buildAdhocTaskResolutionPrompt({
+        ...args,
+        priorResolution: initial,
+        recoveryMode: true,
+      }),
+    });
+    return recovered.object;
+  } catch {
+    return initial;
+  }
 }
 
 function normalizeDeviceName(value: string): string {
@@ -178,17 +642,6 @@ function isValidDeviceName(value: string): boolean {
     return false;
   }
   return true;
-}
-
-function looksLikeMonitorIntent(input: string): boolean {
-  return monitorIntentPattern.test(input) || (uiIntentPattern.test(input) && uiCheckPattern.test(input));
-}
-
-function looksLikeAdhocTaskIntent(input: string): boolean {
-  if (!adhocTaskPattern.test(input)) {
-    return false;
-  }
-  return !adhocPlanningOnlyPattern.test(input) || adhocExecutionHintPattern.test(input);
 }
 
 function buildPlaybookChatMetadata(run: PlaybookRun): ChatMessageMetadata {
@@ -223,32 +676,6 @@ function summarizeRunState(run: PlaybookRun): string {
     return `Run ${run.id} is waiting on ${run.evidence.waiting.label}. Next wake: ${run.evidence.waiting.nextWakeAt}.`;
   }
   return `Run ${run.id} is ${run.status.replace(/_/g, " ")}.`;
-}
-
-function approvalIntent(input: string): "approve" | "deny" | null {
-  if (approvalIntentPattern.test(input.trim())) {
-    return "approve";
-  }
-  if (denialIntentPattern.test(input.trim())) {
-    return "deny";
-  }
-  return null;
-}
-
-function extractSuggestedName(input: string): string | null {
-  const quoted = input.match(/["']([^"']{2,64})["']/);
-  if (quoted?.[1]) {
-    const normalized = normalizeDeviceName(quoted[1]);
-    return isValidDeviceName(normalized) ? normalized : null;
-  }
-
-  const direct = input.match(/\b(?:rename|call\s+it|name\s+this(?:\s+device)?)\s+(?:to\s+)?([a-zA-Z0-9][a-zA-Z0-9._ -]{1,127})/i);
-  if (direct?.[1]) {
-    const normalized = normalizeDeviceName(direct[1]);
-    return isValidDeviceName(normalized) ? normalized : null;
-  }
-
-  return null;
 }
 
 function identityRecord(device: Device): Record<string, unknown> {
@@ -295,24 +722,6 @@ function inferDeviceName(device: Device): string | null {
   return null;
 }
 
-function extractSuggestedCategory(input: string): DeviceType | null {
-  const normalized = input.toLowerCase().replace(/[_\s]+/g, "-");
-  const explicit = normalized.match(/(?:category|device-type|type)(?:-[a-z]+){0,2}-(?:to|as)-([a-z-]+)/);
-  if (explicit?.[1]) {
-    const token = explicit[1].trim();
-    if (token in DEVICE_TYPE_MAP) {
-      return DEVICE_TYPE_MAP[token];
-    }
-  }
-
-  for (const [key, value] of Object.entries(DEVICE_TYPE_MAP)) {
-    if (normalized.includes(key.replace(/\s+/g, "-"))) {
-      return value;
-    }
-  }
-  return null;
-}
-
 function inferDeviceCategory(device: Device): DeviceType | null {
   const identity = identityRecord(device);
   const identityType = typeof identity.type === "string" ? identity.type.trim().toLowerCase() : "";
@@ -353,16 +762,11 @@ function inferDeviceCategory(device: Device): DeviceType | null {
 }
 
 async function handlePendingApprovalResponse(
-  input: string,
+  decision: "approve" | "deny",
   history: ChatMessage[],
   device: Device | null,
   sessionId?: string,
 ): Promise<DeviceChatActionResult> {
-  const intent = approvalIntent(input);
-  if (!intent) {
-    return { handled: false };
-  }
-
   const runId = mostRecentReferencedRunId(history, device?.id);
   if (!runId) {
     return { handled: false };
@@ -373,7 +777,7 @@ async function handlePendingApprovalResponse(
     return { handled: false };
   }
 
-  if (intent === "approve") {
+  if (decision === "approve") {
     const approved = approveAction(run.id, "user_chat");
     if (!approved) {
       return {
@@ -407,7 +811,7 @@ async function handlePendingApprovalResponse(
 }
 
 async function handleDeviceSettingsRequest(
-  input: string,
+  settingsIntent: DeviceChatIntent["deviceSettings"],
   device: Device | null,
   sessionId?: string,
 ): Promise<DeviceChatActionResult> {
@@ -419,17 +823,25 @@ async function handleDeviceSettingsRequest(
     };
   }
 
-  const suggestedName = extractSuggestedName(input);
-  const suggestedType = extractSuggestedCategory(input);
-  const renameRequested = renameIntentPattern.test(input);
-  const categoryRequested = categoryIntentPattern.test(input);
+  const suggestedName = settingsIntent.suggestedName
+    ? normalizeDeviceName(settingsIntent.suggestedName)
+    : null;
+  const suggestedType = settingsIntent.suggestedType;
+  const renameRequested = settingsIntent.renameRequested;
+  const categoryRequested = settingsIntent.categoryRequested;
   const inferredName = !suggestedName && renameRequested ? inferDeviceName(device) : null;
   const inferredType = !suggestedType && categoryRequested ? inferDeviceCategory(device) : null;
-  const nextName = suggestedName ?? inferredName;
+  const nextName = suggestedName && isValidDeviceName(suggestedName)
+    ? suggestedName
+    : inferredName;
   const nextType = suggestedType ?? inferredType;
 
   if (!nextName && !nextType) {
-    return { handled: false };
+    return {
+      handled: true,
+      response: `I couldn't determine a concrete device metadata change for ${device.name}. Tell me the new name or category you want set.`,
+      metadata: { action: "device_settings", blocked: "missing_target_value", deviceId: device.id, sessionId },
+    };
   }
 
   const updated: Device = {
@@ -491,23 +903,12 @@ async function handleDeviceSettingsRequest(
   };
 }
 
-function extractServiceToken(input: string): string {
+function extractServiceToken(input: string): string | null {
   const match = input.match(/\b(?:install|setup|set up|deploy|configure)\s+([a-zA-Z0-9._-]+)/i);
   if (match && match[1]) {
     return match[1].toLowerCase();
   }
-  return "custom-service";
-}
-
-function extractFirstJsonObject(text: string): unknown {
-  const fenced = text.match(/```json\s*([\s\S]+?)```/i);
-  const candidate = fenced?.[1]?.trim() ?? text.trim();
-  const firstBrace = candidate.indexOf("{");
-  const lastBrace = candidate.lastIndexOf("}");
-  if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
-    throw new Error("No JSON object found in model response");
-  }
-  return JSON.parse(candidate.slice(firstBrace, lastBrace + 1));
+  return null;
 }
 
 function chooseProtocol(device: Device): AdhocPlan["requiredProtocol"] | null {
@@ -526,11 +927,23 @@ function fallbackPlanForDevice(device: Device, input: string): AdhocPlan | null 
     return null;
   }
 
-  const service = extractServiceToken(input).replace(/[^a-z0-9._-]/gi, "").toLowerCase() || "custom-service";
+  const serviceToken = extractServiceToken(input);
+  if (!serviceToken) {
+    return null;
+  }
+
+  const service = serviceToken.replace(/[^a-z0-9._-]/gi, "").toLowerCase();
+  if (!service) {
+    return null;
+  }
+
   if (protocol === "ssh") {
     return {
       family: "custom-install",
       rationale: `Install and configure ${service} on ${device.name} via SSH.`,
+      actionClass: "C",
+      criticality: "medium",
+      blastRadius: "single-device",
       requiredProtocol: "ssh",
       mutateSteps: [
         {
@@ -562,6 +975,9 @@ function fallbackPlanForDevice(device: Device, input: string): AdhocPlan | null 
     return {
       family: "custom-install",
       rationale: `Install and configure ${service} on ${device.name} via WinRM.`,
+      actionClass: "C",
+      criticality: "medium",
+      blastRadius: "single-device",
       requiredProtocol: "winrm",
       mutateSteps: [
         {
@@ -584,6 +1000,9 @@ function fallbackPlanForDevice(device: Device, input: string): AdhocPlan | null 
     return {
       family: "custom-install",
       rationale: `Install and configure ${service} on ${device.name} via PowerShell over SSH.`,
+      actionClass: "C",
+      criticality: "medium",
+      blastRadius: "single-device",
       requiredProtocol: "powershell-ssh",
       mutateSteps: [
         {
@@ -606,6 +1025,9 @@ function fallbackPlanForDevice(device: Device, input: string): AdhocPlan | null 
     return {
       family: "custom-install",
       rationale: `Deploy ${service} as a container responsibility on ${device.name}.`,
+      actionClass: "C",
+      criticality: "medium",
+      blastRadius: "single-device",
       requiredProtocol: "docker",
       mutateSteps: [
         {
@@ -636,6 +1058,9 @@ function fallbackPlanForDevice(device: Device, input: string): AdhocPlan | null 
   return {
     family: "custom-task",
     rationale: `Execute HTTP/API-oriented setup checks on ${device.name}.`,
+    actionClass: "C",
+    criticality: "medium",
+    blastRadius: "single-device",
     requiredProtocol: "http-api",
     mutateSteps: [
       {
@@ -658,6 +1083,7 @@ async function llmAdhocPlanForDevice(
   device: Device,
   input: string,
   provider: LLMProvider,
+  history: ChatMessage[],
   model?: string,
 ): Promise<AdhocPlan | null> {
   const suggestedProtocol = chooseProtocol(device);
@@ -666,43 +1092,70 @@ async function llmAdhocPlanForDevice(
   }
 
   const modelClient = await buildLanguageModel(provider, model);
-  const result = await generateText({
-    model: modelClient,
-    temperature: 0.1,
-    maxOutputTokens: 1_200,
-    system: [
-      "You generate strict JSON for Steward ad-hoc infrastructure task plans.",
-      "Return JSON only. No markdown.",
-      "All steps must use shell command templates.",
-      "Use {{host}} placeholder for the target host when needed.",
-      "Prefer safe, reversible operations and include verification.",
-      "If the task may take a long time, add waitForCondition steps instead of sleeping inline.",
-      "Wait steps must be read-only condition checks with pollIntervalMs and maxWaitMs.",
-      "If unsure, keep steps minimal and conservative.",
-    ].join("\n"),
-    prompt: [
-      `Device: ${device.name} (${device.ip}) type=${device.type} os=${device.os ?? "unknown"}`,
-      `Discovered protocols: ${device.protocols.join(", ") || "none"}`,
-      `Preferred protocol: ${suggestedProtocol}`,
-      "",
-      "Return this JSON shape:",
-      "{",
-      '  "family": "custom-install",',
-      '  "rationale": "string",',
-      '  "requiredProtocol": "ssh|winrm|docker|http-api",',
-      '  "mutateSteps": [{"label":"string","commandTemplate":"string","mode":"mutate","waitForCondition":false}],',
-      '  "verifySteps": [{"label":"string","commandTemplate":"string","mode":"read","waitForCondition":false}],',
-      '  "rollbackSteps": [{"label":"string","commandTemplate":"string","mode":"mutate","waitForCondition":false}]',
-      "}",
-      'Use waitForCondition=true only for polling checkpoints. Example wait step: {"label":"Wait for migrations","commandTemplate":"ssh {{host}} \'sudo gitlab-rake gitlab:background_migrations:status\'","mode":"read","waitForCondition":true,"pollIntervalMs":60000,"maxWaitMs":14400000,"successRegex":"finished|no pending"}',
-      "",
-      `User request: ${input}`,
-    ].join("\n"),
-  });
+  const prompt = [
+    "You generate strict JSON for Steward ad-hoc infrastructure task plans.",
+    "Return JSON only. No markdown.",
+    "All steps must use shell command templates.",
+    "Use {{host}} placeholder for the target host when needed.",
+    "Prefer safe, reversible operations and include verification.",
+    "If the task may take a long time, add waitForCondition steps instead of sleeping inline.",
+    "Wait steps must be read-only condition checks with pollIntervalMs and maxWaitMs.",
+    "Choose actionClass conservatively but accurately: B for low-risk restart/retry/cleanup, C for single-device package or config maintenance, D for destructive or outage-prone high-impact changes.",
+    "Choose criticality based on service impact. Most single-device maintenance is medium, not high.",
+    "Use blastRadius=single-device unless the request clearly affects multiple devices or multiple services.",
+    "If unsure, keep steps minimal and conservative.",
+    "",
+    `Device: ${device.name} (${device.ip}) type=${device.type} os=${device.os ?? "unknown"}`,
+    `Discovered protocols: ${device.protocols.join(", ") || "none"}`,
+    `Preferred protocol: ${suggestedProtocol}`,
+    "",
+    "Conversation context:",
+    summarizeConversationContext(history, {
+      maxMessages: MAX_DEVICE_CHAT_CONTEXT_MESSAGES,
+      maxCharsPerMessage: 1_200,
+      deviceId: device.id,
+    }),
+    "",
+    "Return this JSON shape:",
+    ...ADHOC_PLAN_JSON_SHAPE_LINES,
+    'Use waitForCondition=true only for polling checkpoints. Example wait step: {"label":"Wait for migrations","commandTemplate":"ssh {{host}} \'sudo gitlab-rake gitlab:background_migrations:status\'","mode":"read","waitForCondition":true,"pollIntervalMs":60000,"maxWaitMs":14400000,"successRegex":"finished|no pending"}',
+    "",
+    `Resolved execution request: ${input}`,
+  ].join("\n");
 
-  const parsed = extractFirstJsonObject(result.text);
-  const validated = AdhocPlanSchema.parse(parsed);
-  return validated;
+  try {
+    const result = await generateObject({
+      model: modelClient,
+      temperature: 0.1,
+      maxOutputTokens: 2_000,
+      schema: AdhocPlanSchema,
+      schemaName: "adhoc_playbook_plan",
+      schemaDescription: "Durable Steward ad-hoc execution plan with mutate, verify, and rollback steps.",
+      prompt,
+    });
+    return result.object;
+  } catch (error) {
+    if (NoObjectGeneratedError.isInstance(error)) {
+      const repairedFromRaw = await parseAdhocPlanCandidate(error.text);
+      if (repairedFromRaw) {
+        return repairedFromRaw;
+      }
+      if (typeof error.text === "string" && error.text.trim().length > 0) {
+        const repaired = await repairAdhocPlanText({
+          rawText: error.text,
+          errorMessage: error.message,
+          provider,
+          model,
+          device,
+          input,
+        });
+        if (repaired) {
+          return repaired;
+        }
+      }
+    }
+    throw error;
+  }
 }
 
 function operationForPlannedStep(
@@ -761,8 +1214,8 @@ function toAdhocPlaybook(device: Device, request: string, plan: AdhocPlan): Play
     family: safeFamily,
     name: `Ad-hoc task on ${device.name}: ${trimTo(request, 56)}`,
     description: plan.rationale,
-    actionClass: "D",
-    blastRadius: "single-device",
+    actionClass: plan.actionClass,
+    blastRadius: plan.blastRadius,
     timeoutMs: Math.max(...steps.map((step) => step.operation.timeoutMs), 60_000),
     preconditions: {
       requiredProtocols: [plan.requiredProtocol],
@@ -857,6 +1310,7 @@ async function handleAdhocTaskRequest(
   provider: LLMProvider,
   model: string | undefined,
   device: Device | null,
+  history: ChatMessage[],
   sessionId?: string,
 ): Promise<DeviceChatActionResult> {
   if (!device) {
@@ -867,20 +1321,95 @@ async function handleAdhocTaskRequest(
     };
   }
 
-  let plan: AdhocPlan | null = null;
+  let requestResolution: AdhocTaskRequestResolution = {
+    normalizedRequest: input.trim(),
+    source: "latest_message",
+    rationale: "Used the latest user message verbatim.",
+  };
   try {
-    plan = await llmAdhocPlanForDevice(device, input, provider, model);
+    requestResolution = await resolveAdhocTaskRequest({
+      input,
+      provider,
+      model,
+      attachedDevice: device,
+      history,
+      sessionId,
+    });
   } catch {
+    requestResolution = {
+      normalizedRequest: input.trim(),
+      source: "latest_message",
+      rationale: "Task request resolution failed, so Steward used the latest user message verbatim.",
+    };
+  }
+
+  const planningRequest = requestResolution.normalizedRequest?.trim() ?? "";
+  if (!planningRequest) {
+    await stateStore.addAction({
+      actor: "steward",
+      kind: "playbook",
+      message: `Blocked ad-hoc task planning on ${device.name}: ambiguous request`,
+      context: {
+        deviceId: device.id,
+        sessionId: sessionId ?? null,
+        sourceRequest: input,
+        normalizedRequest: null,
+        requestResolution,
+      },
+    });
+    return {
+      handled: true,
+      response: `I couldn't safely determine which task to execute from "${trimTo(input, 80)}". Restate the concrete job you want me to run on ${device.name}.`,
+      metadata: {
+        action: "adhoc_task",
+        blocked: "ambiguous_request",
+        deviceId: device.id,
+        requestResolution,
+        sessionId,
+      },
+    };
+  }
+
+  let plan: AdhocPlan | null = null;
+  let planGenerationError: string | null = null;
+  try {
+    plan = await llmAdhocPlanForDevice(device, planningRequest, provider, history, model);
+  } catch (error) {
+    planGenerationError = error instanceof Error ? error.message : String(error);
     plan = null;
   }
   if (!plan) {
-    plan = fallbackPlanForDevice(device, input);
+    plan = fallbackPlanForDevice(device, planningRequest);
+  }
+  if (plan) {
+    plan = normalizeAdhocPlan(plan);
   }
   if (!plan) {
+    await stateStore.addAction({
+      actor: "steward",
+      kind: "playbook",
+      message: `Failed to build ad-hoc task plan on ${device.name}`,
+      context: {
+        deviceId: device.id,
+        sessionId: sessionId ?? null,
+        sourceRequest: input,
+        normalizedRequest: planningRequest,
+        requestResolution,
+        planGenerationError,
+      },
+    });
     return {
       handled: true,
-      response: `I couldn't build an executable plan for ${device.name}. This device needs a manageable protocol (ssh, winrm, docker, or http-api) first.`,
-      metadata: { action: "adhoc_task", blocked: "no_manageable_protocol", deviceId: device.id, sessionId },
+      response: `I couldn't build a safe executable plan for ${device.name} from "${trimTo(planningRequest, 100)}". Restate the task with the exact change you want Steward to make.`,
+      metadata: {
+        action: "adhoc_task",
+        blocked: "plan_generation_failed",
+        deviceId: device.id,
+        normalizedRequest: planningRequest,
+        requestResolution,
+        planGenerationError,
+        sessionId,
+      },
     };
   }
 
@@ -900,7 +1429,7 @@ async function handleAdhocTaskRequest(
     };
   }
 
-  const playbook = toAdhocPlaybook(device, input, plan);
+  const playbook = toAdhocPlaybook(device, planningRequest, plan);
   const missingCredentials = getMissingCredentialProtocolsForPlaybook(device, playbook);
   if (missingCredentials.length > 0) {
     stateStore.upsertDeviceFindingByDedupe({
@@ -940,7 +1469,7 @@ async function handleAdhocTaskRequest(
     stateStore.getMaintenanceWindows(),
     {
       blastRadius: playbook.blastRadius,
-      criticality: "high",
+      criticality: plan.criticality,
       lane: "A",
       recentFailures,
       quarantineActive,
@@ -972,12 +1501,26 @@ async function handleAdhocTaskRequest(
     };
   }
 
-  const run = buildPlaybookRun(playbook, {
+  const runBase = buildPlaybookRun(playbook, {
     deviceId: device.id,
     policyEvaluation,
     initialStatus: policyEvaluation.decision === "ALLOW_AUTO" ? "approved" : "pending_approval",
     lane: "A",
   });
+  const run: PlaybookRun = {
+    ...runBase,
+    evidence: {
+      ...runBase.evidence,
+      preSnapshot: {
+        ...(runBase.evidence.preSnapshot ?? {}),
+        sourceRequest: input,
+        normalizedRequest: planningRequest,
+        requestResolutionSource: requestResolution.source,
+        requestResolutionRationale: requestResolution.rationale,
+        sessionId: sessionId ?? null,
+      },
+    },
+  };
 
   let persistedRun = run;
   if (policyEvaluation.decision === "REQUIRE_APPROVAL") {
@@ -991,14 +1534,15 @@ async function handleAdhocTaskRequest(
     actor: "steward",
     kind: "playbook",
     message: `Created ad-hoc task run ${run.id} for ${device.name}`,
-    context: {
-      runId: run.id,
-      deviceId: device.id,
-      sessionId: sessionId ?? null,
-      policyDecision: policyEvaluation.decision,
-      requiredProtocol: plan.requiredProtocol,
-      family: playbook.family,
-    },
+      context: {
+        runId: run.id,
+        deviceId: device.id,
+        sessionId: sessionId ?? null,
+        policyDecision: policyEvaluation.decision,
+        requiredProtocol: plan.requiredProtocol,
+        family: playbook.family,
+        normalizedRequest: planningRequest,
+      },
   });
 
   const firstStep = playbook.steps[0];
@@ -1013,22 +1557,24 @@ async function handleAdhocTaskRequest(
 
   return {
     handled: true,
-    response: [
-      `Created an ad-hoc task plan for ${device.name} and ${stateText}.`,
-      `Protocol: ${plan.requiredProtocol}.`,
-      `Policy: ${policyEvaluation.decision}.`,
-      `First step: ${firstStep?.label ?? commandPreview}`,
+      response: [
+        `Created an ad-hoc task plan for ${device.name} and ${stateText}.`,
+        `Protocol: ${plan.requiredProtocol}.`,
+        `Policy: ${policyEvaluation.decision}.`,
+        `First step: ${firstStep?.label ?? commandPreview}`,
       approvalHint,
     ].join(" ").trim(),
-    metadata: {
-      action: "adhoc_task",
-      runId: persistedRun.id,
-      deviceId: device.id,
-      policyDecision: policyEvaluation.decision,
-      requiredProtocol: plan.requiredProtocol,
-      sessionId,
-    },
-    chatMessageMetadata: buildPlaybookChatMetadata(persistedRun),
+      metadata: {
+        action: "adhoc_task",
+        runId: persistedRun.id,
+        deviceId: device.id,
+        policyDecision: policyEvaluation.decision,
+        requiredProtocol: plan.requiredProtocol,
+        normalizedRequest: planningRequest,
+        requestResolution,
+        sessionId,
+      },
+      chatMessageMetadata: buildPlaybookChatMetadata(persistedRun),
   };
 }
 
@@ -1040,33 +1586,44 @@ export async function tryHandleDeviceChatAction(
     return { handled: false };
   }
 
-  if (renameIntentPattern.test(text) || categoryIntentPattern.test(text)) {
-    const settingsResult = await handleDeviceSettingsRequest(text, input.attachedDevice, input.sessionId);
-    if (settingsResult.handled) {
-      return settingsResult;
-    }
+  let classifiedIntent: DeviceChatIntent;
+  try {
+    classifiedIntent = await classifyDeviceChatIntent({
+      input: text,
+      provider: input.provider,
+      model: input.model,
+      attachedDevice: input.attachedDevice,
+      history: input.history,
+      sessionId: input.sessionId,
+    });
+  } catch {
+    return { handled: false };
   }
 
-  const approvalResult = await handlePendingApprovalResponse(
-    text,
-    input.history,
-    input.attachedDevice,
-    input.sessionId,
-  );
-  if (approvalResult.handled) {
-    return approvalResult;
+  if (classifiedIntent.intent === "approval_response" && classifiedIntent.approvalDecision) {
+    return handlePendingApprovalResponse(
+      classifiedIntent.approvalDecision,
+      input.history,
+      input.attachedDevice,
+      input.sessionId,
+    );
   }
 
-  if (looksLikeMonitorIntent(text)) {
+  if (classifiedIntent.intent === "device_settings") {
+    return handleDeviceSettingsRequest(classifiedIntent.deviceSettings, input.attachedDevice, input.sessionId);
+  }
+
+  if (classifiedIntent.intent === "monitor_request") {
     return handleMonitorRequest(text, input.attachedDevice, input.sessionId);
   }
 
-  if (looksLikeAdhocTaskIntent(text)) {
+  if (classifiedIntent.intent === "adhoc_task") {
     return handleAdhocTaskRequest(
       text,
       input.provider,
       input.model,
       input.attachedDevice,
+      input.history,
       input.sessionId,
     );
   }

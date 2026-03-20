@@ -1,0 +1,553 @@
+Purged 3828659 legacy investigation queue entries.
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:14)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2205:158)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:126)
+    at ar.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1876:152)
+    at ar.tryAcquireRuntimeLease (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2197:82)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66399)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473)
+    at tN (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71206)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:2897:5400) {
+  code: 'SQLITE_BUSY'
+}
+Steward leadership bootstrap failed SqliteError: database is locked
+    at B.writePack (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1602:8)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1602:4960)
+    at <unknown> (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1639:352)
+    at c (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1565:14030)
+    at B.withDbRecovery (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1565:14056)
+    at B.ensureBootstrap (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:1602:559)
+    at qd (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5019:2356)
+    at tJ (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:66819)
+    at tO (C:\Users\bsaunders\Documents\steward\build\standalone-runtime-1774016773925-51028\.next\server\chunks\8776.js:5055:71473) {
+  code: 'SQLITE_BUSY'
+}

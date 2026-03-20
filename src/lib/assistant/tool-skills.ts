@@ -78,6 +78,7 @@ import { protocolSessionManager } from "@/lib/protocol-sessions/manager";
 import { loadPlaywrightChromiumRuntime } from "@/lib/runtime/playwright";
 import { webSessionManager } from "@/lib/web-sessions/manager";
 import { getAdoptionRecord, getDeviceAdoptionStatus } from "@/lib/state/device-adoption";
+import { resolveDeviceByTarget } from "@/lib/devices/lookup";
 import { stateStore } from "@/lib/state/store";
 import { vault } from "@/lib/security/vault";
 import { runShell } from "@/lib/utils/shell";
@@ -241,106 +242,6 @@ const DEVICE_REQUIRED_ERROR =
   "Valid device_id is required. This is a non-retryable blocker until you supply a resolvable device id, IP, hostname, or unique device name.";
 const ATTACHED_DEVICE_REQUIRED_ERROR =
   "Valid device_id is required or chat must be attached to a device. This is a non-retryable blocker until the chat is attached or the device target resolves.";
-
-function normalizeLookupToken(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function compactLookupToken(value: string): string {
-  return normalizeLookupToken(value).replace(/[^a-z0-9]/g, "");
-}
-
-function buildLookupAliases(value: string | undefined): string[] {
-  if (typeof value !== "string") {
-    return [];
-  }
-
-  const normalized = normalizeLookupToken(value);
-  if (normalized.length === 0) {
-    return [];
-  }
-
-  const aliases = new Set<string>([normalized]);
-  const compact = compactLookupToken(value);
-  if (compact.length > 0) {
-    aliases.add(compact);
-  }
-
-  const shortLabel = normalized.split(".")[0]?.trim();
-  if (shortLabel) {
-    aliases.add(shortLabel);
-    const compactShort = shortLabel.replace(/[^a-z0-9]/g, "");
-    if (compactShort.length > 0) {
-      aliases.add(compactShort);
-    }
-  }
-
-  return Array.from(aliases);
-}
-
-function scoreLookupAlias(targetAliases: string[], value: string | undefined, weights: {
-  exact: number;
-  prefix: number;
-  contains: number;
-}): number {
-  const candidateAliases = buildLookupAliases(value);
-  let best = 0;
-  for (const targetAlias of targetAliases) {
-    if (targetAlias.length === 0) {
-      continue;
-    }
-    for (const alias of candidateAliases) {
-      if (alias === targetAlias) {
-        best = Math.max(best, weights.exact);
-        continue;
-      }
-      if (alias.startsWith(targetAlias) || targetAlias.startsWith(alias)) {
-        best = Math.max(best, weights.prefix);
-        continue;
-      }
-      if (targetAlias.length >= 3 && (alias.includes(targetAlias) || targetAlias.includes(alias))) {
-        best = Math.max(best, weights.contains);
-      }
-    }
-  }
-  return best;
-}
-
-async function resolveDeviceByTarget(rawTarget: string | undefined, attachedDeviceId?: string): Promise<Device | null> {
-  const target = rawTarget?.trim();
-  if ((!target || target.length === 0) && attachedDeviceId) {
-    return stateStore.getDeviceById(attachedDeviceId);
-  }
-
-  if (!target) {
-    return null;
-  }
-
-  const byId = stateStore.getDeviceById(target);
-  if (byId) return byId;
-
-  const targetAliases = buildLookupAliases(target);
-  const state = await stateStore.getState();
-  const scored = state.devices
-    .map((device) => ({
-      device,
-      score: Math.max(
-        scoreLookupAlias(targetAliases, device.id, { exact: 140, prefix: 118, contains: 0 }),
-        scoreLookupAlias(targetAliases, device.ip, { exact: 136, prefix: 0, contains: 0 }),
-        scoreLookupAlias(targetAliases, device.hostname, { exact: 124, prefix: 104, contains: 82 }),
-        scoreLookupAlias(targetAliases, device.name, { exact: 120, prefix: 100, contains: 78 }),
-      ),
-    }))
-    .filter((entry) => entry.score > 0)
-    .sort((left, right) => right.score - left.score || left.device.name.localeCompare(right.device.name));
-  if (scored.length === 0) {
-    return null;
-  }
-  if (scored.length === 1 || scored[0].score > scored[1].score) {
-    return scored[0].device;
-  }
-  return null;
-}
 
 function validateDeviceReadyForToolUse(
   device: Device,
@@ -979,6 +880,41 @@ function summarizeCredentialEntry(
   }
 
   return summary;
+}
+
+function compactToolTextForModel(value: string | undefined, maxChars = 1_600): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.length <= maxChars) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, Math.max(0, maxChars - 15)).trimEnd()}\n...[truncated]`;
+}
+
+function summarizeGateResultsForModel(
+  gates: Array<{
+    gate?: unknown;
+    passed?: unknown;
+    message?: unknown;
+  }> | undefined,
+): Array<{ gate: string; passed: boolean; message: string }> {
+  if (!Array.isArray(gates)) {
+    return [];
+  }
+
+  return gates
+    .filter((gate): gate is { gate?: unknown; passed?: unknown; message?: unknown } => isRecord(gate))
+    .slice(0, 6)
+    .map((gate) => ({
+      gate: typeof gate.gate === "string" ? gate.gate : "unknown",
+      passed: gate.passed === true,
+      message: typeof gate.message === "string" ? gate.message : "",
+    }));
 }
 
 function credentialUsageHints(
@@ -3029,9 +2965,8 @@ export async function buildAdapterSkillTools(
           operationKind: operation.kind,
           operationMode: operation.mode,
           summary: execution.summary,
-          output: execution.output,
-          gates: execution.gateResults,
-          idempotencyKey: execution.idempotencyKey,
+          output: compactToolTextForModel(execution.output),
+          gates: summarizeGateResultsForModel(execution.gateResults),
         };
       },
     });
@@ -3261,16 +3196,16 @@ export async function buildAdapterSkillTools(
   });
 
   tools.steward_shell_read = dynamicTool({
-    description: "Run an investigative read-only command over supported remote transports such as SSH, Telnet, WinRM, PowerShell over SSH, WMI, SMB, or Docker. For WMI, the command itself must use `$session` or `-CimSession`; for SMB, only share-scoped file operations using `$sharePath` or `$shareRoot` are valid. Use port for non-default management ports instead of embedding transport wrappers in the command.",
+    description: "Run an investigative read-only command over supported remote transports such as SSH, Telnet, WinRM, PowerShell over SSH, WMI, SMB, or Docker. When chat is attached to a device, device_id is optional and Steward should use the attached device automatically. For application version checks, prefer local package, service, or version-file commands before Docker-specific commands unless Docker access is already proven. For WMI, the command itself must use `$session` or `-CimSession`; for SMB, only share-scoped file operations using `$sharePath` or `$shareRoot` are valid. Use port for non-default management ports instead of embedding transport wrappers in the command.",
     inputSchema: jsonSchema({
       type: "object",
       properties: {
-        device_id: { type: "string", description: "Target device id, name, or IP" },
+        device_id: { type: "string", description: "Target device id, name, or IP. Optional when chat is attached to a device." },
         command: { type: "string", description: "Read-only command to execute remotely" },
         protocol: { type: "string", description: "Optional protocol override: ssh, telnet, winrm, powershell-ssh, wmi, smb, docker" },
         port: { type: "integer", description: "Optional management port override, such as SSH on 2222." },
       },
-      required: ["device_id", "command"],
+      required: ["command"],
       additionalProperties: false,
     }),
     execute: async (argsUnknown: unknown) => {
@@ -3280,7 +3215,7 @@ export async function buildAdapterSkillTools(
         options?.attachedDeviceId,
       );
       if (!device) {
-        return { ok: false, error: DEVICE_REQUIRED_ERROR, retryable: false };
+        return { ok: false, error: ATTACHED_DEVICE_REQUIRED_ERROR, retryable: false };
       }
 
       const readiness = validateDeviceReadyForExplorationToolUse(device, {
@@ -3388,8 +3323,8 @@ export async function buildAdapterSkillTools(
         adapterId,
         summary: execution.summary,
         reason: execution.ok ? undefined : execution.summary,
-        output: execution.output,
-        gates: execution.gateResults,
+        output: compactToolTextForModel(execution.output),
+        gates: summarizeGateResultsForModel(execution.gateResults),
       };
       if (!execution.ok) {
         shellReadFailureCache.set(shellCacheKey, {
@@ -3544,9 +3479,8 @@ export async function buildAdapterSkillTools(
         adapterId: "mqtt",
         summary: execution.summary,
         reason: execution.ok ? undefined : execution.summary,
-        output: execution.output,
-        details: execution.details,
-        gates: execution.gateResults,
+        output: compactToolTextForModel(execution.output),
+        gates: summarizeGateResultsForModel(execution.gateResults),
       };
     },
   });
@@ -6196,7 +6130,7 @@ export async function buildAdapterSkillTools(
   });
 
   tools.steward_browser_browse = dynamicTool({
-    description: "Browse web UIs with Playwright as a first-class tool for login, navigation, diagnostics, and interactive changes.",
+    description: "Browse web UIs with Playwright as a first-class tool for login, navigation, diagnostics, and interactive changes. Treat browser text as authoritative for software version only when the page explicitly shows the version string.",
     inputSchema: jsonSchema({
       type: "object",
       properties: {

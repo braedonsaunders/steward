@@ -14,6 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { countMissionTrackedSignals } from "@/lib/missions/tracking";
 
 interface MissionSelector {
   allDevices?: boolean;
@@ -50,6 +51,7 @@ interface MissionItem {
   autoRun: boolean;
   autoApprove: boolean;
   targetJson: MissionTarget;
+  stateJson?: Record<string, unknown>;
   subagentId?: string;
   subagent?: {
     id?: string;
@@ -321,7 +323,7 @@ export default function MissionsPage() {
 
   const activeCount = missions.filter((mission) => mission.status === "active").length;
   const pausedCount = missions.filter((mission) => mission.status === "paused").length;
-  const openInvestigationCount = missions.reduce((sum, mission) => sum + mission.openInvestigations.length, 0);
+  const openInvestigationCount = missions.reduce((sum, mission) => sum + countMissionTrackedSignals(mission), 0);
   const devicesById = new Map(devices.map((device) => [device.id, device]));
   const filteredDevices = devices.filter((device) => {
     const normalizedDeviceQuery = deviceQuery.trim().toLowerCase();
@@ -426,7 +428,7 @@ export default function MissionsPage() {
                     </TableCell>
                     <TableCell>{cadenceLabel(mission.cadenceMinutes)}</TableCell>
                     <TableCell>{formatWhen(mission.nextRunAt)}</TableCell>
-                    <TableCell>{mission.openInvestigations.length}</TableCell>
+                    <TableCell>{countMissionTrackedSignals(mission)}</TableCell>
                     <TableCell className="max-w-sm text-xs text-muted-foreground">
                       {mission.lastSummary ?? mission.lastStatus ?? "No runs yet"}
                     </TableCell>

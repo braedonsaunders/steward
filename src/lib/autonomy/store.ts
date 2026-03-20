@@ -899,12 +899,25 @@ class AutonomyStore {
     });
   }
 
-  getDueInvestigations(referenceIso = nowIso()): InvestigationRecord[] {
-    return this.listInvestigations({
-      status: ["open", "monitoring"],
-    }).filter((investigation) =>
-      !investigation.nextRunAt || investigation.nextRunAt <= referenceIso,
-    );
+  getDueInvestigations(referenceIso = nowIso(), limit = 250): InvestigationRecord[] {
+    return this.withDbRecovery("AutonomyStore.getDueInvestigations", (db) => {
+      const rows = db.prepare(`
+        SELECT *
+        FROM investigations
+        WHERE status IN ('open', 'monitoring')
+          AND (nextRunAt IS NULL OR nextRunAt <= @referenceIso)
+        ORDER BY
+          CASE WHEN nextRunAt IS NULL THEN 0 ELSE 1 END ASC,
+          nextRunAt ASC,
+          updatedAt ASC,
+          createdAt ASC
+        LIMIT @limit
+      `).all({
+        referenceIso,
+        limit: Math.max(1, Math.min(limit, 1_000)),
+      }) as Record<string, unknown>[];
+      return rows.map(investigationFromRow);
+    });
   }
 
   getInvestigationById(id: string): InvestigationRecord | undefined {

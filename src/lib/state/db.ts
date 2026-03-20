@@ -1306,8 +1306,12 @@ function createSchema(database: Database.Database): void {
       ON mission_runs(missionId, createdAt DESC);
     CREATE INDEX IF NOT EXISTS idx_investigations_status_updated
       ON investigations(status, updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_investigations_status_next
+      ON investigations(status, nextRunAt, updatedAt DESC);
     CREATE INDEX IF NOT EXISTS idx_investigations_mission_status
       ON investigations(missionId, status, updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_investigations_source_lookup
+      ON investigations(sourceType, sourceId, missionId, deviceId, status, updatedAt DESC);
     CREATE INDEX IF NOT EXISTS idx_investigation_steps_investigation_created
       ON investigation_steps(investigationId, createdAt DESC);
     CREATE INDEX IF NOT EXISTS idx_device_findings_device_status ON device_findings(deviceId, status);
@@ -1460,6 +1464,378 @@ function parseStringArray(value: unknown): string[] {
   return value
     .map((item) => String(item).trim())
     .filter((item) => item.length > 0);
+}
+
+function missionInvestigationSignalKeys(kind: unknown, stateJson: unknown): Set<string> {
+  const state = typeof stateJson === "string" ? parseJsonObject(stateJson) : (
+    stateJson && typeof stateJson === "object" ? stateJson as Record<string, unknown> : {}
+  );
+
+  if (kind === "availability-guardian") {
+    return new Set(parseStringArray(state.offlineDeviceIds).map((deviceId) => `device|${deviceId}`));
+  }
+
+  if (kind === "wan-guardian") {
+    return new Set(parseStringArray(state.deviceIds).map((deviceId) => `device|${deviceId}`));
+  }
+
+  if (kind === "certificate-guardian" || kind === "backup-guardian" || kind === "storage-guardian") {
+    return new Set(parseStringArray(state.findingKeys).map((findingKey) => `finding|${findingKey}`));
+  }
+
+  return new Set();
+}
+
+function investigationSignalKey(row: {
+  sourceType?: unknown;
+  sourceId?: unknown;
+  deviceId?: unknown;
+}): string | undefined {
+  const sourceType = typeof row.sourceType === "string" ? row.sourceType : undefined;
+  const sourceId = typeof row.sourceId === "string" ? row.sourceId : undefined;
+  const deviceId = typeof row.deviceId === "string" ? row.deviceId : undefined;
+
+  if (sourceType === "device" || sourceType === "device.followup") {
+    const key = sourceId ?? deviceId;
+    return key ? `device|${key}` : undefined;
+  }
+
+  if (sourceType === "finding" || sourceType === "finding.followup") {
+    return sourceId ? `finding|${sourceId}` : undefined;
+  }
+
+  return sourceType && sourceId ? `${sourceType}|${sourceId}` : undefined;
+}
+
+function extractInvestigationIdFromDurableJob(row: {
+  payload?: unknown;
+  idempotencyKey?: unknown;
+}): string | undefined {
+  if (typeof row.payload === "string" && row.payload.length > 0) {
+    try {
+      const parsed = JSON.parse(row.payload) as { investigationId?: unknown };
+      if (typeof parsed.investigationId === "string" && parsed.investigationId.length > 0) {
+        return parsed.investigationId;
+      }
+    } catch {
+      // Fall back to the idempotency key if the payload is malformed.
+    }
+  }
+
+  if (typeof row.idempotencyKey === "string") {
+    const match = /^investigation\.step:([^:]+)(?::.*)?$/.exec(row.idempotencyKey);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+
+  return undefined;
+}
+
+function chooseCanonicalInvestigationRow(
+  current: Record<string, unknown>,
+  candidate: Record<string, unknown>,
+  ownerMissionId: string,
+): Record<string, unknown> {
+  const currentAttached = current.missionId === ownerMissionId ? 1 : 0;
+  const candidateAttached = candidate.missionId === ownerMissionId ? 1 : 0;
+  if (currentAttached !== candidateAttached) {
+    return candidateAttached > currentAttached ? candidate : current;
+  }
+
+  const currentUpdatedAt = Date.parse(typeof current.updatedAt === "string" ? current.updatedAt : "");
+  const candidateUpdatedAt = Date.parse(typeof candidate.updatedAt === "string" ? candidate.updatedAt : "");
+  if (candidateUpdatedAt !== currentUpdatedAt) {
+    return candidateUpdatedAt > currentUpdatedAt ? candidate : current;
+  }
+
+  const currentCreatedAt = Date.parse(typeof current.createdAt === "string" ? current.createdAt : "");
+  const candidateCreatedAt = Date.parse(typeof candidate.createdAt === "string" ? candidate.createdAt : "");
+  return candidateCreatedAt > currentCreatedAt ? candidate : current;
+}
+
+export function repairLegacyInvestigationState(database: Database.Database): {
+  canonicalized: number;
+  closedDuplicates: number;
+  closedFollowups: number;
+  closedStale: number;
+  linksCreated: number;
+} {
+  const markerKey = "migration.investigation_state_cleanup.v1";
+  const existingMarker = database
+    .prepare("SELECT value FROM metadata WHERE key = ?")
+    .get(markerKey) as { value?: string } | undefined;
+  if (existingMarker?.value === "done") {
+    return {
+      canonicalized: 0,
+      closedDuplicates: 0,
+      closedFollowups: 0,
+      closedStale: 0,
+      linksCreated: 0,
+    };
+  }
+
+  const repair = database.transaction(() => {
+    const now = new Date().toISOString();
+    const missionRows = database.prepare(`
+      SELECT id, kind, subagentId, status, stateJson
+      FROM missions
+      WHERE status = 'active'
+    `).all() as Array<Record<string, unknown>>;
+
+    const missionSignalsById = new Map<string, Set<string>>();
+    const missionSubagentById = new Map<string, string | undefined>();
+    const uniqueMissionBySubagent = new Map<string, string | null>();
+
+    for (const mission of missionRows) {
+      const missionId = String(mission.id);
+      const signalKeys = missionInvestigationSignalKeys(mission.kind, mission.stateJson);
+      if (signalKeys.size === 0) {
+        continue;
+      }
+
+      missionSignalsById.set(missionId, signalKeys);
+      const subagentId = typeof mission.subagentId === "string" && mission.subagentId.length > 0
+        ? mission.subagentId
+        : undefined;
+      missionSubagentById.set(missionId, subagentId);
+
+      if (!subagentId) {
+        continue;
+      }
+
+      if (!uniqueMissionBySubagent.has(subagentId)) {
+        uniqueMissionBySubagent.set(subagentId, missionId);
+        continue;
+      }
+
+      uniqueMissionBySubagent.set(subagentId, null);
+    }
+
+    const trackedMissionIds = new Set(missionSignalsById.keys());
+    const groupedTopLevelRows = new Map<string, { ownerMissionId: string; rows: Array<Record<string, unknown>> }>();
+    const followupIds = new Set<string>();
+    const staleIds = new Set<string>();
+
+    const investigationRows = database.prepare(`
+      SELECT id, missionId, subagentId, parentInvestigationId, sourceType, sourceId, deviceId, status, createdAt, updatedAt
+      FROM investigations
+      WHERE status IN ('open', 'monitoring')
+      ORDER BY updatedAt DESC, createdAt DESC
+    `).all() as Array<Record<string, unknown>>;
+
+    for (const row of investigationRows) {
+      const investigationId = String(row.id);
+      const sourceType = typeof row.sourceType === "string" ? row.sourceType : undefined;
+      const hasParent = typeof row.parentInvestigationId === "string" && row.parentInvestigationId.length > 0;
+
+      if (hasParent || sourceType?.endsWith(".followup")) {
+        followupIds.add(investigationId);
+        continue;
+      }
+
+      const signalKey = investigationSignalKey(row);
+      if (!signalKey) {
+        continue;
+      }
+
+      const missionId = typeof row.missionId === "string" && row.missionId.length > 0 ? row.missionId : undefined;
+      const subagentId = typeof row.subagentId === "string" && row.subagentId.length > 0 ? row.subagentId : undefined;
+
+      let ownerMissionId: string | undefined;
+      if (missionId && missionSignalsById.get(missionId)?.has(signalKey)) {
+        ownerMissionId = missionId;
+      } else if (subagentId) {
+        const candidateMissionId = uniqueMissionBySubagent.get(subagentId) ?? undefined;
+        if (candidateMissionId && missionSignalsById.get(candidateMissionId)?.has(signalKey)) {
+          ownerMissionId = candidateMissionId;
+        }
+      }
+
+      if (!ownerMissionId) {
+        if ((missionId && trackedMissionIds.has(missionId)) || (subagentId && uniqueMissionBySubagent.has(subagentId))) {
+          staleIds.add(investigationId);
+        }
+        continue;
+      }
+
+      const groupKey = `${ownerMissionId}|${signalKey}`;
+      const existingGroup = groupedTopLevelRows.get(groupKey);
+      if (existingGroup) {
+        existingGroup.rows.push(row);
+      } else {
+        groupedTopLevelRows.set(groupKey, {
+          ownerMissionId,
+          rows: [row],
+        });
+      }
+    }
+
+    const closeInvestigation = database.prepare(`
+      UPDATE investigations
+      SET status = 'closed',
+          stage = 'explain',
+          resolution = @resolution,
+          nextRunAt = NULL,
+          updatedAt = @updatedAt
+      WHERE id = @id
+        AND status IN ('open', 'monitoring')
+    `);
+
+    const updateCanonical = database.prepare(`
+      UPDATE investigations
+      SET missionId = @missionId,
+          subagentId = @subagentId
+      WHERE id = @id
+        AND (
+          COALESCE(missionId, '') <> COALESCE(@missionId, '')
+          OR COALESCE(subagentId, '') <> COALESCE(@subagentId, '')
+        )
+    `);
+
+    const linkMissionResource = database.prepare(`
+      INSERT OR IGNORE INTO mission_links (id, missionId, resourceType, resourceId, metadataJson, createdAt, updatedAt)
+      VALUES (@id, @missionId, @resourceType, @resourceId, @metadataJson, @createdAt, @updatedAt)
+    `);
+
+    let canonicalized = 0;
+    let closedDuplicates = 0;
+    let closedFollowups = 0;
+    let closedStale = 0;
+    let linksCreated = 0;
+
+    for (const investigationId of followupIds) {
+      const result = closeInvestigation.run({
+        id: investigationId,
+        resolution: "Closed during legacy investigation deduplication cleanup.",
+        updatedAt: now,
+      });
+      closedFollowups += Number(result.changes ?? 0);
+    }
+
+    for (const investigationId of staleIds) {
+      const result = closeInvestigation.run({
+        id: investigationId,
+        resolution: "Closed because it no longer matches active mission state.",
+        updatedAt: now,
+      });
+      closedStale += Number(result.changes ?? 0);
+    }
+
+    for (const { ownerMissionId, rows } of groupedTopLevelRows.values()) {
+      const canonical = rows.reduce((selected, candidate) =>
+        chooseCanonicalInvestigationRow(selected, candidate, ownerMissionId),
+      );
+      const canonicalId = String(canonical.id);
+      const ownerSubagentId = missionSubagentById.get(ownerMissionId);
+
+      const canonicalUpdate = updateCanonical.run({
+        id: canonicalId,
+        missionId: ownerMissionId,
+        subagentId: ownerSubagentId ?? null,
+      });
+      canonicalized += Number(canonicalUpdate.changes ?? 0);
+
+      const investigationLink = linkMissionResource.run({
+        id: `mission-link:${ownerMissionId}:investigation:${canonicalId}`,
+        missionId: ownerMissionId,
+        resourceType: "investigation",
+        resourceId: canonicalId,
+        metadataJson: "{}",
+        createdAt: now,
+        updatedAt: now,
+      });
+      linksCreated += Number(investigationLink.changes ?? 0);
+
+      const canonicalDeviceId = typeof canonical.deviceId === "string" && canonical.deviceId.length > 0
+        ? canonical.deviceId
+        : undefined;
+      if (canonicalDeviceId) {
+        const deviceLink = linkMissionResource.run({
+          id: `mission-link:${ownerMissionId}:device:${canonicalDeviceId}`,
+          missionId: ownerMissionId,
+          resourceType: "device",
+          resourceId: canonicalDeviceId,
+          metadataJson: "{}",
+          createdAt: now,
+          updatedAt: now,
+        });
+        linksCreated += Number(deviceLink.changes ?? 0);
+      }
+
+      for (const row of rows) {
+        if (String(row.id) === canonicalId) {
+          continue;
+        }
+
+        const result = closeInvestigation.run({
+          id: String(row.id),
+          resolution: `Closed as a duplicate of ${canonicalId} during legacy cleanup.`,
+          updatedAt: now,
+        });
+        closedDuplicates += Number(result.changes ?? 0);
+      }
+    }
+
+    database.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run(markerKey, "done");
+
+    return {
+      canonicalized,
+      closedDuplicates,
+      closedFollowups,
+      closedStale,
+      linksCreated,
+    };
+  });
+
+  return repair();
+}
+
+export function repairLegacyInvestigationQueue(
+  auditDatabase: Database.Database,
+  stateDatabase: Database.Database = getDb(),
+): number {
+  const markerKey = "migration.investigation_queue_cleanup.v1";
+  const existingMarker = stateDatabase
+    .prepare("SELECT value FROM metadata WHERE key = ?")
+    .get(markerKey) as { value?: string } | undefined;
+  if (existingMarker?.value === "done") {
+    return 0;
+  }
+
+  const openInvestigationIds = new Set(
+    (stateDatabase.prepare(`
+      SELECT id
+      FROM investigations
+      WHERE status IN ('open', 'monitoring')
+    `).all() as Array<{ id: string }>).map((row) => row.id),
+  );
+
+  const pendingJobs = auditDatabase.prepare(`
+    SELECT id, payload, idempotencyKey
+    FROM durable_jobs
+    WHERE kind = 'investigation.step'
+      AND status = 'pending'
+    ORDER BY runAfter ASC, createdAt ASC
+  `).all() as Array<{ id: string; payload?: string; idempotencyKey?: string }>;
+
+  const idsToDelete = pendingJobs
+    .filter((row) => {
+      const investigationId = extractInvestigationIdFromDurableJob(row);
+      return !!investigationId && !openInvestigationIds.has(investigationId);
+    })
+    .map((row) => row.id);
+
+  const removeJobs = auditDatabase.transaction((jobIds: string[]) => {
+    const deleteJob = auditDatabase.prepare("DELETE FROM durable_jobs WHERE id = ?");
+    for (const jobId of jobIds) {
+      deleteJob.run(jobId);
+    }
+  });
+  removeJobs(idsToDelete);
+
+  stateDatabase.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run(markerKey, "done");
+  return idsToDelete.length;
 }
 
 function migrateLegacyWidgetJsonParsers(database: Database.Database): void {
@@ -1928,14 +2304,16 @@ export function applyStateSchemaAndMigrations(database: Database.Database): void
   migrateLegacyWorkloadArchitecture(database);
   migrateCompletedOnboardingDraftCleanup(database);
   migrateLegacyWidgetJsonParsers(database);
+  repairLegacyInvestigationState(database);
 }
 
 export function getDb(): Database.Database {
   if (stateDb) return stateDb;
 
   mkdirSync(DATA_DIR, { recursive: true });
-  stateDb = new Database(STATE_DB_PATH);
+  stateDb = new Database(STATE_DB_PATH, { timeout: 30_000 });
   try {
+    stateDb.pragma("busy_timeout = 30000");
     applyStateSchemaAndMigrations(stateDb);
   } catch (error) {
     try {
@@ -1996,21 +2374,38 @@ function createAuditSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_audit_events_kind ON audit_events(kind);
     CREATE INDEX IF NOT EXISTS idx_durable_jobs_status ON durable_jobs(status);
     CREATE INDEX IF NOT EXISTS idx_durable_jobs_runAfter ON durable_jobs(runAfter);
+    CREATE INDEX IF NOT EXISTS idx_durable_jobs_status_runAfter_createdAt
+      ON durable_jobs(status, runAfter, createdAt);
+    CREATE INDEX IF NOT EXISTS idx_durable_jobs_status_kind_runAfter_createdAt
+      ON durable_jobs(status, kind, runAfter, createdAt);
+    CREATE INDEX IF NOT EXISTS idx_durable_jobs_status_updatedAt
+      ON durable_jobs(status, updatedAt);
+    CREATE INDEX IF NOT EXISTS idx_durable_jobs_kind_status
+      ON durable_jobs(kind, status);
     CREATE INDEX IF NOT EXISTS idx_credential_access_events_accessedAt ON credential_access_events(accessedAt);
     CREATE INDEX IF NOT EXISTS idx_credential_access_events_deviceId ON credential_access_events(deviceId);
     CREATE INDEX IF NOT EXISTS idx_credential_access_events_result ON credential_access_events(result);
   `);
 }
 
+export function applyAuditSchemaAndMigrations(
+  database: Database.Database,
+  options?: { stateDatabase?: Database.Database },
+): void {
+  createAuditSchema(database);
+  repairLegacyInvestigationQueue(database, options?.stateDatabase ?? getDb());
+}
+
 export function getAuditDb(): Database.Database {
   if (auditDb) return auditDb;
 
   mkdirSync(DATA_DIR, { recursive: true });
-  auditDb = new Database(AUDIT_DB_PATH);
+  auditDb = new Database(AUDIT_DB_PATH, { timeout: 30_000 });
   try {
+    auditDb.pragma("busy_timeout = 30000");
     auditDb.pragma("journal_mode = WAL");
     auditDb.pragma("foreign_keys = ON");
-    createAuditSchema(auditDb);
+    applyAuditSchemaAndMigrations(auditDb);
   } catch (error) {
     try {
       auditDb.close();

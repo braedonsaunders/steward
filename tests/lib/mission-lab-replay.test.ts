@@ -76,7 +76,14 @@ vi.mock("@/lib/autonomy/store", () => ({
     }),
     linkMissionResource: vi.fn(),
     appendInvestigationStep: vi.fn(),
-    listInvestigations: vi.fn((filter?: { missionId?: string; status?: string[] | string }) => {
+    listInvestigations: vi.fn((filter?: {
+      missionId?: string;
+      subagentId?: string;
+      sourceType?: string;
+      sourceId?: string;
+      deviceId?: string;
+      status?: string[] | string;
+    }) => {
       const statuses = Array.isArray(filter?.status)
         ? filter?.status
         : typeof filter?.status === "string"
@@ -84,6 +91,10 @@ vi.mock("@/lib/autonomy/store", () => ({
           : undefined;
       return scenarioState.investigations.filter((investigation) =>
         (!filter?.missionId || investigation.missionId === filter.missionId)
+        && (!filter?.subagentId || investigation.subagentId === filter.subagentId)
+        && (!filter?.sourceType || investigation.sourceType === filter.sourceType)
+        && (!filter?.sourceId || investigation.sourceId === filter.sourceId)
+        && (!filter?.deviceId || investigation.deviceId === filter.deviceId)
         && (!statuses || statuses.includes(String(investigation.status))),
       );
     }),
@@ -136,4 +147,77 @@ describe("mission lab replay fixtures", () => {
       expect(scenarioState.investigations).toHaveLength(scenario.expectations.openInvestigations ?? 0);
     });
   }
+
+  it("reattaches orphaned investigations to the current mission", async () => {
+    scenarioState.current = {
+      id: "availability-repair",
+      title: "Availability repair",
+      mission: {
+        id: "mission.availability-overwatch",
+        kind: "availability-guardian",
+        title: "Availability Overwatch",
+        summary: "Watch availability drift.",
+        objective: "Own availability drift.",
+        subagentId: "subagent.availability-operator",
+        priority: "high",
+        cadenceMinutes: 10,
+        shadowMode: false,
+        targetJson: {
+          selector: {
+            allDevices: true,
+          },
+        },
+      },
+      state: {
+        devices: [
+          {
+            id: "device-1",
+            name: "edge-ap",
+            ip: "10.0.0.1",
+            type: "access-point",
+            status: "offline",
+          },
+        ],
+        incidents: [],
+        recommendations: [],
+        findingsByDevice: {},
+        workloadsByDevice: {},
+        assurancesByDevice: {},
+      },
+      expectations: {
+        openInvestigations: 1,
+      },
+    };
+    scenarioState.investigations = [
+      {
+        id: "investigation-1",
+        missionId: undefined,
+        subagentId: "subagent.availability-operator",
+        title: "Investigate availability drift on edge-ap",
+        status: "open",
+        severity: "warning",
+        stage: "detect",
+        objective: "Own availability drift.",
+        summary: "edge-ap (10.0.0.1) is offline and needs continued follow-up.",
+        sourceType: "device",
+        sourceId: "device-1",
+        deviceId: "device-1",
+        evidenceJson: {},
+        recommendedActionsJson: [],
+        unresolvedQuestionsJson: [],
+        createdAt: "2026-03-20T12:00:00.000Z",
+        updatedAt: "2026-03-20T12:00:00.000Z",
+      },
+    ];
+
+    await runMissionJobNow("mission.availability-overwatch");
+
+    expect(scenarioState.investigations).toHaveLength(1);
+    expect(scenarioState.investigations[0]).toEqual(expect.objectContaining({
+      id: "investigation-1",
+      missionId: "mission.availability-overwatch",
+      subagentId: "subagent.availability-operator",
+      status: "monitoring",
+    }));
+  });
 });

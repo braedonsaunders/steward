@@ -237,33 +237,38 @@ export function evaluatePolicy(
 
   for (const rule of sorted) {
     if (matchesRule(rule, actionClass, device)) {
+      const baseReason = `Matched rule "${rule.name}" (priority ${rule.priority})${inWindow ? " [maintenance window active]" : ""}`;
+      const decisionNotes: string[] = [];
+
       // Special case: if a DENY rule applies but we're in a maintenance window,
       // downgrade to REQUIRE_APPROVAL instead of hard deny for Class C/D
       let decision: PolicyDecision = rule.decision;
       if (decision === "DENY" && inWindow && (actionClass === "C" || actionClass === "D")) {
         decision = "REQUIRE_APPROVAL";
+        decisionNotes.push("Maintenance window downgraded a deny rule to require approval for a Class C/D change.");
       }
 
       // Hard safety overrides for high-risk conditions.
       if (actionClass === "D" && envLabel === "prod" && !inWindow) {
         decision = "DENY";
+        decisionNotes.push("Production Class D changes outside a maintenance window are always denied.");
       } else if (actionClass === "D" && resolvedContext.blastRadius === "multi-device") {
         decision = "REQUIRE_APPROVAL";
+        decisionNotes.push("Multi-device Class D blast radius requires approval.");
       } else if (resolvedContext.criticality === "high" && (actionClass === "C" || actionClass === "D")) {
         decision = "REQUIRE_APPROVAL";
+        decisionNotes.push("High-criticality Class C/D work requires approval.");
       }
 
       if (decision === "ALLOW_AUTO" && riskScore >= 0.7) {
         decision = "REQUIRE_APPROVAL";
-      }
-      if (riskScore >= 0.95) {
-        decision = "DENY";
+        decisionNotes.push(`Risk score ${riskScore.toFixed(2)} exceeded the auto-allow threshold.`);
       }
 
       return buildPolicyEvaluation(
         decision,
         rule.id,
-        `Matched rule "${rule.name}" (priority ${rule.priority})${inWindow ? " [maintenance window active]" : ""}`,
+        decisionNotes.length > 0 ? `${baseReason} ${decisionNotes.join(" ")}` : baseReason,
         riskScore,
         riskFactors,
         actionClass,

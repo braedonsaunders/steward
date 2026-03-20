@@ -1,12 +1,10 @@
 import { NextResponse } from "next/server";
-import { ensureStewardLoop } from "@/lib/agent/loop";
 import { stateStore } from "@/lib/state/store";
 import { vault } from "@/lib/security/vault";
 
 export const runtime = "nodejs";
 
 export async function GET() {
-  ensureStewardLoop();
   const state = await stateStore.getState();
 
   return NextResponse.json({

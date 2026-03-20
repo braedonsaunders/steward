@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { generateText, stepCountIs, streamText } from "ai";
+import { generateObject, generateText, stepCountIs, streamText } from "ai";
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { isAuthorized } from "@/lib/auth/guard";
@@ -16,7 +16,6 @@ import { buildStewardSystemPrompt } from "@/lib/assistant/prompt";
 import { buildAdapterSkillTools } from "@/lib/assistant/tool-skills";
 import {
   planWidgetRoute,
-  shouldExposeWidgetManagementForTurn,
   type WidgetRoutePlan,
 } from "@/lib/assistant/widget-routing";
 import {
@@ -64,6 +63,11 @@ const REMOTE_DESKTOP_PREVIEW_MAX_CHARS = 16_000;
 const CHAT_ARTIFACTS_DIR = path.join(getDataDir(), "artifacts");
 const CHAT_BROWSER_ARTIFACT_DIR = path.join(CHAT_ARTIFACTS_DIR, "browser-browse");
 const CHAT_REMOTE_DESKTOP_ARTIFACT_DIR = path.join(CHAT_ARTIFACTS_DIR, "remote-desktop");
+const CHAT_MAX_ACTIVE_TOOLS = 12;
+
+const ToolShortlistSchema = z.object({
+  selectedToolNames: z.array(z.string().min(1)).max(CHAT_MAX_ACTIVE_TOOLS).default([]),
+});
 
 export const runtime = "nodejs";
 
@@ -353,6 +357,118 @@ function extractWidgetMutation(
   }
 
   return undefined;
+}
+
+function summarizeToolCatalogEntry(toolName: string, toolValue: unknown): { name: string; description: string } {
+  const rawDescription = Reflect.get(toolValue as object, "description");
+  const description = typeof rawDescription === "string" && rawDescription.trim().length > 0
+    ? clampText(rawDescription.trim(), 220)
+    : humanizeToolName(toolName);
+  return {
+    name: toolName,
+    description,
+  };
+}
+
+function fallbackToolNamesForTurn(args: {
+  toolCatalog: Array<{ name: string; description: string }>;
+  attachedDevice: Device | null;
+}): string[] {
+  const available = new Set(args.toolCatalog.map((entry) => entry.name));
+  const preferred = args.attachedDevice
+    ? [
+      "steward_shell_read",
+      "steward_http_contract_audit",
+      "steward_open_web_session",
+      "steward_browser_browse",
+      "steward_execute_web_flow",
+      "steward_list_web_flows",
+      "steward_web_research",
+      "steward_query_network",
+      "steward_device_identity",
+      "steward_manage_device",
+      "steward_manage_credentials",
+      "steward_list_contract",
+    ]
+    : [
+      "steward_query_network",
+      "steward_web_research",
+      "steward_device_identity",
+      "steward_list_adapters",
+      "steward_manage_device",
+      "steward_manage_credentials",
+    ];
+  return preferred.filter((name) => available.has(name)).slice(0, CHAT_MAX_ACTIVE_TOOLS);
+}
+
+async function shortlistToolsForTurn(args: {
+  model: Awaited<ReturnType<typeof buildLanguageModel>>;
+  input: string;
+  history: Array<{ role: "user" | "assistant"; content: string }>;
+  attachedDevice: Device | null;
+  toolCatalog: Array<{ name: string; description: string }>;
+}): Promise<string[]> {
+  if (args.toolCatalog.length <= CHAT_MAX_ACTIVE_TOOLS) {
+    return args.toolCatalog.map((entry) => entry.name);
+  }
+
+  const historyLines = args.history
+    .slice(-6)
+    .map((message) => `${message.role}: ${clampText(message.content, 240)}`);
+  const toolLines = args.toolCatalog
+    .map((entry) => `- ${entry.name}: ${entry.description}`);
+
+  try {
+    const result = await generateObject({
+      model: args.model,
+      schema: ToolShortlistSchema,
+      prompt: [
+        "Choose the smallest set of Steward tools needed for the current turn.",
+        `Return at most ${CHAT_MAX_ACTIVE_TOOLS} tool names.`,
+        "Prefer direct device evidence over browser or web research when the question is about the currently installed software version.",
+        "Only include widget, automation, adapter-authoring, onboarding, local-tool, or remote-desktop tools when the user explicitly needs them.",
+        args.attachedDevice
+          ? `Attached device: ${args.attachedDevice.name} (${args.attachedDevice.ip}) type=${args.attachedDevice.type} status=${args.attachedDevice.status}`
+          : "No attached device.",
+        `Current user turn: ${args.input}`,
+        historyLines.length > 0 ? "Recent history:" : "",
+        ...historyLines,
+        "Available tools:",
+        ...toolLines,
+      ].filter((line) => line.length > 0).join("\n"),
+    });
+
+    const available = new Set(args.toolCatalog.map((entry) => entry.name));
+    const selected = result.object.selectedToolNames
+      .filter((name, index, array) => available.has(name) && array.indexOf(name) === index)
+      .slice(0, CHAT_MAX_ACTIVE_TOOLS);
+    if (selected.length > 0) {
+      return selected;
+    }
+  } catch {
+    // Fall through to a compact deterministic core set.
+  }
+
+  return fallbackToolNamesForTurn({
+    toolCatalog: args.toolCatalog,
+    attachedDevice: args.attachedDevice,
+  });
+}
+
+function filterToolsForTurn(
+  tools: Awaited<ReturnType<typeof buildAdapterSkillTools>>,
+  selectedToolNames: string[],
+): Awaited<ReturnType<typeof buildAdapterSkillTools>> {
+  if (selectedToolNames.length === 0) {
+    return tools;
+  }
+
+  const selected = new Set(selectedToolNames);
+  const filtered = Object.fromEntries(
+    Object.entries(tools).filter(([toolName]) => selected.has(toolName)),
+  );
+
+  return Object.keys(filtered).length > 0 ? filtered : tools;
 }
 
 function extractOnboardingMutation(
@@ -1430,13 +1546,6 @@ export async function POST(request: NextRequest) {
         metadata: directDeviceAction.chatMessageMetadata,
       });
     }
-    const widgetTurnRequested = attachedDevice
-      ? shouldExposeWidgetManagementForTurn({
-        history: historyExcludingCurrent,
-        userInput: payload.data.input,
-      })
-      : false;
-
     const widgetRoutePlan = attachedDevice
       ? await planWidgetRoute({
         provider,
@@ -1633,14 +1742,25 @@ export async function POST(request: NextRequest) {
     // Add the current user message
     messages.push({ role: "user", content: payload.data.input });
 
-    const tools = await buildAdapterSkillTools({
+    const allTools = await buildAdapterSkillTools({
       attachedDeviceId: attachedDevice?.id,
       allowPreOnboardingExecution: onboardingSession,
-      includeWidgetManagementTool: onboardingSession && widgetTurnRequested,
+      includeWidgetManagementTool: Boolean(attachedDevice),
       widgetVerificationMode: onboardingSession ? "warn-on-connectivity" : "strict",
       provider,
       model: payload.data.model,
     });
+    const toolCatalog = Object.entries(allTools).map(([toolName, toolValue]) => summarizeToolCatalogEntry(toolName, toolValue));
+    const selectedToolNames = onboardingSession
+      ? toolCatalog.map((entry) => entry.name)
+      : await shortlistToolsForTurn({
+        model,
+        input: payload.data.input,
+        history: messages,
+        attachedDevice: attachedDevice ?? null,
+        toolCatalog,
+      });
+    const tools = filterToolsForTurn(allTools, selectedToolNames);
     const maxOutputTokens = onboardingSession
       ? ONBOARDING_MAX_OUTPUT_TOKENS
       : CHAT_MAX_OUTPUT_TOKENS;
