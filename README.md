@@ -21,6 +21,10 @@
   </p>
 </div>
 
+<p align="center">
+  <a href="https://github.com/braedonsaunders/codeflow"><img src=".github/codeflow-card.svg" alt="Steward codebase stats — powered by codeflow" width="100%" /></a>
+</p>
+
 Steward is a self-hosted IT operations control plane for small networks: a local-first system with discovery, persistent state, graph-backed inventory, chat over live infrastructure context, policy-gated remediation, secure credential storage, device onboarding, widgets, automations, and operator access control.
 
 The current repo also includes a first-class autonomy layer:
