@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "runs": [
+    {
+      "at": "2026-04-28T19:18:55.549Z",
+      "sha": "80bbd70367fd3f3492e49c78bb125ac0dad84233",
+      "pr": null,
+      "actor": "braedonsaunders",
+      "files": 426,
+      "functions": 2084,
+      "loc": 141215,
+      "languages": 12,
+      "topLanguages": [
+        {
+          "ext": "ts",
+          "pct": 65,
+          "lines": 91363
+        },
+        {
+          "ext": "tsx",
+          "pct": 22,
+          "lines": 31179
+        },
+        {
+          "ext": "json",
+          "pct": 10,
+          "lines": 14535
+        },
+        {
+          "ext": "md",
+          "pct": 1,
+          "lines": 1767
+        },
+        {
+          "ext": "mjs",
+          "pct": 1,
+          "lines": 1253
+        }
+      ],
+      "dead": 32,
+      "deadPct": 1.5,
+      "circular": 1,
+      "godObjects": 1,
+      "avgCoupling": 3.9,
+      "securityIssues": 84,
+      "patterns": 10,
+      "duplicates": 29,
+      "layerViolations": 541,
+      "connections": 1641,
+      "avgFnLines": 15.8,
+      "longestFn": 16,
+      "testFiles": 35,
+      "testRatio": 8.2,
+      "topFolders": [
+        {
+          "name": "src",
+          "count": 356
+        },
+        {
+          "name": "tests",
+          "count": 39
+        },
+        {
+          "name": "root",
+          "count": 13
+        },
+        {
+          "name": "scripts",
+          "count": 11
+        },
+        {
+          "name": "docs",
+          "count": 5
+        }
+      ],
+      "folders": 5,
+      "grade": "D",
+      "score": 69,
+      "topBlast": {
+        "path": "src/lib/auth/guard.ts",
+        "direct": 119,
+        "transitive": 240,
+        "total": 359
+      },
+      "fragility": [
+        {
+          "path": "src/lib/auth/guard.ts",
+          "direct": 119,
+          "transitive": 240,
+          "total": 359
+        },
+        {
+          "path": "scripts/ensure-network-tools.mjs",
+          "direct": 48,
+          "transitive": 279,
+          "total": 327
+        },
+        {
+          "path": "src/lib/state/store.ts",
+          "direct": 74,
+          "transitive": 228,
+          "total": 302
+        }
+      ]
+    }
+  ]
+}
