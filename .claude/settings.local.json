@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "WebFetch(domain:www.npmjs.com)",
-      "Bash(wc -l /c/Users/bsaunders/Documents/steward/src/app/devices/[id]/page.tsx)",
-      "Bash(find /c/Users/bsaunders/Documents/steward/tests -name *.test.ts -o -name *.test.tsx)"
-    ]
-  }
-}
